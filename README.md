@@ -27,11 +27,12 @@ That's it. No GPU required for the starter agent.
 
 ---
 
-## The whole workflow in one screen
+## Quick start
 
 ```bash
 # 1.  Clone this repo and step in
-git clone <this-repo> arc-prize-starter && cd arc-prize-starter
+git clone https://github.com/arcprize/ARC-AGI-3-Kaggle-Starter.git
+cd ARC-AGI-3-Kaggle-Starter
 
 # 2.  Drop your Kaggle API token (kaggle.com → Settings → Create New Token)
 #     into the project-local .kaggle/ folder (NOT your home directory)
