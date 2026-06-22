@@ -5,7 +5,7 @@
 # --- General ---
 general:
   project_name: "tomas-arc3-solver"
-  version: "2.3.0"
+  version: "2.4.0"
   random_seed: 42
 
 # --- DSL parameters ---
@@ -154,7 +154,7 @@ pruning:
 
 # --- PsiFusionGate (ψ-Gate semantic gating) ---
 psi_gate:
-  enabled: false                 # set true to replace simple fusion with ψ-Gate
+  enabled: true                  # ✅ v2.4: enable ψ-Gate (replaces simple fusion)
   use_default_anchors: true     # use default anchor set (topo_invariance, etc.)
   tolerance_decay_rate: 0.05      # τ for soft-fail tolerance decay
   verbose: false

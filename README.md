@@ -2,8 +2,8 @@
 
 > **TOMAS** (太乙互搏 — Taiyi Mutual-Play) framework for the [ARC-AGI-3](https://www.kaggle.com/competitions/arc-agi-3) video reasoning competition.
 
-[![Tests](https://img.shields.io/badge/tests-290%2F290-brightgreen)]()
-[![Version](https://img.shields.io/badge/version-2.3.0-blue)]()
+[![Tests](https://img.shields.io/badge/tests-315%2F315-brightgreen)]()
+[![Version](https://img.shields.io/badge/version-2.4.0-blue)]()
 [![Python](https://img.shields.io/badge/python-3.10%2B-blue)]()
 [![License](https://img.shields.io/badge/license-MIT-green)]()
 
@@ -36,6 +36,17 @@ TOMAS ARC-AGI-3 Solver is an end-to-end video reasoning system that combines alg
 | v2.2 | Numba @njit JIT compilation (20 kernels) | 3–20× per kernel |
 | v2.3 | Numba @cuda.jit GPU kernels (7 kernels) | 10–100× (on GPU) |
 | v2.3 | Advanced pruning pipeline (8 strategies) | 60–80% candidate reduction |
+
+### v2.4 New Features (Cross-Repo Absorption)
+
+| Component | Source | Description |
+|-----------|--------|-------------|
+| **RHAE Evaluator** | tomas-agi | Official ARC-AGI-3 evaluation framework with RHAE scoring |
+| **ψ-Gate Fusion** | tomas-agi | Semantic gating with 5 core capabilities (ψ-anchor, MUS, φ-Gate, multi-world, tolerance decay) |
+| **AEGIS Evolver** | tomas-agi | Program evolution engine (Digester → Planner → Evolver → Critic) |
+| **Causal DSL Prior** | tomas-agi | SCM-based causal prior learning for DSL primitives |
+| **GAT Axioms (Pure Python)** | tomas-agi | Pure Python GAT axioms as GATLab fallback |
+| **Math Sequences** | Both repos | Unified Fibonacci/Lucas/Bagua mathematical tools |
 
 ## Architecture
 
@@ -193,7 +204,9 @@ tomas-arc3-solver/
 │   │   ├── transfer_engine.py       # Cross-video transfer via fiber intersection
 │   │   ├── numba_kernels.py         # 20 @njit CPU JIT kernels (v2.2)
 │   │   ├── numba_cuda_kernels.py    # 7 @cuda.jit GPU kernels (v2.3)
-│   │   └── cuda_kernels.py          # CuPy GPU batch verification (v2.3)
+│   │   ├── cuda_kernels.py          # CuPy GPU batch verification (v2.3)
+│   │   ├── gat_axioms.py            # Pure Python GAT axioms (v2.4, GATLab fallback)
+│   │   └── math_sequences.py        # Unified Fibonacci/Lucas/Bagua tools (v2.4)
 │   ├── solver/                  # Search & verification
 │   │   ├── kappa_snap_searcher.py   # κ-Snap Two-Phase search
 │   │   ├── gaussex_verifier.py      # GaussEx fiber verification
@@ -203,12 +216,19 @@ tomas-arc3-solver/
 │   │   ├── enpv_decision.py         # ENPV early termination
 │   │   ├── fusion_scorer.py         # Multi-modal fusion scoring
 │   │   ├── library_learning.py      # DreamCoder-style library learning
-│   │   ├── tomas_solver.py          # Main solver (mode dispatch)
+│   │   ├── tomas_solver.py          # Main solver (mode dispatch, ψ-Gate integrated)
 │   │   ├── video_solver.py          # Video mode solver
 │   │   ├── transfer_solver.py       # Transfer learning solver
+│   │   ├── psi_fusion_gate.py       # ψ-Gate semantic gating (v2.4)
+│   │   ├── aegis_evolver.py         # AEGIS program evolution engine (v2.4)
+│   │   ├── causal_dsl_prior.py      # Causal DSL prior learning (v2.4)
 │   │   ├── conditional_tree.py      # Conditional tree inducer
 │   │   ├── sequence_dsl.py          # Sequence DSL operations
 │   │   └── optimized_solver.py      # Optimized solver variant
+│   ├── eval/                    # Evaluation framework (v2.4)
+│   │   ├── __init__.py             # Package initializer
+│   │   ├── arc_agi3_evaluator.py  # RHAE scoring framework
+│   │   └── dataset_builder.py     # ARC tasks → dataset JSON
 │   ├── api/                     # External API adapters
 │   │   ├── deepseek_adapter.py      # DeepSeek API base adapter
 │   │   └── deepseek_vl.py           # DeepSeek VL vision adapter
@@ -223,14 +243,16 @@ tomas-arc3-solver/
 │       ├── slip_cost.py             # Slip cost calculator
 │       └── tensorboard_monitor.py   # TensorBoard monitoring
 ├── config/                      # Configuration
-│   └── default.yaml                # Default configuration
+│   └── default.yaml                # Default configuration (v2.4)
 ├── data/                        # Sample tasks
 ├── docker/                      # Docker deployment
 ├── docs/                        # Documentation
 │   ├── ARCHITECTURE.md             # System architecture
 │   ├── CHANGELOG.md                # Version history
-│   └── paper/                      # Research paper
-├── tests/                       # Test suite (290 tests)
+│   ├── paper/                      # Research paper
+│   └── prd/                        # Product requirements docs
+│       └── absorptin_prd.md        # v2.4 absorption PRD
+├── tests/                       # Test suite (315 tests)
 ├── main.py                      # CLI entry point
 ├── requirements.txt             # Python dependencies
 └── setup.py                     # Package setup
@@ -268,6 +290,7 @@ Test coverage: 290 tests across 8 test modules:
 | v2.1 | 2026-06-22 | 14 vectorization optimizations, CRC32 cache, parallel verification |
 | v2.2 | 2026-06-22 | Numba @njit JIT compilation (20 kernels), 5.1× grid_equal speedup |
 | v2.3 | 2026-06-22 | Numba @cuda.jit GPU kernels, CuPy batch verification, 8-strategy pruning, 290 tests |
+| v2.4 | 2026-06-23 | Cross-repo absorption: RHAE eval, ψ-Gate fusion, AEGIS evolver, causal prior, GAT axioms, math sequences, 315 tests |
 
 See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
