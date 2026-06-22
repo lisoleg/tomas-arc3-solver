@@ -949,6 +949,8 @@ class ParamInference:
     def _gen_complete_pattern(self, features: dict[str, Any]) -> list[ProgramNode]:
         """Generate complete-pattern candidates.
 
+        Improved v3.1: Try multiple strategies (sequence tiling + bounding box tiling).
+
         Args:
             features: Extracted features.
 
@@ -957,9 +959,42 @@ class ParamInference:
         """
         candidates: list[ProgramNode] = []
 
-        # Always add complete-pattern as a candidate
-        # (it will be filtered by verification)
-        candidates.append(ProgramNode(DSLElement("complete-pattern")))
+        pairs = features.get("pairs", [])
+        if len(pairs) < 1:
+            return candidates
+
+        # Strategy 1: Bounding box tiling (works for many pattern completion tasks)
+        candidates.append(
+            ProgramNode(DSLElement("complete-pattern", {"strategy": "bounding_box"}))
+        )
+
+        # Strategy 2: Sequence tiling (for color sequence tasks)
+        # Extract color sequence from first training pair's input
+        inp = pairs[0]["input"]
+        seq = []
+        seen = set()
+        for r in range(inp.shape[0]):
+            for c in range(inp.shape[1]):
+                color = inp[r, c]
+                if color != 0 and color not in seen:
+                    seq.append(color)
+                    seen.add(color)
+
+        if seq:
+            # Try all rotations
+            seq_len = len(seq)
+            for rotation in range(seq_len):
+                candidates.append(
+                    ProgramNode(DSLElement("complete-pattern", {
+                        "strategy": "sequence",
+                        "rotation": rotation
+                    }))
+                )
+
+        # Strategy 3: Auto (let the primitive decide)
+        candidates.append(
+            ProgramNode(DSLElement("complete-pattern", {"strategy": "auto"}))
+        )
 
         return candidates
 

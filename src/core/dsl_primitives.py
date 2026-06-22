@@ -826,20 +826,103 @@ def _shift_object(grid: np.ndarray, color: int = 1, dx: int = 0, dy: int = 0, **
     return result
 
 
-def _complete_pattern(grid: np.ndarray, **_: Any) -> np.ndarray:
-    """Detect periodic pattern in input and complete it to fill the grid."""
+def _complete_pattern(grid: np.ndarray, rotation: int = 0, strategy: str = "auto", **_: Any) -> np.ndarray:
+    """Detect periodic pattern in input and complete it to fill the grid.
+    
+    Improved v3.1: Hybrid strategy (sequence tiling + bounding box tiling).
+    
+    Args:
+        grid: Input grid.
+        rotation: Rotation offset for sequence tiling.
+        strategy: 'sequence', 'bounding_box', or 'auto' (try both).
+    """
+    h, w = grid.shape
+    
+    if strategy == "auto":
+        # Try sequence tiling first (if input has a clear color sequence)
+        non_zero = grid[grid != 0]
+        unique_colors = len(set(non_zero.flatten()))
+        
+        # Heuristic: if the input has few unique colors and they appear in a sequence,
+        # use sequence tiling
+        if unique_colors <= 10 and _has_clear_sequence(grid):
+            return _complete_pattern_sequence(grid, rotation)
+        else:
+            return _complete_pattern_bbox(grid)
+    elif strategy == "sequence":
+        return _complete_pattern_sequence(grid, rotation)
+    else:  # bounding_box
+        return _complete_pattern_bbox(grid)
+
+
+def _has_clear_sequence(grid: np.ndarray) -> bool:
+    """Check if the grid has a clear color sequence (non-zero colors in a row)."""
+    non_zero = grid[grid != 0]
+    # Check if non-zero colors form a sequence (not scattered)
+    if len(non_zero) < 2:
+        return False
+    
+    # Check if non-zero colors are concentrated in a small region
+    rows = np.where(np.any(grid != 0, axis=1))[0]
+    cols = np.where(np.any(grid != 0, axis=0))[0]
+    
+    if len(rows) == 0 or len(cols) == 0:
+        return False
+    
+    # If the non-zero region is small compared to grid size, it's likely a seed pattern
+    region_size = (rows[-1] - rows[0] + 1) * (cols[-1] - cols[0] + 1)
+    grid_size = grid.shape[0] * grid.shape[1]
+    
+    return region_size < grid_size * 0.5
+
+
+def _complete_pattern_sequence(grid: np.ndarray, rotation: int = 0) -> np.ndarray:
+    """Complete pattern by extracting and tiling color sequence."""
+    h, w = grid.shape
+    result = np.zeros_like(grid)
+    
+    # Extract color sequence (non-zero colors in row-major order, first occurrence)
+    seq = []
+    seen = set()
+    for r in range(h):
+        for c in range(w):
+            color = grid[r, c]
+            if color != 0 and color not in seen:
+                seq.append(color)
+                seen.add(color)
+    
+    if not seq:
+        return result
+    
+    # Apply rotation
+    seq_len = len(seq)
+    if seq_len > 0 and rotation > 0:
+        rotation = rotation % seq_len
+        seq = seq[rotation:] + seq[:rotation]
+    
+    # Tile sequence to fill grid
+    idx = 0
+    for r in range(h):
+        for c in range(w):
+            result[r, c] = seq[idx % seq_len]
+            idx += 1
+    
+    return result
+
+
+def _complete_pattern_bbox(grid: np.ndarray) -> np.ndarray:
+    """Complete pattern by tiling the bounding box of non-zero regions."""
     result = grid.copy()
     h, w = grid.shape
     
-    # Try to detect a repeating pattern
-    # Look for non-zero regions that could be pattern seeds
     non_zero = grid != 0
     if not np.any(non_zero):
         return result
     
-    # Find the pattern from the first non-zero region
+    # Find bounding box of non-zero regions
     rows = np.where(np.any(non_zero, axis=1))[0]
     cols = np.where(np.any(non_zero, axis=0))[0]
+    
     if len(rows) == 0 or len(cols) == 0:
         return result
     
