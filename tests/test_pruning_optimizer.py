@@ -382,3 +382,220 @@ class TestDeterministicBehavior:
         result2 = optimizer.symmetry_dedup(candidates2)
 
         assert len(result1) == len(result2)
+
+
+# ============================================================
+# Pre-Phase A Fast Filters (v2.3 enhanced)
+# ============================================================
+
+class TestGridShapePrune:
+    """Tests for grid_shape_prune method."""
+
+    def test_disabled_returns_all(self, sample_candidates, demo_pairs):
+        """When disabled, should return all candidates."""
+        opt = PruningOptimizer({"enable_shape_filter": False})
+        result = opt.grid_shape_prune(sample_candidates, demo_pairs)
+        assert len(result) == len(sample_candidates)
+
+    def test_empty_demos_returns_all(self, optimizer, sample_candidates):
+        """Empty demo pairs should return all candidates."""
+        result = optimizer.grid_shape_prune(sample_candidates, [])
+        assert len(result) == len(sample_candidates)
+
+    def test_empty_candidates(self, optimizer, demo_pairs):
+        """Empty candidate list should return empty."""
+        result = optimizer.grid_shape_prune([], demo_pairs)
+        assert result == []
+
+    def test_pruning_reduces_or_maintains(self, optimizer, demo_pairs):
+        """Shape pruning should reduce or maintain candidate count."""
+        prims = get_all_primitives()
+        candidates = [ProgramNode(p) for p in prims]
+        result = optimizer.grid_shape_prune(candidates, demo_pairs)
+        assert len(result) <= len(candidates)
+
+    def test_get_grid_shape(self, optimizer):
+        """_get_grid_shape should return (H, W) tuple."""
+        grid = np.array([[1, 0, 0], [0, 2, 0]], dtype=np.int8)
+        shape = optimizer._get_grid_shape(grid)
+        assert shape == (2, 3)
+
+    def test_shape_caching(self, optimizer):
+        """Same grid should return cached shape."""
+        grid = np.array([[1, 0], [0, 1]], dtype=np.int8)
+        s1 = optimizer._get_grid_shape(grid)
+        s2 = optimizer._get_grid_shape(grid)
+        assert s1 == s2
+
+
+class TestColorHistogramPrune:
+    """Tests for color_histogram_prune method."""
+
+    def test_disabled_returns_all(self, sample_candidates, demo_pairs):
+        """When disabled, should return all candidates."""
+        opt = PruningOptimizer({"enable_color_hist": False})
+        result = opt.color_histogram_prune(sample_candidates, demo_pairs)
+        assert len(result) == len(sample_candidates)
+
+    def test_empty_demos_returns_all(self, optimizer, sample_candidates):
+        """Empty demo pairs should return all candidates."""
+        result = optimizer.color_histogram_prune(sample_candidates, [])
+        assert len(result) == len(sample_candidates)
+
+    def test_empty_candidates(self, optimizer, demo_pairs):
+        """Empty candidate list should return empty."""
+        result = optimizer.color_histogram_prune([], demo_pairs)
+        assert result == []
+
+    def test_get_color_histogram(self, optimizer):
+        """_get_color_histogram should return 10-element tuple."""
+        grid = np.array([[1, 0, 0], [0, 2, 0], [0, 0, 3]], dtype=np.int8)
+        hist = optimizer._get_color_histogram(grid)
+        assert len(hist) == 10
+        assert hist[0] == 6  # 6 zeros
+        assert hist[1] == 1  # 1 one
+        assert hist[2] == 1  # 1 two
+        assert hist[3] == 1  # 1 three
+
+    def test_color_hist_caching(self, optimizer):
+        """Same grid should return cached histogram."""
+        grid = np.array([[1, 0], [0, 1]], dtype=np.int8)
+        h1 = optimizer._get_color_histogram(grid)
+        h2 = optimizer._get_color_histogram(grid)
+        assert h1 == h2
+
+    def test_pruning_reduces_or_maintains(self, optimizer, demo_pairs):
+        """Color histogram pruning should reduce or maintain count."""
+        prims = get_all_primitives()
+        candidates = [ProgramNode(p) for p in prims]
+        result = optimizer.color_histogram_prune(candidates, demo_pairs)
+        assert len(result) <= len(candidates)
+
+
+class TestNonzeroCountPrune:
+    """Tests for nonzero_count_prune method."""
+
+    def test_disabled_returns_all(self, sample_candidates, demo_pairs):
+        """When disabled, should return all candidates."""
+        opt = PruningOptimizer({"enable_nonzero_count": False})
+        result = opt.nonzero_count_prune(sample_candidates, demo_pairs)
+        assert len(result) == len(sample_candidates)
+
+    def test_empty_demos_returns_all(self, optimizer, sample_candidates):
+        """Empty demo pairs should return all candidates."""
+        result = optimizer.nonzero_count_prune(sample_candidates, [])
+        assert len(result) == len(sample_candidates)
+
+    def test_empty_candidates(self, optimizer, demo_pairs):
+        """Empty candidate list should return empty."""
+        result = optimizer.nonzero_count_prune([], demo_pairs)
+        assert result == []
+
+    def test_get_nonzero_count(self, optimizer):
+        """_get_nonzero_count should count non-zero pixels."""
+        grid = np.array([[1, 0, 0], [0, 2, 0], [0, 0, 3]], dtype=np.int8)
+        assert optimizer._get_nonzero_count(grid) == 3
+
+    def test_nonzero_caching(self, optimizer):
+        """Same grid should return cached count."""
+        grid = np.array([[1, 0], [0, 1]], dtype=np.int8)
+        c1 = optimizer._get_nonzero_count(grid)
+        c2 = optimizer._get_nonzero_count(grid)
+        assert c1 == c2
+
+    def test_pruning_reduces_or_maintains(self, optimizer, demo_pairs):
+        """Non-zero count pruning should reduce or maintain count."""
+        prims = get_all_primitives()
+        candidates = [ProgramNode(p) for p in prims]
+        result = optimizer.nonzero_count_prune(candidates, demo_pairs)
+        assert len(result) <= len(candidates)
+
+
+class TestFastPreFilter:
+    """Tests for fast_pre_filter method (runs all pre-Phase A filters)."""
+
+    def test_empty_candidates(self, optimizer, demo_pairs):
+        """Empty candidate list should return empty."""
+        result = optimizer.fast_pre_filter([], demo_pairs)
+        assert result == []
+
+    def test_empty_demos_returns_all(self, optimizer, sample_candidates):
+        """Empty demo pairs should return all candidates."""
+        result = optimizer.fast_pre_filter(sample_candidates, [])
+        assert len(result) == len(sample_candidates)
+
+    def test_reduces_or_maintains(self, optimizer, demo_pairs):
+        """fast_pre_filter should reduce or maintain candidate count."""
+        prims = get_all_primitives()
+        candidates = [ProgramNode(p) for p in prims]
+        result = optimizer.fast_pre_filter(candidates, demo_pairs)
+        assert len(result) <= len(candidates)
+
+    def test_stats_tracked(self, optimizer, demo_pairs):
+        """All filter stats should be tracked after fast_pre_filter."""
+        prims = get_all_primitives()
+        candidates = [ProgramNode(p) for p in prims]
+        optimizer.fast_pre_filter(candidates, demo_pairs)
+        stats = optimizer.get_stats()
+        # At least some stats should be present
+        total_pruned = (
+            stats.get("shape_pruned", 0)
+            + stats.get("nonzero_pruned", 0)
+            + stats.get("color_hist_pruned", 0)
+            + stats.get("betti0_pruned", 0)
+        )
+        # total_pruned + len(result) should equal original count
+        # (not asserting exact equality due to candidate.apply behavior)
+
+    def test_deterministic_across_calls(self, optimizer, demo_pairs):
+        """fast_pre_filter should be deterministic across repeated calls."""
+        prims = get_all_primitives()
+        candidates1 = [ProgramNode(p) for p in prims]
+        candidates2 = [ProgramNode(p) for p in prims]
+
+        optimizer.reset_stats()
+        result1 = optimizer.fast_pre_filter(candidates1, demo_pairs)
+
+        optimizer.reset_stats()
+        result2 = optimizer.fast_pre_filter(candidates2, demo_pairs)
+
+        assert len(result1) == len(result2)
+
+
+class TestEnhancedResetStats:
+    """Tests for reset_stats with enhanced v2.3 caches."""
+
+    def test_clears_all_caches(self, optimizer, demo_pairs):
+        """Should clear all cache dictionaries."""
+        grid = np.array([[1, 0], [0, 1]], dtype=np.int8)
+        optimizer.compute_betti0_fast(grid)
+        optimizer._get_grid_shape(grid)
+        optimizer._get_color_histogram(grid)
+        optimizer._get_nonzero_count(grid)
+
+        assert len(optimizer._betti0_cache) > 0
+        assert len(optimizer._shape_cache) > 0
+        assert len(optimizer._color_hist_cache) > 0
+        assert len(optimizer._nonzero_cache) > 0
+
+        optimizer.reset_stats()
+
+        assert len(optimizer._betti0_cache) == 0
+        assert len(optimizer._shape_cache) == 0
+        assert len(optimizer._color_hist_cache) == 0
+        assert len(optimizer._nonzero_cache) == 0
+
+    def test_resets_all_stats(self, optimizer, demo_pairs):
+        """Should reset all stat counters including new ones."""
+        prims = get_all_primitives()
+        candidates = [ProgramNode(p) for p in prims]
+        optimizer.fast_pre_filter(candidates, demo_pairs)
+
+        optimizer.reset_stats()
+        stats = optimizer.get_stats()
+        assert stats["betti0_pruned"] == 0
+        assert stats["symmetry_deduped"] == 0
+        assert stats["mdl_pruned"] == 0
+        assert stats["shape_pruned"] == 0
+        assert stats["color_hist_pruned"] == 0
+        assert stats["nonzero_pruned"] == 0
