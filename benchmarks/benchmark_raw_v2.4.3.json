@@ -1,0 +1,2349 @@
+{
+  "psi_gate": [
+    {
+      "task": "task_001.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 5.7031,
+      "total_time_sec": 5.7112,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_001.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 6.0998,
+      "total_time_sec": 6.1009,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_002.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 5.7152,
+      "total_time_sec": 5.7162,
+      "total_candidates": 633,
+      "top_confidence": 1.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_002.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 6.0044,
+      "total_time_sec": 6.006,
+      "total_candidates": 633,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_003.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.3968,
+      "total_time_sec": 2.3977,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_003.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.1174,
+      "total_time_sec": 2.1187,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_004.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.1208,
+      "total_time_sec": 2.1214,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_004.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.0137,
+      "total_time_sec": 2.015,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_005.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.3314,
+      "total_time_sec": 3.3321,
+      "total_candidates": 519,
+      "top_confidence": 1.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_005.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.2794,
+      "total_time_sec": 3.282,
+      "total_candidates": 519,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_006.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.3675,
+      "total_time_sec": 3.3683,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_006.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.0385,
+      "total_time_sec": 3.0395,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_007.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.8422,
+      "total_time_sec": 2.8429,
+      "total_candidates": 1244,
+      "top_confidence": 1.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_007.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.9488,
+      "total_time_sec": 2.9499,
+      "total_candidates": 1244,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_008.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.8378,
+      "total_time_sec": 2.839,
+      "total_candidates": 29,
+      "top_confidence": 1.0,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_008.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.4137,
+      "total_time_sec": 3.4143,
+      "total_candidates": 29,
+      "top_confidence": 0.0,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_009.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.064,
+      "total_time_sec": 2.065,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_009.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.6117,
+      "total_time_sec": 1.6129,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_010.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.0987,
+      "total_time_sec": 2.1003,
+      "total_candidates": 694,
+      "top_confidence": 1.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_010.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.1055,
+      "total_time_sec": 2.1079,
+      "total_candidates": 694,
+      "top_confidence": 0.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_011.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.5221,
+      "total_time_sec": 1.5229,
+      "total_candidates": 783,
+      "top_confidence": 1.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_011.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.6128,
+      "total_time_sec": 1.6135,
+      "total_candidates": 783,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_012.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.2229,
+      "total_time_sec": 1.2236,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_012.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.0337,
+      "total_time_sec": 1.0345,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_013.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.1021,
+      "total_time_sec": 3.1028,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_013.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.7274,
+      "total_time_sec": 2.7282,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_014.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 10.9492,
+      "total_time_sec": 10.9534,
+      "total_candidates": 7041,
+      "top_confidence": 1.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_014.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 5.4509,
+      "total_time_sec": 5.4518,
+      "total_candidates": 7041,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_015.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.0768,
+      "total_time_sec": 4.0781,
+      "total_candidates": 1488,
+      "top_confidence": 1.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": false
+    },
+    {
+      "task": "task_015.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.0367,
+      "total_time_sec": 4.038,
+      "total_candidates": 1488,
+      "top_confidence": 0.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    }
+  ],
+  "aegis": [
+    {
+      "task": "task_001.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 6.2857,
+      "total_time_sec": 6.2868,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_001.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 6.9824,
+      "total_time_sec": 6.9833,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_002.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 7.7167,
+      "total_time_sec": 7.7175,
+      "total_candidates": 633,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_002.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 5.3772,
+      "total_time_sec": 5.3812,
+      "total_candidates": 633,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_003.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.144,
+      "total_time_sec": 3.1447,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_003.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.6743,
+      "total_time_sec": 2.6753,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_004.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.7489,
+      "total_time_sec": 2.7499,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_004.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.2309,
+      "total_time_sec": 3.2321,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_005.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.8859,
+      "total_time_sec": 3.8869,
+      "total_candidates": 519,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_005.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.6856,
+      "total_time_sec": 3.6864,
+      "total_candidates": 519,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_006.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.3995,
+      "total_time_sec": 3.4008,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_006.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.7191,
+      "total_time_sec": 4.72,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_007.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.0464,
+      "total_time_sec": 3.0477,
+      "total_candidates": 1244,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_007.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.5951,
+      "total_time_sec": 3.5959,
+      "total_candidates": 1244,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_008.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 5.0562,
+      "total_time_sec": 5.0582,
+      "total_candidates": 29,
+      "top_confidence": 0.0,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_008.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.4228,
+      "total_time_sec": 4.4243,
+      "total_candidates": 29,
+      "top_confidence": 0.0,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_009.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.5927,
+      "total_time_sec": 1.5934,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_009.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.3556,
+      "total_time_sec": 1.3563,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_010.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.8959,
+      "total_time_sec": 1.8966,
+      "total_candidates": 694,
+      "top_confidence": 0.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_010.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.3498,
+      "total_time_sec": 2.3504,
+      "total_candidates": 694,
+      "top_confidence": 0.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_011.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.5479,
+      "total_time_sec": 1.5487,
+      "total_candidates": 783,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_011.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.7065,
+      "total_time_sec": 1.7072,
+      "total_candidates": 783,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_012.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.0731,
+      "total_time_sec": 1.074,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_012.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.2306,
+      "total_time_sec": 1.2323,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_013.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.9282,
+      "total_time_sec": 2.9298,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_013.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.0929,
+      "total_time_sec": 3.0942,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_014.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.5331,
+      "total_time_sec": 4.5349,
+      "total_candidates": 7041,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_014.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.0142,
+      "total_time_sec": 4.0149,
+      "total_candidates": 7041,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_015.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.4911,
+      "total_time_sec": 3.4923,
+      "total_candidates": 1488,
+      "top_confidence": 0.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_015.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.0327,
+      "total_time_sec": 3.0334,
+      "total_candidates": 1488,
+      "top_confidence": 0.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    }
+  ],
+  "causal_prior": [
+    {
+      "task": "task_001.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.3864,
+      "total_time_sec": 4.3871,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_001.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.9249,
+      "total_time_sec": 4.9257,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_002.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.5243,
+      "total_time_sec": 4.5252,
+      "total_candidates": 633,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_002.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.8671,
+      "total_time_sec": 4.8678,
+      "total_candidates": 633,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_003.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.0675,
+      "total_time_sec": 2.0682,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_003.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.1539,
+      "total_time_sec": 2.1569,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_004.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.1386,
+      "total_time_sec": 2.1395,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_004.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.096,
+      "total_time_sec": 2.0968,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_005.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.7249,
+      "total_time_sec": 3.7258,
+      "total_candidates": 519,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_005.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.5116,
+      "total_time_sec": 3.5124,
+      "total_candidates": 519,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_006.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.7546,
+      "total_time_sec": 3.7583,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_006.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.5183,
+      "total_time_sec": 3.519,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_007.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.8867,
+      "total_time_sec": 2.8874,
+      "total_candidates": 1244,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_007.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.7868,
+      "total_time_sec": 2.7875,
+      "total_candidates": 1244,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_008.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.9863,
+      "total_time_sec": 2.987,
+      "total_candidates": 29,
+      "top_confidence": 0.0,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_008.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.9776,
+      "total_time_sec": 3.9783,
+      "total_candidates": 29,
+      "top_confidence": 0.0,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_009.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.6786,
+      "total_time_sec": 1.6798,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_009.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.979,
+      "total_time_sec": 1.9797,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_010.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.4993,
+      "total_time_sec": 2.5001,
+      "total_candidates": 694,
+      "top_confidence": 0.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_010.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.0724,
+      "total_time_sec": 2.0736,
+      "total_candidates": 694,
+      "top_confidence": 0.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_011.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.8349,
+      "total_time_sec": 1.8355,
+      "total_candidates": 783,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_011.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.8727,
+      "total_time_sec": 1.8734,
+      "total_candidates": 783,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_012.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.2223,
+      "total_time_sec": 1.2233,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_012.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.3971,
+      "total_time_sec": 1.3988,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_013.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.0842,
+      "total_time_sec": 3.0852,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_013.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.4888,
+      "total_time_sec": 2.4894,
+      "total_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_014.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.9209,
+      "total_time_sec": 3.9218,
+      "total_candidates": 7041,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_014.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 5.2128,
+      "total_time_sec": 5.215,
+      "total_candidates": 7041,
+      "top_confidence": 0.0,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_015.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.0566,
+      "total_time_sec": 3.0578,
+      "total_candidates": 1488,
+      "top_confidence": 0.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    },
+    {
+      "task": "task_015.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.7166,
+      "total_time_sec": 2.7173,
+      "total_candidates": 1488,
+      "top_confidence": 0.0,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none",
+      "psi_gate_enabled": true
+    }
+  ],
+  "timestamp": "2026-06-23 03:27:00"
+}
