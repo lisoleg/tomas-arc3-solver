@@ -75,6 +75,9 @@ class ParamInference:
         candidates.extend(self._gen_map_by_function(features))
         candidates.extend(self._gen_complete_pattern(features))
         candidates.extend(self._gen_shift_object(features))
+        # v2.4.5: Object extraction primitives (no parameters needed)
+        candidates.append(ProgramNode(DSLElement("extract-largest-object")))
+        candidates.append(ProgramNode(DSLElement("extract-smallest-object")))
 
         # Generate two-primitive chains (depth 2) for common combos
         candidates.extend(self._gen_chain_candidates(features))

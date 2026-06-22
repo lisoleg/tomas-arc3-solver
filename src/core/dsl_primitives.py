@@ -969,6 +969,63 @@ def _map_by_function(grid: np.ndarray, func_type: str = "add", value: int = 1, m
     return result
 
 
+def _extract_largest_object(grid: np.ndarray, **_: Any) -> np.ndarray:
+    """Extract the largest object (by pixel count) from the grid.
+
+    Returns a grid with only the largest object (other pixels set to 0).
+    """
+    result = np.zeros_like(grid)
+    binary = (grid > 0).astype(np.int32)
+    labeled, num = ndimage.label(binary)
+
+    if num == 0:
+        return result
+
+    # Find the largest object (by pixel count)
+    max_size = 0
+    max_label = 0
+    for label in range(1, num + 1):
+        size = np.sum(labeled == label)
+        if size > max_size:
+            max_size = size
+            max_label = label
+
+    # Extract the largest object
+    result[labeled == max_label] = grid[labeled == max_label]
+
+    return result
+
+
+def _extract_smallest_object(grid: np.ndarray, **_: Any) -> np.ndarray:
+    """Extract the smallest object (by pixel count) from the grid.
+
+    Returns a grid with only the smallest object (other pixels set to 0).
+    """
+    result = np.zeros_like(grid)
+    binary = (grid > 0).astype(np.int32)
+    labeled, num = ndimage.label(binary)
+
+    if num == 0:
+        return result
+
+    # Find the smallest object (by pixel count, excluding size 0)
+    min_size = float('inf')
+    min_label = 0
+    for label in range(1, num + 1):
+        size = np.sum(labeled == label)
+        if size > 0 and size < min_size:
+            min_size = size
+            min_label = label
+
+    if min_label == 0:
+        return result
+
+    # Extract the smallest object
+    result[labeled == min_label] = grid[labeled == min_label]
+
+    return result
+
+
 # ============================================================
 # Register all primitives
 # ============================================================
@@ -1011,6 +1068,9 @@ def _register_primitives() -> None:
         "shift-object": _shift_object,
         "complete-pattern": _complete_pattern,
         "map-by-function": _map_by_function,
+        # New primitives v2.4.5
+        "extract-largest-object": _extract_largest_object,
+        "extract-smallest-object": _extract_smallest_object,
     }
 
 
