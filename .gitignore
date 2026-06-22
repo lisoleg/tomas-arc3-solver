@@ -31,6 +31,13 @@ full_test_output.txt
 .DS_Store
 Thumbs.db
 
+# Node.js / Frontend
+node_modules/
+src/web/frontend/dist/
+
+# Runtime data
+output/runtime_data/
+
 # Library Learning persistence
 library/*.json
 

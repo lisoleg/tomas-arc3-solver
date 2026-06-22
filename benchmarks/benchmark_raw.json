@@ -5,8 +5,8 @@
       "config": "psi_gate_disabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 3.7356,
-      "total_time_sec": 3.7357,
+      "search_time_sec": 5.7899,
+      "total_time_sec": 5.7901,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -31,8 +31,8 @@
       "config": "psi_gate_enabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 3.1388,
-      "total_time_sec": 3.1389,
+      "search_time_sec": 4.3664,
+      "total_time_sec": 4.3665,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -57,8 +57,8 @@
       "config": "psi_gate_disabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 2.8556,
-      "total_time_sec": 2.8623,
+      "search_time_sec": 4.6816,
+      "total_time_sec": 4.6899,
       "total_candidates": 633,
       "ranked_candidates": 100,
       "top_confidence": 0.0313,
@@ -83,8 +83,8 @@
       "config": "psi_gate_enabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 4.0369,
-      "total_time_sec": 4.0439,
+      "search_time_sec": 4.6275,
+      "total_time_sec": 4.6352,
       "total_candidates": 633,
       "ranked_candidates": 100,
       "top_confidence": 0.0313,
@@ -109,8 +109,8 @@
       "config": "psi_gate_disabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 1.8729,
-      "total_time_sec": 1.873,
+      "search_time_sec": 2.2421,
+      "total_time_sec": 2.2422,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -135,8 +135,8 @@
       "config": "psi_gate_enabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 2.2856,
-      "total_time_sec": 2.2858,
+      "search_time_sec": 2.1622,
+      "total_time_sec": 2.1624,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -149,6 +149,630 @@
         "shape_pruned": 8499,
         "color_hist_pruned": 1024,
         "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_004.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.3125,
+      "total_time_sec": 2.3126,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_004.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.138,
+      "total_time_sec": 2.138,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_005.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.5309,
+      "total_time_sec": 3.5335,
+      "total_candidates": 519,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0316,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_005.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.47,
+      "total_time_sec": 3.473,
+      "total_candidates": 519,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0316,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_006.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.3749,
+      "total_time_sec": 3.375,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_006.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.4592,
+      "total_time_sec": 3.4593,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_007.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.1255,
+      "total_time_sec": 3.1301,
+      "total_candidates": 1244,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_007.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.172,
+      "total_time_sec": 3.1735,
+      "total_candidates": 1244,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_008.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.2767,
+      "total_time_sec": 3.2773,
+      "total_candidates": 29,
+      "ranked_candidates": 29,
+      "top_confidence": 0.0731,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_008.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.3042,
+      "total_time_sec": 3.305,
+      "total_candidates": 29,
+      "ranked_candidates": 29,
+      "top_confidence": 0.0731,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_009.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.9192,
+      "total_time_sec": 1.9192,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_009.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.4172,
+      "total_time_sec": 1.4173,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_010.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.072,
+      "total_time_sec": 2.0731,
+      "total_candidates": 694,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_010.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.0677,
+      "total_time_sec": 2.0686,
+      "total_candidates": 694,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_011.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.1325,
+      "total_time_sec": 1.1345,
+      "total_candidates": 783,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_011.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 0.9756,
+      "total_time_sec": 0.9783,
+      "total_candidates": 783,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_012.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 0.8412,
+      "total_time_sec": 0.8412,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_012.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 0.799,
+      "total_time_sec": 0.799,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_013.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.2382,
+      "total_time_sec": 2.2382,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_013.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.729,
+      "total_time_sec": 1.7291,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_014.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.7923,
+      "total_time_sec": 2.7943,
+      "total_candidates": 7041,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0217,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_014.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.8101,
+      "total_time_sec": 3.816,
+      "total_candidates": 7041,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0217,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_015.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.5294,
+      "total_time_sec": 2.5366,
+      "total_candidates": 1488,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_015.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.1163,
+      "total_time_sec": 2.121,
+      "total_candidates": 1488,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
       },
       "enpv_stats": {
         "total_evaluations": 0,
@@ -163,8 +787,8 @@
       "config": "aegis_disabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 3.5068,
-      "total_time_sec": 3.5069,
+      "search_time_sec": 3.5616,
+      "total_time_sec": 3.5617,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -189,8 +813,8 @@
       "config": "aegis_enabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 6.6511,
-      "total_time_sec": 6.6512,
+      "search_time_sec": 3.7263,
+      "total_time_sec": 3.7265,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -215,8 +839,8 @@
       "config": "aegis_disabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 6.4288,
-      "total_time_sec": 6.4432,
+      "search_time_sec": 4.147,
+      "total_time_sec": 4.1514,
       "total_candidates": 633,
       "ranked_candidates": 100,
       "top_confidence": 0.0313,
@@ -241,8 +865,8 @@
       "config": "aegis_enabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 6.524,
-      "total_time_sec": 6.5339,
+      "search_time_sec": 4.8626,
+      "total_time_sec": 4.8769,
       "total_candidates": 633,
       "ranked_candidates": 100,
       "top_confidence": 0.0313,
@@ -267,8 +891,8 @@
       "config": "aegis_disabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 3.0052,
-      "total_time_sec": 3.0053,
+      "search_time_sec": 2.5633,
+      "total_time_sec": 2.5634,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -293,8 +917,8 @@
       "config": "aegis_enabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 2.6011,
-      "total_time_sec": 2.6012,
+      "search_time_sec": 2.3271,
+      "total_time_sec": 2.3272,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -307,6 +931,630 @@
         "shape_pruned": 8499,
         "color_hist_pruned": 1024,
         "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_004.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.047,
+      "total_time_sec": 2.0471,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_004.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.6656,
+      "total_time_sec": 1.6657,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_005.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.3685,
+      "total_time_sec": 4.3712,
+      "total_candidates": 519,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0316,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_005.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 5.2134,
+      "total_time_sec": 5.2199,
+      "total_candidates": 519,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0316,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_006.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.971,
+      "total_time_sec": 4.9711,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_006.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.6464,
+      "total_time_sec": 3.6465,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_007.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.9706,
+      "total_time_sec": 2.9719,
+      "total_candidates": 1244,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_007.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.2311,
+      "total_time_sec": 3.233,
+      "total_candidates": 1244,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_008.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.7528,
+      "total_time_sec": 2.7534,
+      "total_candidates": 29,
+      "ranked_candidates": 29,
+      "top_confidence": 0.0731,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_008.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.5951,
+      "total_time_sec": 2.5956,
+      "total_candidates": 29,
+      "ranked_candidates": 29,
+      "top_confidence": 0.0731,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_009.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.3178,
+      "total_time_sec": 1.3179,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_009.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.2394,
+      "total_time_sec": 1.2395,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_010.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.5571,
+      "total_time_sec": 1.5584,
+      "total_candidates": 694,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_010.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.7071,
+      "total_time_sec": 1.7096,
+      "total_candidates": 694,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_011.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.3067,
+      "total_time_sec": 1.309,
+      "total_candidates": 783,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_011.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.2014,
+      "total_time_sec": 1.2068,
+      "total_candidates": 783,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_012.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 0.8547,
+      "total_time_sec": 0.8548,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_012.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 0.7274,
+      "total_time_sec": 0.7275,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_013.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.8248,
+      "total_time_sec": 1.8249,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_013.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.7936,
+      "total_time_sec": 1.7937,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_014.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.4927,
+      "total_time_sec": 3.4969,
+      "total_candidates": 7041,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0217,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_014.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.4905,
+      "total_time_sec": 4.5179,
+      "total_candidates": 7041,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0217,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_015.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.3509,
+      "total_time_sec": 2.3544,
+      "total_candidates": 1488,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_015.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.8087,
+      "total_time_sec": 1.8117,
+      "total_candidates": 1488,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
       },
       "enpv_stats": {
         "total_evaluations": 0,
@@ -321,8 +1569,8 @@
       "config": "causal_prior_disabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 5.0451,
-      "total_time_sec": 5.0452,
+      "search_time_sec": 3.6651,
+      "total_time_sec": 3.6652,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -347,8 +1595,8 @@
       "config": "causal_prior_enabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 5.2663,
-      "total_time_sec": 5.2664,
+      "search_time_sec": 3.6103,
+      "total_time_sec": 3.6105,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -373,8 +1621,8 @@
       "config": "causal_prior_disabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 9.6512,
-      "total_time_sec": 9.6591,
+      "search_time_sec": 4.0786,
+      "total_time_sec": 4.0913,
       "total_candidates": 633,
       "ranked_candidates": 100,
       "top_confidence": 0.0313,
@@ -399,8 +1647,8 @@
       "config": "causal_prior_enabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 8.6241,
-      "total_time_sec": 8.6312,
+      "search_time_sec": 4.6913,
+      "total_time_sec": 4.6944,
       "total_candidates": 633,
       "ranked_candidates": 100,
       "top_confidence": 0.0313,
@@ -425,8 +1673,8 @@
       "config": "causal_prior_disabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 2.3072,
-      "total_time_sec": 2.3073,
+      "search_time_sec": 1.5568,
+      "total_time_sec": 1.5569,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -451,8 +1699,8 @@
       "config": "causal_prior_enabled",
       "status": "completed",
       "error": null,
-      "search_time_sec": 2.8198,
-      "total_time_sec": 2.8199,
+      "search_time_sec": 1.5744,
+      "total_time_sec": 1.5745,
       "total_candidates": 0,
       "ranked_candidates": 0,
       "top_confidence": 0.0,
@@ -471,7 +1719,631 @@
         "early_terminated": false
       },
       "cuda_backend": "none"
+    },
+    {
+      "task": "task_004.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.556,
+      "total_time_sec": 1.556,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_004.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.5185,
+      "total_time_sec": 1.5186,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 10124,
+        "nonzero_pruned": 10796
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_005.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.3762,
+      "total_time_sec": 2.3784,
+      "total_candidates": 519,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0316,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_005.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.538,
+      "total_time_sec": 2.5444,
+      "total_candidates": 519,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0316,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 1769,
+        "symmetry_deduped": 1092,
+        "mdl_pruned": 0,
+        "shape_pruned": 8406,
+        "color_hist_pruned": 2017,
+        "nonzero_pruned": 10486
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_006.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.2957,
+      "total_time_sec": 2.2958,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_006.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.3795,
+      "total_time_sec": 2.3795,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1995,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2420,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_007.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.6206,
+      "total_time_sec": 2.6219,
+      "total_candidates": 1244,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_007.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.3922,
+      "total_time_sec": 2.3936,
+      "total_candidates": 1244,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 962,
+        "symmetry_deduped": 1979,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 3537,
+        "nonzero_pruned": 8562
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_008.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.4154,
+      "total_time_sec": 3.4161,
+      "total_candidates": 29,
+      "ranked_candidates": 29,
+      "top_confidence": 0.0731,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_008.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.5276,
+      "total_time_sec": 2.5283,
+      "total_candidates": 29,
+      "ranked_candidates": 29,
+      "top_confidence": 0.0731,
+      "top_mdl": 12,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 2447,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 6298,
+        "nonzero_pruned": 5584
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_009.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.4041,
+      "total_time_sec": 1.4041,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_009.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.1455,
+      "total_time_sec": 1.1456,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 1551,
+        "nonzero_pruned": 19369
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_010.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.754,
+      "total_time_sec": 1.7551,
+      "total_candidates": 694,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_010.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.4081,
+      "total_time_sec": 2.41,
+      "total_candidates": 694,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 8014,
+        "symmetry_deduped": 149,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 1241,
+        "nonzero_pruned": 10734
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_011.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.5273,
+      "total_time_sec": 1.5305,
+      "total_candidates": 783,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_011.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.3897,
+      "total_time_sec": 1.3921,
+      "total_candidates": 783,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 321,
+        "mdl_pruned": 0,
+        "shape_pruned": 24735,
+        "color_hist_pruned": 589,
+        "nonzero_pruned": 496
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_012.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 0.9231,
+      "total_time_sec": 0.9234,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_012.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 0.8847,
+      "total_time_sec": 0.8848,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 27868,
+        "color_hist_pruned": 62,
+        "nonzero_pruned": 0
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_013.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.4379,
+      "total_time_sec": 2.438,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_013.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.5428,
+      "total_time_sec": 2.5429,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 10031,
+        "nonzero_pruned": 10920
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_014.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.6074,
+      "total_time_sec": 3.6095,
+      "total_candidates": 7041,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0217,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_014.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.4939,
+      "total_time_sec": 3.4988,
+      "total_candidates": 7041,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0217,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 3438,
+        "mdl_pruned": 0,
+        "shape_pruned": 7041,
+        "color_hist_pruned": 0,
+        "nonzero_pruned": 9555
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_015.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.7567,
+      "total_time_sec": 2.7655,
+      "total_candidates": 1488,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_015.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.2111,
+      "total_time_sec": 2.2153,
+      "total_candidates": 1488,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0295,
+      "top_mdl": 10,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 62,
+        "symmetry_deduped": 252,
+        "mdl_pruned": 0,
+        "shape_pruned": 6979,
+        "color_hist_pruned": 8200,
+        "nonzero_pruned": 10827
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
     }
   ],
-  "timestamp": "2026-06-23 01:16:49"
+  "timestamp": "2026-06-23 01:28:00"
 }

@@ -165,7 +165,7 @@ const PruningChart: React.FC<PruningChartProps> = ({ taskId }) => {
             {/* Candidate Funnel */}
             <Grid item xs={12}>
               <Typography variant="subtitle2" gutterBottom>
-                Candidate Funnel (Before -> After)
+                Candidate Funnel (Before {'->'} After)
               </Typography>
               <ResponsiveContainer width="100%" height={200}>
                 <ComposedChart data={data.stages}>

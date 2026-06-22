@@ -296,9 +296,12 @@ See [CHANGELOG.md](CHANGELOG.md) for detailed version history.
 
 ## Documentation
 
-- [Architecture](ARCHITECTURE.md) — Full system architecture and design decisions
-- [Changelog](CHANGELOG.md) — Version history and feature additions
+- [Architecture](docs/ARCHITECTURE.md) — Full system architecture and design decisions
+- [Changelog](docs/CHANGELOG.md) — Version history and feature additions
 - [Research Paper](docs/paper/TOMAS_ARC_AGI_3_Paper.md) — Principles, technology, and implementation
+- [Web Dashboard Guide](docs/web_dashboard_guide.md) — Dashboard installation, API reference, and visualization usage
+- [ψ-Gate Configuration Guide](docs/psi_gate_guide.md) — ψ-Gate semantic gating setup, tuning, and 5 core capabilities
+- [AEGIS Evolution Engine Guide](docs/aegis_guide.md) — AEGIS 4-stage pipeline (Digester→Planner→Evolver→Critic) configuration and usage
 
 ## Repository
 

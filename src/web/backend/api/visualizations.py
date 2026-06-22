@@ -184,15 +184,84 @@ def delete_viz_history(task_id: str):
 def get_benchmark():
     """Get performance benchmark comparison data.
 
+    Loads real benchmark results from benchmarks/benchmark_raw.json if available.
+    Falls back to generated sample data when no benchmark has been run.
+
     Returns comparison data for:
     - psi_gate enabled vs disabled
     - AEGIS evolution vs normal search
     """
     try:
+        # Try to load real benchmark data
+        import os
+        benchmark_path = os.path.join(
+            os.path.dirname(__file__), '..', '..', '..', '..',
+            'benchmarks', 'benchmark_raw.json'
+        )
+        benchmark_path = os.path.abspath(benchmark_path)
+
+        if os.path.exists(benchmark_path):
+            with open(benchmark_path, 'r') as f:
+                raw = json.load(f)
+
+            # Aggregate real psi_gate results
+            psi_results = raw.get('psi_gate', [])
+            aegis_results = raw.get('aegis', [])
+
+            def aggregate_real(results, config_name):
+                matching = [r for r in results if r.get('config') == config_name and r.get('status') == 'completed']
+                if not matching:
+                    return None
+                correct = sum(1 for r in matching if r.get('correct'))
+                return {
+                    'accuracy': round(correct / len(matching), 3),
+                    'avg_search_time': round(sum(r.get('total_time_sec', 0) for r in matching) / len(matching), 2),
+                    'avg_candidates': round(sum(r.get('total_candidates', 0) for r in matching) / len(matching), 1),
+                    'avg_confidence': round(sum(r.get('top_confidence', 0) for r in matching) / len(matching), 4),
+                    'avg_mdl': round(sum(r.get('top_mdl', 0) for r in matching) / len(matching), 1),
+                    'task_count': len(matching),
+                }
+
+            psi_disabled = aggregate_real(psi_results, 'psi_gate_disabled')
+            psi_enabled = aggregate_real(psi_results, 'psi_gate_enabled')
+            aegis_disabled = aggregate_real(aegis_results, 'aegis_disabled')
+            aegis_enabled = aggregate_real(aegis_results, 'aegis_enabled')
+
+            if psi_disabled and psi_enabled:
+                psi_gate_data = {'enabled': psi_enabled, 'disabled': psi_disabled}
+            else:
+                psi_gate_data = None
+
+            if aegis_disabled and aegis_enabled:
+                aegis_data = {
+                    'aegis': {
+                        'success_rate': aegis_enabled.get('accuracy', 0),
+                        'avg_iterations': 0,
+                        'avg_programs_evolved': 0,
+                        'convergence_time': aegis_enabled.get('avg_search_time', 0),
+                    },
+                    'normal': {
+                        'success_rate': aegis_disabled.get('accuracy', 0),
+                        'avg_iterations': 1,
+                        'avg_programs_evolved': 0,
+                        'convergence_time': aegis_disabled.get('avg_search_time', 0),
+                    },
+                }
+            else:
+                aegis_data = None
+
+            if psi_gate_data or aegis_data:
+                return jsonify({
+                    'psi_gate': psi_gate_data or {},
+                    'aegis': aegis_data or {},
+                    'source': 'real_benchmark',
+                    'timestamp': raw.get('timestamp', ''),
+                })
+
+        # Fall back to sample data
         import random
         rng = random.Random(42)
 
-        # psi_gate comparison
         psi_gate_data = {
             'enabled': {
                 'accuracy': round(rng.uniform(0.75, 0.92), 3),
@@ -210,7 +279,6 @@ def get_benchmark():
             },
         }
 
-        # AEGIS comparison
         aegis_data = {
             'aegis': {
                 'success_rate': round(rng.uniform(0.8, 0.95), 3),
@@ -229,6 +297,7 @@ def get_benchmark():
         return jsonify({
             'psi_gate': psi_gate_data,
             'aegis': aegis_data,
+            'source': 'sample_data',
         })
     except Exception as e:
         return jsonify({'error': str(e)}), 500

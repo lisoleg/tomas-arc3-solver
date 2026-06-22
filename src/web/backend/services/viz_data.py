@@ -1,14 +1,14 @@
 """
 TOMAS Visualization Data Service
 
-Generates realistic mock data for dashboard visualizations:
+Provides data for dashboard visualizations:
 - kappa-Snap search tree (D3.js hierarchy)
 - GaussEx fiber verification results
 - 8-strategy pruning statistics (Recharts)
 - Task history with details
 
-When the real solver is running, this service can be enhanced to
-capture actual runtime data via callbacks from the solver pipeline.
+v2.4.1: Now checks RuntimeDataCollector for real solver data first.
+Falls back to mock data generation when no real data is available.
 """
 
 import random
@@ -16,9 +16,19 @@ import hashlib
 from typing import Any
 from datetime import datetime, timedelta
 
+# Try to import the runtime collector for real data
+try:
+    from services.runtime_collector import get_collector
+    _collector = get_collector()
+except Exception:
+    _collector = None
+
 
 def generate_search_tree(task_id: str, depth: int = 3) -> dict[str, Any]:
-    """Generate a realistic kappa-Snap search tree structure.
+    """Generate a kappa-Snap search tree structure.
+
+    Checks for real runtime data from RuntimeDataCollector first.
+    Falls back to mock data when no real data is available.
 
     Simulates the Two-Phase search tree:
     - Root: demo pairs input
@@ -33,6 +43,13 @@ def generate_search_tree(task_id: str, depth: int = 3) -> dict[str, Any]:
     Returns:
         D3.js hierarchy-compatible tree dict.
     """
+    # Check for real runtime data first
+    if _collector and _collector.has_data(task_id):
+        real_data = _collector.get_search_tree(task_id)
+        if real_data and real_data.get("total_candidates", 0) > 0:
+            return real_data
+
+    # Fall back to mock data
     rng = random.Random(hash(task_id) & 0xFFFFFFFF)
 
     dsl_primitives = [
@@ -76,6 +93,9 @@ def generate_search_tree(task_id: str, depth: int = 3) -> dict[str, Any]:
 def generate_fiber_verification(task_id: str) -> dict[str, Any]:
     """Generate GaussEx fiber verification results.
 
+    Checks for real runtime data from RuntimeDataCollector first.
+    Falls back to mock data when no real data is available.
+
     Simulates fiber intersection verification results:
     - List of demo pairs with their fiber verification status
     - CRC32 hash matching results
@@ -87,6 +107,13 @@ def generate_fiber_verification(task_id: str) -> dict[str, Any]:
     Returns:
         Fiber verification data dict.
     """
+    # Check for real runtime data first
+    if _collector and _collector.has_data(task_id):
+        real_data = _collector.get_fiber_verification(task_id)
+        if real_data and real_data.get("total_candidates", 0) > 0:
+            return real_data
+
+    # Fall back to mock data
     rng = random.Random(hash(task_id) & 0xFFFFFFFF + 1)
 
     num_demos = rng.randint(2, 5)
@@ -141,6 +168,9 @@ def generate_fiber_verification(task_id: str) -> dict[str, Any]:
 def generate_pruning_stats(task_id: str) -> dict[str, Any]:
     """Generate 8-strategy pruning pipeline statistics.
 
+    Checks for real runtime data from RuntimeDataCollector first.
+    Falls back to mock data when no real data is available.
+
     Returns data for Recharts bar chart showing pruning rates:
     1. grid_shape
     2. nonzero_count
@@ -157,6 +187,13 @@ def generate_pruning_stats(task_id: str) -> dict[str, Any]:
     Returns:
         Pruning statistics dict.
     """
+    # Check for real runtime data first
+    if _collector and _collector.has_data(task_id):
+        real_data = _collector.get_pruning_stats(task_id)
+        if real_data and real_data.get("total_initial", 0) > 0:
+            return real_data
+
+    # Fall back to mock data
     rng = random.Random(hash(task_id) & 0xFFFFFFFF + 2)
 
     total_initial = rng.randint(500, 2000)
@@ -205,12 +242,22 @@ def generate_pruning_stats(task_id: str) -> dict[str, Any]:
 def generate_task_history(limit: int = 20) -> list[dict[str, Any]]:
     """Generate realistic task history entries.
 
+    Checks for real runtime data from RuntimeDataCollector first.
+    Falls back to mock data when no real data is available.
+
     Args:
         limit: Maximum number of history entries.
 
     Returns:
         List of history entry dicts.
     """
+    # Check for real runtime data first
+    if _collector:
+        real_history = _collector.get_task_history(limit=limit)
+        if real_history:
+            return real_history
+
+    # Fall back to mock data
     rng = random.Random(42)
     modes = ["video", "bayesian", "fusion", "auto"]
     statuses = ["completed", "completed", "completed", "failed", "timeout"]
@@ -249,12 +296,22 @@ def generate_task_history(limit: int = 20) -> list[dict[str, Any]]:
 def generate_task_detail(task_id: str) -> dict[str, Any]:
     """Generate detailed task information including all visualization data.
 
+    Checks for real runtime data from RuntimeDataCollector first.
+    Falls back to mock data when no real data is available.
+
     Args:
         task_id: Task identifier.
 
     Returns:
         Complete task detail dict.
     """
+    # Check for real runtime data first
+    if _collector and _collector.has_data(task_id):
+        real_detail = _collector.get_task_detail(task_id)
+        if real_detail and real_detail.get("search_tree"):
+            return real_detail
+
+    # Fall back to mock data
     return {
         "task_id": task_id,
         "search_tree": generate_search_tree(task_id),
