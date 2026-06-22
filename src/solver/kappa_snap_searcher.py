@@ -73,13 +73,15 @@ class KappaSnapSearcher:
         use_cuda: Whether CUDA GPU acceleration is active.
     """
 
-    def __init__(self, config: dict[str, Any], library: Any = None) -> None:
+    def __init__(self, config: dict[str, Any], library: Any = None,
+                 causal_prior: Any = None) -> None:
         """Initialize the searcher.
 
         Args:
             config: Search configuration dict. May include 'cuda' and
                 'pruning' sub-dicts for v2.3 features.
             library: LibraryLearning instance (optional).
+            causal_prior: CausalDSLPrior instance (optional, v2.4).
         """
         self.dsl_set: list[DSLElement] = get_all_primitives()
         self.library = library
@@ -89,14 +91,14 @@ class KappaSnapSearcher:
         cache_size = config.get("topo_hash_cache_size", 10000)
         use_luzhao = config.get("use_luzhao_hash", True)
         self.topo_filter = TopoHashFilter(cache_size=cache_size,
-                                          use_luzhao=use_luzhao)
+                                           use_luzhao=use_luzhao)
         self._start_time: float = 0.0
 
         # ENPV decision
         cost_per_eval = config.get("cost_per_evaluation", 0.5)
         min_enpv = config.get("min_enpv_threshold", 0.0)
         self.enpv = ENPVDecision(cost_per_evaluation=cost_per_eval,
-                                 min_enpv_threshold=min_enpv)
+                                  min_enpv_threshold=min_enpv)
 
         # v2.3: CUDA batch verification — prefer numba CUDA, fall back to CuPy
         cuda_config = config.get("cuda", {})
@@ -125,6 +127,11 @@ class KappaSnapSearcher:
         self.pruning: PruningOptimizer | None = None
         if PruningOptimizer is not None:
             self.pruning = PruningOptimizer(pruning_config)
+            if causal_prior is not None:
+                self.pruning.causal_prior = causal_prior
+
+        # v2.4: Causal DSL Prior
+        self.causal_prior: Any = causal_prior
 
     def search(self, demo_pairs: list[dict[str, Any]]) -> list[ProgramNode]:
         """Unified search entry point (alias for two_phase_search).

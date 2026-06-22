@@ -161,7 +161,7 @@ psi_gate:
 
 # --- AEGIS Program Evolution Engine ---
 aegis:
-  enabled: false                 # set true to upgrade κ-Snap to evolution search
+  enabled: true                   # ✅ v2.4: enable AEGIS evolution search
   population_size: 20            # candidates per generation
   num_generations: 5             # evolution generations
   mutation_rate: 0.3
@@ -174,7 +174,7 @@ aegis:
 
 # --- Causal DSL Prior ---
 causal_prior:
-  enabled: false                 # set true to guide heuristic_order with causal graph
+  enabled: true                  # ✅ v2.4: enable causal prior guidance
   history_path: "logs/solver_history.json"
   strictness: "moderate"         # "lenient" | "moderate" | "strict"
   verbose: false

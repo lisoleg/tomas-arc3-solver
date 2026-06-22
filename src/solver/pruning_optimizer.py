@@ -93,6 +93,9 @@ class PruningOptimizer:
             "nonzero_pruned": 0,
         }
 
+        # v2.4: Causal DSL Prior for heuristic ordering
+        self.causal_prior: Any = None
+
     def compute_betti0_fast(self, grid: np.ndarray) -> int:
         """Fast Betti0 computation using scipy.ndimage.label.
 
@@ -559,8 +562,8 @@ class PruningOptimizer:
         Secondary sort: Number of primitives (fewer first).
         Tertiary sort: Program structure complexity.
 
-        This ensures high-probability candidates are verified first,
-        improving ENPV early-termination effectiveness.
+        v2.4: If causal_prior is available, adjust ordering based on
+        learned causal graph (DSL primitive causal dependencies).
 
         Args:
             candidates: List of candidate ProgramNodes.
@@ -572,6 +575,44 @@ class PruningOptimizer:
         if not self.enable_heuristic_order:
             return list(candidates)
 
+        # v2.4: Causal prior guidance
+        if self.causal_prior is not None and demo_pairs:
+            try:
+                # Convert ProgramNode to dict format for causal prior
+                dict_candidates = []
+                for p in candidates:
+                    actions = [{"op": e.name, "args": []} for e in p.flatten()]
+                    dict_candidates.append({"actions": actions})
+
+                # Get input grid from first demo pair
+                default_grid = np.zeros((1, 1), dtype=np.int8)
+                input_grid = demo_pairs[0].get("input", [default_grid])[0]
+
+                # Get causal scores
+                causal_scores = self.causal_prior.heuristic_order_guide(
+                    input_grid, dict_candidates
+                )
+
+                # Adjust ordering: blend MDL score with causal score
+                def sort_key(p: ProgramNode, idx: int) -> tuple[float, int, str]:
+                    mdl_score = p.total_mdl
+                    causal_score = causal_scores[idx] if idx < len(causal_scores) else 0.5
+                    # Blend: 70% MDL + 30% causal
+                    blended = 0.7 * mdl_score / max(mdl_score, 1) + 0.3 * (1.0 - causal_score)
+                    num_prims = len(p.flatten())
+                    names = ",".join(e.name for e in p.flatten())
+                    return (blended, num_prims, names)
+
+                # Sort with causal guidance
+                result = []
+                for idx, p in enumerate(candidates):
+                    result.append((p, sort_key(p, idx)))
+                result.sort(key=lambda x: x[1])
+                return [p for p, _ in result]
+            except Exception:
+                pass  # Fall back to standard ordering
+
+        # Standard ordering (no causal prior)
         def sort_key(p: ProgramNode) -> tuple[int, int, str]:
             # Primary: MDL (lower is better)
             # Secondary: number of primitives (fewer is better)

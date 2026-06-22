@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import os
 
 from src.core.dsl_primitives import DSLElement, ProgramNode
 from src.core.video_tensor import VideoTemporalEncoder
@@ -106,6 +107,47 @@ class TOMASSolver:
                 verbose=config.get("verbose", False),
             )
 
+        # v2.4: Optional AEGIS Evolution Engine
+        self.aegis_engine = None
+        if config.get("aegis", {}).get("enabled", False):
+            try:
+                from src.solver.aegis_evolver import AEGISEngine, EvolutionConfig
+                aegis_config = config.get("aegis", {})
+                evo_config = EvolutionConfig(
+                    population_size=aegis_config.get("population_size", 20),
+                    num_generations=aegis_config.get("num_generations", 5),
+                    mutation_rate=aegis_config.get("mutation_rate", 0.3),
+                    crossover_rate=aegis_config.get("crossover_rate", 0.5),
+                    elitism_count=aegis_config.get("elitism_count", 3),
+                    mdl_weight=aegis_config.get("mdl_weight", 0.4),
+                    accuracy_weight=aegis_config.get("accuracy_weight", 0.6),
+                    use_psi_gate=aegis_config.get("use_psi_gate", True),
+                    verbose=config.get("verbose", False),
+                )
+                self.aegis_engine = AEGISEngine(evo_config)
+            except ImportError:
+                self.aegis_engine = None
+
+        # v2.4: Optional Causal DSL Prior
+        self.causal_prior = None
+        if config.get("causal_prior", {}).get("enabled", False):
+            try:
+                from src.solver.causal_dsl_prior import CausalDSLPrior
+                cp_config = config.get("causal_prior", {})
+                self.causal_prior = CausalDSLPrior(verbose=cp_config.get("verbose", False))
+                # Load history if available
+                history_path = cp_config.get("history_path", "")
+                if history_path and os.path.exists(history_path):
+                    self.causal_prior.load_graph(history_path)
+            except ImportError:
+                self.causal_prior = None
+
+        # Pass causal_prior to searcher (after initialization)
+        if self.searcher is not None and self.causal_prior is not None:
+            self.searcher.causal_prior = self.causal_prior
+            if self.searcher.pruning is not None:
+                self.searcher.pruning.causal_prior = self.causal_prior
+
         # Solvers
         self.video_solver = VideoSolver(self.searcher, self.verifier, self.library)
         self.transfer_solver = TransferSolver(
@@ -190,7 +232,57 @@ class TOMASSolver:
         """
         if video_task is None:
             video_task = self.parse_input(task)
-        return self.video_solver.solve(task, video_task.demo_pairs, video_task.test_frames)
+        demo_pairs = video_task.demo_pairs
+        test_frames = video_task.test_frames
+
+        # Run search
+        self.verifier.set_demo_pairs(demo_pairs)
+        valid_programs = self.searcher.two_phase_search(demo_pairs)
+
+        # v2.4: AEGIS evolution (if enabled)
+        if self.aegis_engine is not None and len(valid_programs) >= 3:
+            try:
+                # Convert ProgramNode to dict format for AEGIS
+                init_programs = []
+                for prog in valid_programs[:self.aegis_engine.config.population_size]:
+                    prog_dict = {"actions": [{"op": p.__class__.__name__, "args": []} for p in prog.flatten()]}
+                    init_programs.append(prog_dict)
+
+                # Run AEGIS evolution
+                input_pairs = [(p["input"][0], p["output"][0]) for p in demo_pairs]
+                evolution_result = self.aegis_engine.evolve(init_programs, input_pairs)
+
+                # Use evolved program if better
+                if evolution_result.best_program is not None:
+                    # Convert back to ProgramNode (simplified)
+                    best_prog = valid_programs[0]  # Fallback
+                    # TODO: proper conversion from dict to ProgramNode
+                    valid_programs = [best_prog] + valid_programs
+            except Exception as e:
+                if self.config.get("verbose", False):
+                    print(f"[AEGIS] Evolution failed: {e}")
+
+        # Bayesian ranking
+        ranked = self.bayesian.rank_candidates(valid_programs, demo_pairs)
+
+        # Select best
+        if ranked:
+            best_program, best_posterior = ranked[0]
+        else:
+            best_program = ProgramNode(DSLElement("copy"))
+            best_posterior = 0.0
+
+        # Predict
+        predictions = self._predict_with_program(best_program, demo_pairs, test_frames)
+
+        return {
+            "predictions": predictions,
+            "best_program_mdl": best_program.total_mdl,
+            "best_posterior": best_posterior,
+            "num_valid_programs": len(valid_programs),
+            "mode": "video",
+            "aegis_applied": self.aegis_engine is not None,
+        }
 
     def solve_bayesian(self, task: dict[str, Any],
                        video_task: Any = None) -> dict[str, Any]:

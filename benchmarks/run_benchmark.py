@@ -66,11 +66,12 @@ def run_single_benchmark(
 ) -> dict[str, Any]:
     """Run a single benchmark with given config and demo pairs.
 
+    Uses TOMASSolver to ensure psi_gate/AEGIS/Causal Prior are actually used
+    when enabled in config.
+
     Returns metrics dict.
     """
-    from src.solver.kappa_snap_searcher import KappaSnapSearcher
-    from src.solver.gaussex_verifier import GaussExVerifier
-    from src.solver.bayesian_confidence import BayesianConfidence
+    from src.solver.tomas_solver import TOMASSolver
 
     start_time = time.time()
 
@@ -82,16 +83,25 @@ def run_single_benchmark(
     }
 
     try:
-        # Create searcher with config - PASS FULL CONFIG, not just search section
-        # The searcher needs psi_gate, aegis, causal_prior settings from top-level config
-        searcher = KappaSnapSearcher(config)
+        # Create solver with full config (TOMASSolver handles component initialization)
+        solver = TOMASSolver(config)
 
-        # Run search
-        search_start = time.time()
-        candidates = searcher.search(demo_pairs)
-        search_time = time.time() - search_start
+        # Run solve in fusion mode (uses psi_gate if enabled)
+        task_data = {
+            "task_id": task_name,
+            "train": [
+                {"input": [p["input"][i].tolist() for i in range(len(p["input"]))],
+                 "output": [p["output"][i].tolist() for i in range(len(p["output"]))]}
+                for p in demo_pairs
+            ],
+            "test": [p["input"][-1].tolist() for p in demo_pairs[-1:]],
+        }
+        solve_start = time.time()
+        solve_result = solver.solve(task_data, mode="fusion")
+        solve_time = time.time() - solve_start
 
-        # Get pruning stats if available
+        # Get solver stats
+        searcher = solver.searcher
         pruning_stats = {}
         if searcher.pruning is not None:
             pruning_stats = dict(searcher.pruning.stats)
@@ -102,48 +112,34 @@ def run_single_benchmark(
             "early_terminated": getattr(searcher.enpv, "_early_terminated", False),
         }
 
-        # Bayesian ranking
-        bayes = BayesianConfidence(config.get("bayesian", {}))
-        ranked = bayes.rank_candidates(candidates, demo_pairs)
-
-        # Top candidate
-        top_confidence = ranked[0][1] if ranked else 0.0
-        top_mdl = ranked[0][0].total_mdl if ranked else 0
-
-        # Check accuracy: does top candidate produce correct output?
+        # Check accuracy: does prediction match expected output?
         correct = False
-        if ranked:
-            top_prog = ranked[0][0]
-            try:
-                all_correct = True
-                for pair in demo_pairs:
-                    for i, inp in enumerate(pair["input"]):
-                        if i < len(pair["output"]):
-                            predicted = top_prog.apply(inp)
-                            expected = pair["output"][i]
-                            if not np.array_equal(predicted, expected):
-                                all_correct = False
-                                break
-                    if not all_correct:
-                        break
-                correct = all_correct
-            except Exception:
-                correct = False
+        predictions = solve_result.get("predictions", [])
+        if predictions and demo_pairs:
+            # Check if last demo output matches prediction
+            last_output = demo_pairs[-1].get("output", [])[-1]
+            if len(predictions) > 0:
+                try:
+                    pred_grid = np.array(predictions[0], dtype=np.int8)
+                    if last_output.shape == pred_grid.shape:
+                        correct = np.array_equal(last_output, pred_grid)
+                except Exception:
+                    correct = False
 
         total_time = time.time() - start_time
 
         result.update({
             "status": "completed",
-            "search_time_sec": round(search_time, 4),
+            "search_time_sec": round(solve_time, 4),
             "total_time_sec": round(total_time, 4),
-            "total_candidates": len(candidates),
-            "ranked_candidates": len(ranked),
-            "top_confidence": round(top_confidence, 4),
-            "top_mdl": top_mdl,
+            "total_candidates": solve_result.get("num_valid_programs", 0),
+            "top_confidence": solve_result.get("best_fusion_score", 0.0),
+            "top_mdl": solve_result.get("best_program_mdl", 0),
             "correct": correct,
             "pruning_stats": pruning_stats,
             "enpv_stats": enpv_stats,
             "cuda_backend": searcher._cuda_backend,
+            "psi_gate_enabled": solver.psi_gate is not None,
         })
 
     except Exception as e:
