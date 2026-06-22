@@ -3,6 +3,8 @@
 TOMAS v2.0 upgrade: Jitter variance estimation — adaptive noise_sigma from
 multi-frame residual autocorrelation; residual trend detection penalizes
 programs with monotonically increasing prediction errors.
+
+TOMAS v2.2: Numba JIT grid distance for faster likelihood computation.
 """
 from __future__ import annotations
 
@@ -12,6 +14,12 @@ from typing import Any
 import numpy as np
 
 from src.core.dsl_primitives import ProgramNode
+
+# Numba-accelerated grid comparison
+try:
+    from src.core.numba_kernels import HAS_NUMBA, grid_distance_kernel
+except ImportError:
+    HAS_NUMBA = False
 
 
 class BayesianConfidence:
@@ -100,10 +108,15 @@ class BayesianConfidence:
                         residuals.append(1.0)
                         continue
 
-                    diff = np.abs(
-                        predicted.astype(np.float32) - expected.astype(np.float32)
-                    )
-                    match_ratio = 1.0 - (np.mean(diff) / 9.0)
+                    # JIT-accelerated grid distance
+                    if HAS_NUMBA:
+                        diff_count = grid_distance_kernel(predicted, expected)
+                        match_ratio = 1.0 - (diff_count / (predicted.size * 9))
+                    else:
+                        diff = np.abs(
+                            predicted.astype(np.float32) - expected.astype(np.float32)
+                        )
+                        match_ratio = 1.0 - (np.mean(diff) / 9.0)
                     residuals.append(1.0 - match_ratio)
 
                     # Use adaptive sigma if enabled

@@ -25,3 +25,13 @@ pytest-cov>=4.1.0
 # === Code quality ===
 ruff>=0.4.0
 mypy>=1.10.0
+
+# === Numba JIT compilation (v2.2) ===
+numba>=0.59.0
+
+# === GPU acceleration (v2.3, optional) ===
+# Install one of the following based on your CUDA version:
+# cupy-cuda12x>=13.0  # for CUDA 12.x (Kaggle T4)
+# cupy-cuda11x>=13.0  # for CUDA 11.x
+# When cupy is not installed, the solver automatically falls back
+# to CPU (Numba/NumPy) with no functionality loss.

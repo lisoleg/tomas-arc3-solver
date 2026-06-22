@@ -1,4 +1,7 @@
-"""Video frame tensor operations: encoding, delta-T extraction, prediction."""
+"""Video frame tensor operations: encoding, delta-T extraction, prediction.
+
+TOMAS v2.2: Numba JIT compound pattern detection.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -8,6 +11,16 @@ import numpy as np
 from src.core.hypergraph import HyperGraph
 from src.core.octonion_hyperedge import OctonionHyperEdge
 from src.core.dsl_primitives import DSLElement, ProgramNode
+
+# Numba-accelerated kernels
+try:
+    from src.core.numba_kernels import (
+        HAS_NUMBA,
+        detect_compound_pattern_kernel,
+        move_kernel,
+    )
+except ImportError:
+    HAS_NUMBA = False
 
 
 class VideoTemporalEncoder:
@@ -116,22 +129,26 @@ class VideoTemporalEncoder:
                 element = DSLElement("rotate", {"angle": angle})
                 return ProgramNode(element)
 
-        # Check for translation (move)
+        # Check for translation (move) — numba accelerated
         diff = frame_b.astype(np.int16) - frame_a.astype(np.int16)
         if np.sum(diff != 0) > 0:
-            # Try to detect movement direction
             nonzero_diff = np.argwhere(diff != 0)
             if len(nonzero_diff) > 0:
                 dy = int(np.mean(nonzero_diff[:, 0]))
                 dx = int(np.mean(nonzero_diff[:, 1]))
-                h, w = frame_a.shape
-                # Check if it's a simple move
-                moved = np.zeros_like(frame_a)
-                for i in range(h):
-                    for j in range(w):
-                        ni, nj = i + dy, j + dx
-                        if 0 <= ni < h and 0 <= nj < w:
-                            moved[ni, nj] = frame_a[i, j]
+                # JIT-accelerated move verification
+                if HAS_NUMBA:
+                    moved = move_kernel(frame_a, dx, dy)
+                else:
+                    moved = np.zeros_like(frame_a)
+                    h, w = frame_a.shape
+                    src_r0, src_r1 = max(0, -dy), min(h, h - dy)
+                    src_c0, src_c1 = max(0, -dx), min(w, w - dx)
+                    dst_r0, dst_c0 = max(0, dy), max(0, dx)
+                    if src_r1 > src_r0 and src_c1 > src_c0:
+                        moved[dst_r0:dst_r0 + (src_r1 - src_r0),
+                              dst_c0:dst_c0 + (src_c1 - src_c0)] = \
+                            frame_a[src_r0:src_r1, src_c0:src_c1]
                 if np.array_equal(moved, frame_b):
                     element = DSLElement("move", {"dx": dx, "dy": dy})
                     return ProgramNode(element)
@@ -224,14 +241,12 @@ class VideoTemporalEncoder:
         """
         if len(self.temporal_hypergraphs) < 2:
             return []
-
+        # Pre-compute all betti₀ values once (avoids recomputation)
+        betti_vals = self.get_betti_sequence()
         singularity_frames: list[int] = []
-        for i in range(1, len(self.temporal_hypergraphs)):
-            prev_betti = self.temporal_hypergraphs[i - 1].compute_betti0()
-            curr_betti = self.temporal_hypergraphs[i].compute_betti0()
-            if prev_betti > 0 and curr_betti / prev_betti < 0.5:
+        for i in range(1, len(betti_vals)):
+            if betti_vals[i - 1] > 0 and betti_vals[i] / betti_vals[i - 1] < 0.5:
                 singularity_frames.append(i)
-
         return singularity_frames
 
     def find_singularity_frames(self, threshold: float = 0.5) -> list[tuple[int, int, int]]:
@@ -245,14 +260,12 @@ class VideoTemporalEncoder:
         """
         if len(self.temporal_hypergraphs) < 2:
             return []
-
+        # Pre-compute all betti₀ values once
+        betti_vals = self.get_betti_sequence()
         results: list[tuple[int, int, int]] = []
-        for i in range(1, len(self.temporal_hypergraphs)):
-            prev_betti = self.temporal_hypergraphs[i - 1].compute_betti0()
-            curr_betti = self.temporal_hypergraphs[i].compute_betti0()
-            if prev_betti > 0 and curr_betti / prev_betti < threshold:
-                results.append((i, prev_betti, curr_betti))
-
+        for i in range(1, len(betti_vals)):
+            if betti_vals[i - 1] > 0 and betti_vals[i] / betti_vals[i - 1] < threshold:
+                results.append((i, betti_vals[i - 1], betti_vals[i]))
         return results
 
     def get_betti_sequence(self) -> list[int]:

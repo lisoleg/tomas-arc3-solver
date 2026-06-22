@@ -5,7 +5,7 @@
 # --- General ---
 general:
   project_name: "tomas-arc3-solver"
-  version: "2.0.0"
+  version: "2.3.0"
   random_seed: 42
 
 # --- DSL parameters ---
@@ -123,3 +123,27 @@ kaggle:
   input_dir: "/kaggle/input/arc-agi-3"
   output_dir: "/kaggle/working"
   submission_filename: "submission.json"
+
+# ============================================================
+# TOMAS v2.3: CUDA + Pruning optimization
+# ============================================================
+
+# --- CUDA GPU acceleration (v2.3) ---
+# These settings are nested under 'search' in the config dict passed
+# to KappaSnapSearcher. Shown here as a separate section for clarity;
+# the code reads them from config["search"]["cuda"].
+cuda:
+  enabled: true                  # auto-enable when GPU detected
+  batch_size: 256                # candidates per GPU batch
+  device: 0                      # CUDA device index
+
+# --- Advanced pruning (v2.3) ---
+# These settings are nested under 'search' in the config dict passed
+# to KappaSnapSearcher. Shown here as a separate section for clarity;
+# the code reads them from config["search"]["pruning"].
+pruning:
+  enable_betti0: true            # Betti0 topological invariant pruning
+  enable_symmetry_dedup: true    # symmetry equivalence deduplication
+  enable_heuristic_order: true   # heuristic candidate ordering
+  enable_incremental_mdl: true   # incremental MDL pruning at depth 3
+  mdl_threshold: 50              # max MDL for valid programs (mirrors search.mdl_threshold)

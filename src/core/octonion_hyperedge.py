@@ -215,7 +215,9 @@ class OctonionHyperEdge:
         return boundary
 
     def _compute_area_ratios(self, comp_labels: np.ndarray) -> np.ndarray:
-        """Compute area ratio for each pixel based on its component.
+        """Compute area ratio for each pixel based on its component — vectorized.
+
+        Uses np.bincount for fast per-label area computation with a lookup table.
 
         Args:
             comp_labels: Connected component label array.
@@ -223,18 +225,19 @@ class OctonionHyperEdge:
         Returns:
             Array of same shape with area ratio per pixel.
         """
-        h, w = comp_labels.shape
-        total = h * w
-        ratios = np.zeros((h, w), dtype=np.float32)
-        unique_labels = np.unique(comp_labels[comp_labels > 0])
-        for label in unique_labels:
-            count = np.sum(comp_labels == label)
-            ratio = float(count) / max(total, 1)
-            ratios[comp_labels == label] = ratio
-        return ratios
+        total = comp_labels.size
+        flat = comp_labels.ravel()
+        max_label = int(flat.max())
+        if max_label == 0:
+            return np.zeros_like(comp_labels, dtype=np.float32)
+        # bincount: area per label, then convert to ratio lookup table
+        counts = np.bincount(flat, minlength=max_label + 1)
+        ratio_lookup = np.zeros(max_label + 1, dtype=np.float32)
+        ratio_lookup[1:] = counts[1:] / max(total, 1)
+        return ratio_lookup[comp_labels]
 
     def decode_to_grid(self) -> np.ndarray:
-        """Decode the octonion array back to the original grid.
+        """Decode the octonion array back to the original grid — vectorized.
 
         Reverses the encoding: extracts color from e3_color phase angle
         and reconstructs the grid using stored coordinates.
@@ -250,19 +253,16 @@ class OctonionHyperEdge:
 
         encoded = self._encoded_array
         h, w = self._grid_shape
+        mask = encoded[:, 0] > 0.5
         grid = np.zeros((h, w), dtype=np.int8)
-
-        # Reconstruct from the flat array (pixels are in row-major order)
-        for i in range(h * w):
-            row, col = divmod(i, w)
-            mask = encoded[i, 0]
-            if mask > 0.5:
-                # Decode color from phase angle
-                phase = encoded[i, 3]
-                color = int(round(phase / (2.0 * np.pi) * self.MAX_COLOR))
-                color = max(0, min(self.MAX_COLOR, color))
-                grid[row, col] = color
-
+        if np.any(mask):
+            pixel_indices = np.where(mask)[0]
+            rows = pixel_indices // w
+            cols = pixel_indices % w
+            phases = encoded[pixel_indices, 3]
+            colors = np.round(phases / (2.0 * np.pi) * self.MAX_COLOR).astype(np.int8)
+            np.clip(colors, 0, self.MAX_COLOR, out=colors)
+            grid[rows, cols] = colors
         return grid
 
     def compute_topo_invariants(self) -> dict[str, Any]:

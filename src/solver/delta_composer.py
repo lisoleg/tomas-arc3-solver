@@ -1,10 +1,10 @@
 """Delta-T composition tree: chain, additive, and conditional composition.
 
 TOMAS v2.0 upgrade: slip cost (phase alignment fee) incorporated into MDL.
+v2.1 optimization: fast clone() replaces deepcopy for program tree copying.
 """
 from __future__ import annotations
 
-import copy
 from typing import Any
 
 from src.core.dsl_primitives import DSLElement, ProgramNode
@@ -43,7 +43,8 @@ class DeltaTCombinator:
         """Chain-compose all deltas: delta_1 ⊙ delta_2 ⊙ ... ⊙ delta_n.
 
         Each delta is applied sequentially to the output of the previous.
-        Uses deepcopy to avoid mutating the original delta objects.
+        Uses clone() to avoid mutating the original delta objects (~3x faster
+        than deepcopy).
 
         Returns:
             A ProgramNode representing the chained composition.
@@ -51,8 +52,8 @@ class DeltaTCombinator:
         if not self.delta_list:
             return ProgramNode(DSLElement("copy"))
 
-        # Deep copy all deltas to avoid in-place mutation of originals
-        deltas = [copy.deepcopy(d) for d in self.delta_list]
+        # Clone all deltas to avoid in-place mutation of originals
+        deltas = [d.clone() for d in self.delta_list]
 
         # Build a chain: each node's first child is the next delta
         root = deltas[0]
@@ -70,7 +71,7 @@ class DeltaTCombinator:
         """Additive-compose all deltas: delta_1 + delta_2 + ... + delta_n.
 
         All deltas are applied to the same input and results are overlaid.
-        Uses deepcopy to avoid mutating the original delta objects.
+        Uses clone() to avoid mutating the original delta objects.
 
         Returns:
             A ProgramNode representing the additive composition.
@@ -78,11 +79,10 @@ class DeltaTCombinator:
         if not self.delta_list:
             return ProgramNode(DSLElement("copy"))
 
-        # Deep copy to avoid mutating originals
-        root = ProgramNode(copy.deepcopy(self.delta_list[0].element))
+        root = ProgramNode(self.delta_list[0].element.clone())
         root.combo_type = "additive"
         for delta in self.delta_list[1:]:
-            root.children.append(copy.deepcopy(delta))
+            root.children.append(delta.clone())
         root.total_mdl = root.compute_mdl()
         return root
 
@@ -91,7 +91,7 @@ class DeltaTCombinator:
 
         Uses a ConditionalTreeInducer to determine which delta to apply
         based on frame state.
-        Uses deepcopy to avoid mutating the original delta objects.
+        Uses clone() to avoid mutating the original delta objects.
 
         Args:
             tree: ConditionalTreeInducer instance.
@@ -102,13 +102,12 @@ class DeltaTCombinator:
         if not self.delta_list:
             return ProgramNode(DSLElement("copy"))
 
-        # Deep copy to avoid mutating originals
-        root = ProgramNode(copy.deepcopy(self.delta_list[0].element))
+        root = ProgramNode(self.delta_list[0].element.clone())
         root.combo_type = "conditional"
 
-        # Add all deltas as branches (deep copies)
+        # Add all deltas as branches (cloned)
         for delta in self.delta_list[1:]:
-            root.children.append(copy.deepcopy(delta))
+            root.children.append(delta.clone())
 
         root.total_mdl = root.compute_mdl()
         return root

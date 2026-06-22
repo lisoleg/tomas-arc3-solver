@@ -49,8 +49,28 @@ class TOMASSolver:
         # Initialize components
         self.gpu_optimizer = GPUOptimizer(config.get("gpu", {}))
         self.library = LibraryLearning(config.get("library", {}))
+
+        # v2.3: Merge cuda and pruning config into search config
+        search_config = dict(config.get("search", {}))
+        if "cuda" in config:
+            search_config["cuda"] = config["cuda"]
+        elif "cuda" not in search_config:
+            # Default CUDA config from top-level
+            search_config["cuda"] = {"enabled": True, "batch_size": 256}
+
+        if "pruning" in config:
+            search_config["pruning"] = config["pruning"]
+        elif "pruning" not in search_config:
+            # Default pruning config
+            search_config["pruning"] = {
+                "enable_betti0": True,
+                "enable_symmetry_dedup": True,
+                "enable_heuristic_order": True,
+                "enable_incremental_mdl": True,
+            }
+
         self.searcher = KappaSnapSearcher(
-            config.get("search", {}), library=self.library
+            search_config, library=self.library
         )
         self.verifier = GaussExVerifier()
         self.bayesian = BayesianConfidence(config.get("bayesian", {}))
@@ -96,7 +116,7 @@ class TOMASSolver:
         self.mode = mode
         task_id = task.get("task_id", "unknown")
 
-        # Parse input
+        # Parse input once, share across mode-specific solvers
         video_task = self.parse_input(task)
         demo_pairs = video_task.demo_pairs
         test_frames = video_task.test_frames
@@ -118,15 +138,15 @@ class TOMASSolver:
             decision_path=[f"mode={mode}", f"demos={len(demo_pairs)}"],
         )
 
-        # Dispatch to appropriate mode
+        # Dispatch to appropriate mode (pass pre-parsed video_task)
         if mode == "video":
-            result = self.solve_video(task)
+            result = self.solve_video(task, video_task)
         elif mode == "bayesian":
-            result = self.solve_bayesian(task)
+            result = self.solve_bayesian(task, video_task)
         elif mode == "fusion":
-            result = self.solve_fusion(task)
+            result = self.solve_fusion(task, video_task)
         else:
-            result = self.solve_video(task)
+            result = self.solve_video(task, video_task)
 
         # Record audit
         auditor.record(
@@ -138,28 +158,34 @@ class TOMASSolver:
 
         return result
 
-    def solve_video(self, task: dict[str, Any]) -> dict[str, Any]:
+    def solve_video(self, task: dict[str, Any],
+                    video_task: Any = None) -> dict[str, Any]:
         """Solve in video mode (pure symbolic, fast).
 
         Args:
             task: Raw task dictionary.
+            video_task: Pre-parsed VideoARCTask (optional, parsed if None).
 
         Returns:
             Result dictionary with predictions.
         """
-        video_task = self.parse_input(task)
+        if video_task is None:
+            video_task = self.parse_input(task)
         return self.video_solver.solve(task, video_task.demo_pairs, video_task.test_frames)
 
-    def solve_bayesian(self, task: dict[str, Any]) -> dict[str, Any]:
+    def solve_bayesian(self, task: dict[str, Any],
+                       video_task: Any = None) -> dict[str, Any]:
         """Solve in bayesian mode (posterior ranking).
 
         Args:
             task: Raw task dictionary.
+            video_task: Pre-parsed VideoARCTask (optional, parsed if None).
 
         Returns:
             Result dictionary with predictions.
         """
-        video_task = self.parse_input(task)
+        if video_task is None:
+            video_task = self.parse_input(task)
         demo_pairs = video_task.demo_pairs
         test_frames = video_task.test_frames
 
@@ -188,16 +214,19 @@ class TOMASSolver:
             "mode": "bayesian",
         }
 
-    def solve_fusion(self, task: dict[str, Any]) -> dict[str, Any]:
+    def solve_fusion(self, task: dict[str, Any],
+                     video_task: Any = None) -> dict[str, Any]:
         """Solve in fusion mode (multi-modal, most accurate).
 
         Args:
             task: Raw task dictionary.
+            video_task: Pre-parsed VideoARCTask (optional, parsed if None).
 
         Returns:
             Result dictionary with predictions.
         """
-        video_task = self.parse_input(task)
+        if video_task is None:
+            video_task = self.parse_input(task)
         demo_pairs = video_task.demo_pairs
         test_frames = video_task.test_frames
 

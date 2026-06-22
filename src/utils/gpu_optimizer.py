@@ -1,4 +1,7 @@
-"""GPU memory optimization: adaptive batch size, AMP, gradient checkpointing, INT8."""
+"""GPU memory optimization: adaptive batch size, AMP, gradient checkpointing, INT8.
+
+TOMAS v2.3: Added batch_verify_candidates for CUDA-accelerated verification.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -10,6 +13,13 @@ try:
     _TORCH_AVAILABLE = True
 except ImportError:
     _TORCH_AVAILABLE = False
+
+# CUDA batch verification (v2.3)
+try:
+    from src.core.cuda_kernels import HAS_CUDA, CudaBatchVerifier
+except ImportError:
+    HAS_CUDA = False
+    CudaBatchVerifier = None  # type: ignore[misc, assignment]
 
 
 class GPUOptimizer:
@@ -220,3 +230,41 @@ class GPUOptimizer:
         if self.is_gpu_available and self.amp_enabled and _TORCH_AVAILABLE:
             return torch.cuda.amp.autocast()
         return contextlib.nullcontext()
+
+    # ============================================================
+    # v2.3: CUDA batch verification support
+    # ============================================================
+
+    def get_cuda_verifier(self, batch_size: int = 256) -> Any:
+        """Get a CudaBatchVerifier instance for GPU batch verification.
+
+        Returns None if CUDA is not available.
+
+        Args:
+            batch_size: Maximum candidates per GPU batch.
+
+        Returns:
+            CudaBatchVerifier instance or None.
+        """
+        if not HAS_CUDA or CudaBatchVerifier is None:
+            return None
+        return CudaBatchVerifier(batch_size=batch_size)
+
+    def batch_verify_candidates(
+        self,
+        predictions: np.ndarray,
+        expected: np.ndarray,
+    ) -> np.ndarray | None:
+        """Batch verify candidate predictions against expected outputs on GPU.
+
+        Args:
+            predictions: (N, H, W) int8 array of predicted grids.
+            expected: (M, H, W) int8 array of expected grids.
+
+        Returns:
+            (N, M) boolean array, or None if GPU unavailable.
+        """
+        verifier = self.get_cuda_verifier()
+        if verifier is None:
+            return None
+        return verifier.batch_grid_equal(predictions, expected)

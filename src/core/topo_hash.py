@@ -44,6 +44,10 @@ class TopoHashFilter:
         Optionally integrates Luzhao DNA hash (Fibonacci/Lucas/Bagua)
         for enhanced topological discrimination.
 
+        Note: Caching is handled by compute_hash_for_grid using content-based
+        keys. This method does not cache by id(graph) because Python reuses
+        memory addresses after garbage collection, causing stale cache hits.
+
         Args:
             graph: HyperGraph to hash.
             use_luzhao: Override use_luzhao flag (None uses instance default).
@@ -53,11 +57,6 @@ class TopoHashFilter:
         """
         should_use_luzhao = use_luzhao if use_luzhao is not None else self.use_luzhao
 
-        # Try cache first using object id
-        cache_key = f"hg_{id(graph)}_{should_use_luzhao}"
-        if cache_key in self.hash_cache:
-            return self.hash_cache[cache_key]
-
         base_hash = graph.get_topo_hash()
 
         if should_use_luzhao and self.luzhao_dna is not None:
@@ -65,6 +64,31 @@ class TopoHashFilter:
             result = f"{base_hash}:{luzhao_hash[:16]}"
         else:
             result = base_hash
+
+        return result
+
+    def compute_hash_for_grid(self, grid: np.ndarray) -> str:
+        """Compute topological hash directly from a grid.
+
+        Uses content-based caching (grid bytes hash) to ensure
+        deterministic results across repeated calls. This replaces
+        the broken id(graph)-based caching that could produce stale
+        results when Python reuses memory addresses after GC.
+
+        Args:
+            grid: Input grid as ndarray.
+
+        Returns:
+            Hex string hash.
+        """
+        # Content-based cache key — deterministic across calls
+        cache_key = f"grid_{hash(grid.tobytes())}_{self.use_luzhao}"
+        if cache_key in self.hash_cache:
+            return self.hash_cache[cache_key]
+
+        edge = OctonionHyperEdge(grid)
+        hg = HyperGraph([edge])
+        result = self.compute_hash(hg)
 
         # Cache management
         if len(self.hash_cache) >= self.cache_size:
@@ -74,19 +98,6 @@ class TopoHashFilter:
 
         self.hash_cache[cache_key] = result
         return result
-
-    def compute_hash_for_grid(self, grid: np.ndarray) -> str:
-        """Compute topological hash directly from a grid.
-
-        Args:
-            grid: Input grid as ndarray.
-
-        Returns:
-            Hex string hash.
-        """
-        edge = OctonionHyperEdge(grid)
-        hg = HyperGraph([edge])
-        return self.compute_hash(hg)
 
     def quick_filter(
         self,
