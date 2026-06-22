@@ -208,3 +208,57 @@ class VideoTemporalEncoder:
             current = self.predict_next_frame(delta, current)
             frames.append(current)
         return frames[1:]  # Exclude the start frame
+
+    def detect_singularity(self) -> list[int]:
+        """Detect Betti₀ singularity frames (sudden connected component drops).
+
+        A singularity occurs when a frame's Betti₀ drops below threshold *
+        the previous frame's Betti₀. This indicates a topological event:
+        objects merging, disappearing, or boundary-crossing.
+
+        Analogy: LOB (Limit Order Book) depth singularity in financial markets
+        — sudden liquidity drops signal regime changes.
+
+        Returns:
+            List of frame indices where singularities are detected.
+        """
+        if len(self.temporal_hypergraphs) < 2:
+            return []
+
+        singularity_frames: list[int] = []
+        for i in range(1, len(self.temporal_hypergraphs)):
+            prev_betti = self.temporal_hypergraphs[i - 1].compute_betti0()
+            curr_betti = self.temporal_hypergraphs[i].compute_betti0()
+            if prev_betti > 0 and curr_betti / prev_betti < 0.5:
+                singularity_frames.append(i)
+
+        return singularity_frames
+
+    def find_singularity_frames(self, threshold: float = 0.5) -> list[tuple[int, int, int]]:
+        """Find singularity frames with Betti₀ before/after values.
+
+        Args:
+            threshold: Betti₀ drop ratio threshold (default 0.5 = 50% drop).
+
+        Returns:
+            List of (frame_idx, betti_before, betti_after) tuples.
+        """
+        if len(self.temporal_hypergraphs) < 2:
+            return []
+
+        results: list[tuple[int, int, int]] = []
+        for i in range(1, len(self.temporal_hypergraphs)):
+            prev_betti = self.temporal_hypergraphs[i - 1].compute_betti0()
+            curr_betti = self.temporal_hypergraphs[i].compute_betti0()
+            if prev_betti > 0 and curr_betti / prev_betti < threshold:
+                results.append((i, prev_betti, curr_betti))
+
+        return results
+
+    def get_betti_sequence(self) -> list[int]:
+        """Get Betti₀ sequence across all frames.
+
+        Returns:
+            List of Betti₀ values, one per frame.
+        """
+        return [hg.compute_betti0() for hg in self.temporal_hypergraphs]

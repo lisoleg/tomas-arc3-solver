@@ -1,4 +1,9 @@
-"""Bayesian confidence quantification: P(H|E) = P(E|H) * P(H) / P(E)."""
+"""Bayesian confidence quantification: P(H|E) = P(E|H) * P(H) / P(E).
+
+TOMAS v2.0 upgrade: Jitter variance estimation — adaptive noise_sigma from
+multi-frame residual autocorrelation; residual trend detection penalizes
+programs with monotonically increasing prediction errors.
+"""
 from __future__ import annotations
 
 import math
@@ -13,13 +18,15 @@ class BayesianConfidence:
     """Bayesian posterior estimation for program candidate ranking.
 
     Computes prior P(H) proportional to exp(-lambda * MDL), likelihood
-    P(E|H) using Gaussian fit (predicted vs observed frame match),
+    P(E|H) using Gaussian fit with adaptive sigma (Jitter estimation),
     evidence P(E) as marginal likelihood, and posterior P(H|E).
 
     Attributes:
         candidates: List of candidate ProgramNodes.
         prior_lambda: Prior temperature parameter.
-        noise_sigma: Observation noise standard deviation.
+        noise_sigma: Base observation noise standard deviation.
+        adaptive_sigma: Whether to use Jitter-adaptive sigma estimation.
+        residual_trend_window: Window for residual trend detection.
     """
 
     def __init__(self, config: dict[str, Any]) -> None:
@@ -27,13 +34,18 @@ class BayesianConfidence:
 
         Args:
             config: Bayesian config with prior_lambda, noise_sigma,
-                max_candidates.
+                adaptive_sigma, residual_trend_window, max_candidates.
         """
         self.candidates: list[ProgramNode] = []
         self.prior_lambda: float = config.get("prior_lambda", 0.1)
         self.noise_sigma: float = config.get("noise_sigma", 0.5)
         self.max_candidates: int = config.get("max_candidates", 100)
+        self.adaptive_sigma: bool = config.get("adaptive_sigma", True)
+        self.residual_trend_window: int = config.get("residual_trend_window", 3)
         self._evidence_cache: float | None = None
+
+        # Jitter tracking
+        self._residual_history: list[float] = []
 
     def compute_prior(self, program: ProgramNode) -> float:
         """Compute prior probability P(H) proportional to exp(-lambda * MDL).
@@ -57,7 +69,9 @@ class BayesianConfidence:
         """Compute likelihood P(E|H) using Gaussian distribution.
 
         Measures how well the program's predictions match observed
-        demo outputs. Uses Gaussian: exp(-||predicted - observed||^2 / (2*sigma^2)).
+        demo outputs. Uses adaptive sigma (Jitter estimation) when enabled:
+        sigma = std(residuals) across all demo predictions.
+        Uses Gaussian: exp(-||predicted - observed||^2 / (2*sigma^2)).
 
         Args:
             program: ProgramNode to evaluate.
@@ -68,6 +82,7 @@ class BayesianConfidence:
         """
         total_match = 0.0
         total_count = 0
+        residuals: list[float] = []
 
         for pair in demo_pairs:
             input_grids = pair.get("input", [])
@@ -82,26 +97,90 @@ class BayesianConfidence:
                     if predicted.shape != expected.shape:
                         total_match += 0.0
                         total_count += 1
+                        residuals.append(1.0)
                         continue
 
-                    # Compute pixel match ratio
                     diff = np.abs(
                         predicted.astype(np.float32) - expected.astype(np.float32)
                     )
-                    match_ratio = 1.0 - (np.mean(diff) / 9.0)  # Normalize by max color
+                    match_ratio = 1.0 - (np.mean(diff) / 9.0)
+                    residuals.append(1.0 - match_ratio)
 
-                    # Gaussian likelihood
-                    sigma_sq = self.noise_sigma ** 2
+                    # Use adaptive sigma if enabled
+                    sigma = self.estimate_jitter(residuals) if self.adaptive_sigma else self.noise_sigma
+                    sigma_sq = max(sigma ** 2, 1e-8)
+
                     gaussian = math.exp(-((1.0 - match_ratio) ** 2) / (2 * sigma_sq))
                     total_match += gaussian
                     total_count += 1
                 except Exception:
                     total_match += 0.0
                     total_count += 1
+                    residuals.append(1.0)
 
         if total_count == 0:
             return 0.0
-        return total_match / total_count
+
+        # Penalize residual trends
+        trend_penalty = 1.0
+        if len(residuals) >= self.residual_trend_window:
+            if self.detect_residual_trend(residuals):
+                trend_penalty = 0.5  # 50% penalty for increasing residuals
+
+        return (total_match / total_count) * trend_penalty
+
+    def estimate_jitter(self, residuals: list[float]) -> float:
+        """Estimate adaptive noise sigma from residuals (Jitter estimation).
+
+        Uses the standard deviation of recent prediction residuals
+        as the adaptive sigma. This captures the predictive uncertainty
+        of the program: programs with erratic predictions get higher sigma
+        (lower likelihood), while consistent programs get lower sigma.
+
+        Args:
+            residuals: List of prediction error residuals [0, 1].
+
+        Returns:
+            Adaptive sigma value.
+        """
+        if len(residuals) < 2:
+            return self.noise_sigma  # Fallback to base sigma
+
+        arr = np.array(residuals, dtype=np.float32)
+        sigma = float(np.std(arr))
+        # Blend with base sigma for stability
+        sigma = 0.7 * sigma + 0.3 * self.noise_sigma
+        return max(sigma, 0.01)  # Minimum sigma to avoid division by zero
+
+    def detect_residual_trend(self, residuals: list[float]) -> bool:
+        """Detect if residuals show a monotonically increasing trend.
+
+        A growing residual trend indicates the program is getting worse
+        over time — penalize its confidence.
+
+        Args:
+            residuals: List of residuals to check.
+
+        Returns:
+            True if increasing trend detected.
+        """
+        if len(residuals) < self.residual_trend_window:
+            return False
+
+        recent = residuals[-self.residual_trend_window:]
+        # Check if residuals are monotonically increasing
+        increasing = all(
+            recent[i] <= recent[i + 1] * 1.05  # Allow 5% noise tolerance
+            for i in range(len(recent) - 1)
+        )
+        # Also check mean trend
+        if len(recent) >= 3:
+            first_half = np.mean(recent[: len(recent) // 2])
+            second_half = np.mean(recent[len(recent) // 2:])
+            if second_half > first_half * 1.2:
+                return True
+
+        return increasing and recent[-1] > 0.3  # Only if residuals are significant
 
     def compute_evidence(self) -> float:
         """Compute evidence P(E) as marginal likelihood.

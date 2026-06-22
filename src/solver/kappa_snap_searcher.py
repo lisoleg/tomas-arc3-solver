@@ -1,4 +1,7 @@
-"""kappa-Snap abductive search: Two-Phase program synthesis."""
+"""kappa-Snap abductive search: Two-Phase program synthesis.
+
+TOMAS v2.0 upgrade: ENPV decision for early termination in Phase B.
+"""
 from __future__ import annotations
 
 import time
@@ -8,14 +11,16 @@ import numpy as np
 
 from src.core.dsl_primitives import DSLElement, ProgramNode, get_all_primitives
 from src.core.topo_hash import TopoHashFilter
+from src.solver.enpv_decision import ENPVDecision
 
 
 class KappaSnapSearcher:
     """kappa-Snap abductive search with Two-Phase filtering.
 
-    Phase A uses topological hash quick-filtering to eliminate 90%+ of
-    candidates. Phase B enumerates remaining candidates by MDL priority
-    (depth=1 first, then depth=2-3) and verifies with GaussEx.
+    Phase A uses topological hash quick-filtering (with Luzhao DNA) to
+    eliminate 90%+ of candidates. Phase B enumerates remaining candidates
+    by MDL priority and verifies with GaussEx. ENPV decision module
+    enables early termination when expected net value goes negative.
 
     Attributes:
         dsl_set: List of available DSL primitives.
@@ -23,6 +28,7 @@ class KappaSnapSearcher:
         max_depth: Maximum composition depth.
         mdl_threshold: Maximum acceptable MDL cost.
         topo_filter: TopoHashFilter for Phase A.
+        enpv: ENPVDecision for termination control.
     """
 
     def __init__(self, config: dict[str, Any], library: Any = None) -> None:
@@ -38,8 +44,16 @@ class KappaSnapSearcher:
         self.mdl_threshold: int = config.get("mdl_threshold", 50)
         self.time_limit: float = config.get("time_limit_seconds", 80.0)
         cache_size = config.get("topo_hash_cache_size", 10000)
-        self.topo_filter = TopoHashFilter(cache_size=cache_size)
+        use_luzhao = config.get("use_luzhao_hash", True)
+        self.topo_filter = TopoHashFilter(cache_size=cache_size,
+                                          use_luzhao=use_luzhao)
         self._start_time: float = 0.0
+
+        # ENPV decision
+        cost_per_eval = config.get("cost_per_evaluation", 0.5)
+        min_enpv = config.get("min_enpv_threshold", 0.0)
+        self.enpv = ENPVDecision(cost_per_evaluation=cost_per_eval,
+                                 min_enpv_threshold=min_enpv)
 
     def search(self, demo_pairs: list[dict[str, Any]]) -> list[ProgramNode]:
         """Unified search entry point (alias for two_phase_search).
@@ -55,8 +69,10 @@ class KappaSnapSearcher:
     def two_phase_search(self, demo_pairs: list[dict[str, Any]]) -> list[ProgramNode]:
         """Execute Two-Phase search: topo hash filter then MDL enumeration.
 
-        Phase A: Filter candidates using topological hash necessary condition.
+        Phase A: Filter candidates using topological hash necessary condition
+                 (with optional Luzhao DNA hash).
         Phase B: Enumerate by MDL priority, verify with GaussEx.
+                 ENPV-based early termination when expected value < 0.
 
         Args:
             demo_pairs: List of demo pairs.
@@ -65,6 +81,7 @@ class KappaSnapSearcher:
             List of valid, ranked ProgramNode candidates.
         """
         self._start_time = time.time()
+        self.enpv.reset()
 
         # Generate candidates at all depths
         all_candidates: list[ProgramNode] = []
@@ -81,7 +98,7 @@ class KappaSnapSearcher:
         if self.library is not None:
             phase_a_passed = self.apply_library(phase_a_passed)
 
-        # Phase B: MDL-priority enumeration and verification
+        # Phase B: MDL-priority enumeration with ENPV termination
         valid_programs = self.phase_b_enumerate(phase_a_passed, demo_pairs)
 
         # Rank by MDL
@@ -111,9 +128,11 @@ class KappaSnapSearcher:
         candidates: list[ProgramNode],
         demo_pairs: list[dict[str, Any]],
     ) -> list[ProgramNode]:
-        """Phase B: Verify candidates against demo pairs.
+        """Phase B: Verify candidates against demo pairs with ENPV termination.
 
-        Each candidate must pass all demo pair verifications.
+        Each candidate must pass all demo pair verifications. ENPV-based
+        early termination: if continuing search has negative expected value,
+        stop and return current best results.
 
         Args:
             candidates: Pre-filtered candidates from Phase A.
@@ -125,6 +144,10 @@ class KappaSnapSearcher:
         valid: list[ProgramNode] = []
         ranked = self.rank_by_mdl(candidates)
 
+        # Build posterior-like scores for ENPV decision
+        # Use inverse MDL ratio as proxy posterior
+        best_mdl = ranked[0].total_mdl if ranked else 1
+
         for program in ranked:
             if self._is_timeout():
                 break
@@ -134,6 +157,18 @@ class KappaSnapSearcher:
             # Verify against all demo pairs
             if self._verify_against_demos(program, demo_pairs):
                 valid.append(program)
+
+            # ENPV check every 10 candidates to avoid overhead
+            if len(valid) > 0 and len(valid) % 10 == 0:
+                # Build proxy posterior list for ENPV
+                max_mdl_valid = max(p.total_mdl for p in valid) if valid else best_mdl
+                proxy_posteriors = []
+                for p in valid:
+                    posterior = (best_mdl / max(p.total_mdl, 1)) * 0.5
+                    proxy_posteriors.append((p, posterior))
+
+                if not self.enpv.should_continue(proxy_posteriors, max_mdl_valid):
+                    break
 
         return valid
 

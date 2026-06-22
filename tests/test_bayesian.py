@@ -281,11 +281,11 @@ class TestFusionScorer:
         assert score == 0.0
 
     def test_score_visual_no_vl(self, fusion_config):
-        """Without VL adapter, visual score should be 0."""
+        """Without VL adapter, uses local e6/e7 approximation."""
         scorer = FusionScorer(fusion_config)
         frames = [np.array([[1, 0], [0, 0]], dtype=np.int8)]
-        score = scorer.score_visual(frames)
-        assert score == 0.0
+        score = scorer.score_visual(frames, frames)  # v2.0: needs observed_frames too
+        assert 0.0 <= score <= 1.0  # Local approximation returns [0,1]
 
     def test_score_cross_modal_both_positive(self, fusion_config):
         """Cross-modal score with both positive should be positive."""

@@ -1,10 +1,14 @@
-"""Delta-T composition tree: chain, additive, and conditional composition."""
+"""Delta-T composition tree: chain, additive, and conditional composition.
+
+TOMAS v2.0 upgrade: slip cost (phase alignment fee) incorporated into MDL.
+"""
 from __future__ import annotations
 
 import copy
 from typing import Any
 
 from src.core.dsl_primitives import DSLElement, ProgramNode
+from src.utils.slip_cost import SlipCostCalculator
 
 
 class DeltaTCombinator:
@@ -15,19 +19,25 @@ class DeltaTCombinator:
     - Additive (+): Parallel application with overlay combination.
     - Conditional (if-then): Branch based on frame state.
 
+    TOMAS v2.0: Slip cost calculator adds phase alignment fee to MDL.
+
     Attributes:
         delta_list: List of delta-T ProgramNodes to compose.
         combo_type: Current composition type.
+        slip_calc: SlipCostCalculator for phase alignment cost.
     """
 
-    def __init__(self, deltas: list[ProgramNode] | None = None) -> None:
+    def __init__(self, deltas: list[ProgramNode] | None = None,
+                 slip_calc: SlipCostCalculator | None = None) -> None:
         """Initialize the combinator.
 
         Args:
             deltas: List of delta-T ProgramNodes.
+            slip_calc: Optional SlipCostCalculator for phase alignment cost.
         """
         self.delta_list: list[ProgramNode] = deltas or []
         self.combo_type: str = "chain"
+        self.slip_calc = slip_calc or SlipCostCalculator()
 
     def chain_compose(self) -> ProgramNode:
         """Chain-compose all deltas: delta_1 ⊙ delta_2 ⊙ ... ⊙ delta_n.
@@ -103,14 +113,17 @@ class DeltaTCombinator:
         root.total_mdl = root.compute_mdl()
         return root
 
-    def search_combinations(self, max_depth: int = 3) -> list[ProgramNode]:
+    def search_combinations(self, max_depth: int = 3,
+                            hypergraph: Any = None) -> list[ProgramNode]:
         """Search over all composition combinations up to max_depth.
 
         Generates chain, additive, and conditional compositions and
-        ranks them by MDL.
+        ranks them by MDL. TOMAS v2.0: adds slip cost (phase alignment
+        fee) to MDL when hypergraph is provided.
 
         Args:
             max_depth: Maximum number of deltas to combine.
+            hypergraph: Optional hypergraph for slip cost computation.
 
         Returns:
             List of composed ProgramNodes ranked by MDL.
@@ -137,8 +150,15 @@ class DeltaTCombinator:
         # Pairwise compositions
         for i in range(len(deltas)):
             for j in range(i + 1, len(deltas)):
-                pair_combinator = DeltaTCombinator([deltas[i], deltas[j]])
+                pair_combinator = DeltaTCombinator([deltas[i], deltas[j]],
+                                                   slip_calc=self.slip_calc)
                 results.append(pair_combinator.chain_compose())
+
+        # Add slip cost to MDL if hypergraph provided
+        if hypergraph is not None and self.slip_calc is not None:
+            for program in results:
+                slip_cost = self.slip_calc.phase_alignment_cost(program, hypergraph)
+                program.total_mdl += int(slip_cost)
 
         # Sort by MDL
         results.sort(key=lambda p: p.total_mdl)

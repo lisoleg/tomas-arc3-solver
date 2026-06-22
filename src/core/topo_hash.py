@@ -1,4 +1,8 @@
-"""Topological hash quick-filter for Phase A of Two-Phase search."""
+"""Topological hash quick-filter for Phase A of Two-Phase search.
+
+TOMAS v2.0 upgrade: integrated Luzhao DNA (Fibonacci/Lucas/Bagua) hash
+for enhanced filtering precision.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -7,6 +11,7 @@ import numpy as np
 
 from src.core.hypergraph import HyperGraph
 from src.core.octonion_hyperedge import OctonionHyperEdge
+from src.core.luzhao_dna import LuzhaoDNA
 
 
 class TopoHashFilter:
@@ -14,39 +19,55 @@ class TopoHashFilter:
 
     Filters candidate programs by checking the necessary condition:
     ``topo_hash(P(I_i)) == topo_hash(O_i)`` for each demo pair.
+    Optionally integrates Luzhao DNA hash for enhanced precision.
     This provides O(1) lookup per candidate after hash computation.
     """
 
-    def __init__(self, cache_size: int = 10000) -> None:
+    def __init__(self, cache_size: int = 10000,
+                 use_luzhao: bool = True) -> None:
         """Initialize the filter.
 
         Args:
             cache_size: Maximum number of cached hash entries.
+            use_luzhao: Enable Luzhao DNA hash integration.
         """
         self.hash_cache: dict[str, str] = {}
+        self.luzhao_cache: dict[str, str] = {}
         self.cache_size = cache_size
+        self.use_luzhao = use_luzhao
+        self.luzhao_dna = LuzhaoDNA() if use_luzhao else None
 
-    def compute_hash(self, graph: HyperGraph) -> str:
+    def compute_hash(self, graph: HyperGraph,
+                     use_luzhao: bool | None = None) -> str:
         """Compute the topological hash of a hypergraph.
 
-        Uses the graph's built-in hash with caching for speed.
+        Optionally integrates Luzhao DNA hash (Fibonacci/Lucas/Bagua)
+        for enhanced topological discrimination.
 
         Args:
             graph: HyperGraph to hash.
+            use_luzhao: Override use_luzhao flag (None uses instance default).
 
         Returns:
             Hex string hash.
         """
+        should_use_luzhao = use_luzhao if use_luzhao is not None else self.use_luzhao
+
         # Try cache first using object id
-        cache_key = f"hg_{id(graph)}"
+        cache_key = f"hg_{id(graph)}_{should_use_luzhao}"
         if cache_key in self.hash_cache:
             return self.hash_cache[cache_key]
 
-        result = graph.get_topo_hash()
+        base_hash = graph.get_topo_hash()
+
+        if should_use_luzhao and self.luzhao_dna is not None:
+            luzhao_hash = self.luzhao_dna.compute_dna_hash(graph)
+            result = f"{base_hash}:{luzhao_hash[:16]}"
+        else:
+            result = base_hash
 
         # Cache management
         if len(self.hash_cache) >= self.cache_size:
-            # Evict oldest entries (simple FIFO)
             keys = list(self.hash_cache.keys())
             for k in keys[: len(keys) // 2]:
                 del self.hash_cache[k]

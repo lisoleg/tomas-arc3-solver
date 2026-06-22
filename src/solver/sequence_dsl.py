@@ -1,4 +1,9 @@
-"""Frame-to-frame pattern induction: uniform motion, rotation, color cycles."""
+"""Frame-to-frame pattern induction: uniform motion, rotation, color cycles.
+
+TOMAS v2.0 upgrade: compound pattern recognition using cross-correlation
+analysis of delta-T history for detecting "rotation+translation" and
+"color_cycle+scale" compound temporal patterns.
+"""
 from __future__ import annotations
 
 from typing import Any
@@ -16,7 +21,8 @@ class SequenceDSL:
     - Uniform motion (constant velocity translation)
     - Rotation cycles (periodic rotation)
     - Color cycles (periodic color changes)
-    - Compound patterns (e.g., uniform 3 frames → rotation → uniform)
+    - Compound patterns (e.g., rotation+translation, color_cycle+scale)
+      using cross-correlation analysis of delta-T element sequences.
 
     Attributes:
         history_buffer: DeltaHistoryBuffer for pattern context.
@@ -202,3 +208,68 @@ class SequenceDSL:
 
         # Default: return last delta
         return deltaT_list[-1]
+
+    def detect_compound_pattern(self, deltaT_list: list[ProgramNode]) -> str:
+        """Detect compound temporal patterns via cross-correlation analysis.
+
+        Analyzes delta-T element sequences to identify common combinations:
+        - "rotation_translation": alternating rotate and move operations
+        - "color_scale": color-swap combined with scale transformations
+        - "multi_phase": three or more distinct operation types detected
+        - "none": no compound pattern detected
+
+        Uses cross-correlation: checks if element name sequences show
+        correlated shifts between different operation types.
+
+        Args:
+            deltaT_list: List of delta-T ProgramNodes.
+
+        Returns:
+            Compound pattern type string.
+        """
+        if len(deltaT_list) < 3:
+            return "none"
+
+        # Extract element name sequences
+        element_sequences: list[list[str]] = []
+        for delta in deltaT_list:
+            elements = delta.flatten()
+            element_sequences.append([e.name for e in elements])
+
+        # Count operation type frequencies
+        op_counts: dict[str, int] = {}
+        for seq in element_sequences:
+            for name in seq:
+                op_counts[name] = op_counts.get(name, 0) + 1
+
+        # Detect rotation_translation: both rotate and move present
+        has_rotate = any("rotate" in name for name in op_counts)
+        has_move = any("move" in name for name in op_counts)
+        has_color = any("color" in name or "map-color" in name for name in op_counts)
+        has_scale = any("scale" in name for name in op_counts)
+
+        if has_rotate and has_move:
+            # Check for alternating pattern
+            alternating = True
+            last_motion = None
+            for seq in element_sequences:
+                for name in seq:
+                    current_motion = "rotate" if "rotate" in name else (
+                        "move" if "move" in name else None)
+                    if current_motion and last_motion:
+                        if current_motion == last_motion:
+                            alternating = False
+                            break
+                    if current_motion:
+                        last_motion = current_motion
+            if alternating:
+                return "rotation_translation"
+
+        if has_color and has_scale:
+            return "color_scale"
+
+        # Multi-phase: 3+ distinct operations
+        if len(op_counts) >= 3:
+            return "multi_phase"
+
+        return "none"

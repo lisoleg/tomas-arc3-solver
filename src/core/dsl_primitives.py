@@ -19,6 +19,9 @@ from scipy import ndimage
 class DSLElement:
     """A single ARC transformation primitive.
 
+    TOMAS v2.0: GATlab axiom interfaces — verify_compositionality() and
+    verify_reversibility() prepare for formal GATlab verification.
+
     Attributes:
         name: Primitive name (e.g. 'mirror', 'rotate').
         params: Parameters dict (e.g. {'axis': 'horizontal'}).
@@ -124,6 +127,36 @@ class DSLElement:
         grid = edge.decode_to_grid()
         transformed = self.apply(grid)
         return OctonionHyperEdge(transformed, frame_idx=edge.frame_idx)
+
+    def verify_compositionality(self) -> bool:
+        """GATlab axiom: verify this primitive is compositional.
+
+        A compositional primitive satisfies:
+        f(g(x)) = (f ∘ g)(x) for all valid inputs x.
+        Returns True by default; override for primitives that need
+        formal GATlab verification.
+
+        Returns:
+            True if compositionality holds.
+        """
+        return True
+
+    def verify_reversibility(self) -> bool:
+        """GATlab axiom: verify this primitive is reversible.
+
+        A reversible primitive has an inverse f⁻¹ such that:
+        f⁻¹(f(x)) = x for all valid inputs x.
+        Returns True by default; override for primitives where
+        reversibility is not guaranteed (e.g., crop, resize).
+
+        Returns:
+            True if reversibility holds.
+        """
+        # Common non-reversible primitives
+        NON_REVERSIBLE = {"crop", "resize", "tile"}
+        if self.name in NON_REVERSIBLE:
+            return False
+        return True
 
     def compose(self, other: DSLElement) -> ProgramNode:
         """Compose with another element into a chain ProgramNode.

@@ -21,20 +21,49 @@ class OctonionHyperEdge:
     """Encodes an ARC grid as a set of octonion hyperedges.
 
     Each non-zero pixel in the grid is encoded as one octonion vector with
-    8 float32 components. The encoding is reversible: ``decode_to_grid()``
-    reconstructs the original grid from the encoded octonion array.
+    8 float32 components, each carrying explicit cognitive semantics
+    (TOMAS v2.0 GAT axiom system):
 
-    Attributes:
-        real_mask: Real part — 1.0 if pixel is non-zero, else 0.0.
-        e1_x: x-coordinate normalized to [-1, 1].
-        e2_y: y-coordinate normalized to [-1, 1].
-        e3_color: Color value as phase angle (color/9 * 2*pi).
-        e4_component_id: Connected component ID (normalized).
-        e5_symmetry: Symmetry residual (how well pixel fits dominant symmetry).
-        e6_boundary: 1.0 if pixel touches grid boundary, else 0.0.
-        e7_area_ratio: Area ratio of the pixel's connected component.
-        frame_idx: Temporal frame index (for video sequences).
+    - e0 (real_mask): Object existence — 1.0 if pixel is non-zero, else 0.0.
+    - e1 (e1_x): Object constancy / x-coordinate normalized to [-1, 1].
+    - e2 (e2_y): Translation invariance / y-coordinate normalized to [-1, 1].
+    - e3 (e3_color): Rotation / color phase angle (color/9 * 2*pi).
+    - e4 (e4_component_id): Scale / connected component ID (normalized).
+    - e5 (e5_symmetry): Boundary touch / symmetry residual.
+    - e6 (e6_boundary): Color mapping / boundary mask.
+    - e7 (e7_area_ratio): Time phase / area ratio (temporal frame context).
+
+    The encoding is reversible: ``decode_to_grid()`` reconstructs the
+    original grid from the encoded octonion array.
+
+    Neural analogy (Nature single-neuron study):
+    The orthogonality of octonion imaginary components mirrors the
+    feature selectivity of single neurons in visual cortex.
     """
+
+    #: Human-readable cognitive semantics for each component.
+    COMPONENT_NAMES: dict[int, str] = {
+        0: "real_mask (Object Existence)",
+        1: "e1_x (Object Constancy)",
+        2: "e2_y (Translation Invariance)",
+        3: "e3_color (Rotation / Color Phase)",
+        4: "e4_component_id (Scale / Gestalt Grouping)",
+        5: "e5_symmetry (Boundary Touch / Symmetry)",
+        6: "e6_boundary (Color Mapping / Edge)",
+        7: "e7_area_ratio (Time Phase / Frame Context)",
+    }
+
+    #: Cognitive semantic mapping from component index to description.
+    COGNITIVE_SEMANTIC_MAP: dict[int, str] = {
+        0: "object_existence",
+        1: "object_constancy",
+        2: "translation_invariance",
+        3: "rotation_phase",
+        4: "scale_gestalt",
+        5: "boundary_touch",
+        6: "color_mapping",
+        7: "time_phase",
+    }
 
     NUM_COMPONENTS: int = 8
     MAX_COLOR: int = 9

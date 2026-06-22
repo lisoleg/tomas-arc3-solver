@@ -5,7 +5,7 @@
 # --- General ---
 general:
   project_name: "tomas-arc3-solver"
-  version: "1.0.0"
+  version: "2.0.0"
   random_seed: 42
 
 # --- DSL parameters ---
@@ -84,6 +84,39 @@ logging:
 tensorboard:
   log_dir: "runs/tomas_arc3"
   flush_secs: 10
+
+# ============================================================
+# TOMAS v2.0: New sections
+# ============================================================
+
+# --- Luzhao DNA topological invariants ---
+luzhao_dna:
+  fibonacci_offset: 0
+  bagua_mapping: {0: 0, 1: 1, 2: 2, 3: 3, 4: 4, 5: 5, 6: 6, 7: 7, 8: 8, 9: 9}
+  use_luzhao_hash: true
+
+# --- Delta history (enhanced) ---
+delta_history:
+  window_size: 5                 # 5-frame temporal receptive field
+  mutation_threshold: 0.5        # Betti0 drop ratio to trigger mutation
+  prediction_weight: 0.6         # linear prediction confidence weight
+  min_frames_for_prediction: 5
+
+# --- ENPV decision ---
+enpv:
+  cost_per_evaluation: 0.5       # cost per candidate evaluation (seconds)
+  min_enpv_threshold: 0.0        # ENPV < 0 -> abandon search
+
+# --- Jitter variance estimation ---
+jitter:
+  adaptive_sigma: true           # use adaptive sigma from residual std
+  residual_trend_window: 3       # window for residual trend detection
+
+# --- Slip cost ---
+slip_cost:
+  base_slip_rate: 0.5            # cost multiplier per unit phase shift
+  max_slip_cost: 20.0            # maximum slip cost cap
+  use_phase_cost: true           # enable phase alignment cost in MDL
 
 # --- Kaggle ---
 kaggle:
