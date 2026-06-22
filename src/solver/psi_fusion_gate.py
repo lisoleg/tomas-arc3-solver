@@ -404,11 +404,14 @@ class PsiFusionGate:
         for prog in candidate_programs[:top_k]:
             try:
                 # GaussEx 纤维验证
-                passed = verifier.verify(prog, input_pairs)
+                passed = verifier.verify_program(prog, input_pairs)
                 # Bayesian 置信度
                 from ..solver.bayesian_confidence import BayesianConfidence
-                bc = BayesianConfidence()
-                conf = bc.compute(prog, input_pairs, passed)
+                bc = BayesianConfidence({})
+                conf = bc.compute_posterior(prog, input_pairs)
+                # Boost confidence if verification passed
+                if passed and conf > 0:
+                    conf = min(1.0, conf * 1.5)
                 results.append((prog, conf))
             except Exception as e:
                 if self.verbose:

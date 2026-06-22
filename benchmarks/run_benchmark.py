@@ -108,19 +108,24 @@ def run_single_benchmark(
             "early_terminated": getattr(searcher.enpv, "_early_terminated", False),
         }
 
-        # Check accuracy: does prediction match expected output?
+        # Check accuracy: does prediction match TEST output?
         correct = False
         predictions = solve_result.get("predictions", [])
-        if predictions and demo_pairs:
-            # Check if last demo output matches prediction
-            last_output = demo_pairs[-1].get("output", [])[-1]
-            if len(predictions) > 0:
-                try:
-                    pred_grid = np.array(predictions[0], dtype=np.int8)
-                    if last_output.shape == pred_grid.shape:
-                        correct = np.array_equal(last_output, pred_grid)
-                except Exception:
-                    correct = False
+        # Get test output from task data (not training output!)
+        test_pairs = task_data.get("test", [])
+        test_output = None
+        if test_pairs:
+            test_outputs = test_pairs[0].get("output", [])
+            if test_outputs:
+                test_output = np.array(test_outputs[0], dtype=np.int8)
+
+        if predictions and test_output is not None:
+            try:
+                pred_grid = np.array(predictions[0], dtype=np.int8)
+                if test_output.shape == pred_grid.shape:
+                    correct = np.array_equal(test_output, pred_grid)
+            except Exception:
+                correct = False
 
         total_time = time.time() - start_time
 

@@ -207,8 +207,10 @@ class BayesianConfidence:
             return self._evidence_cache
 
         if not self.candidates:
-            self._evidence_cache = 0.0
-            return 0.0
+            # When called directly (not via rank_candidates), use default
+            # evidence=1.0 so posterior = likelihood * prior
+            self._evidence_cache = 1.0
+            return 1.0
 
         # Evidence is computed in rank_candidates and cached
         self._evidence_cache = 1.0  # Placeholder; updated in rank_candidates

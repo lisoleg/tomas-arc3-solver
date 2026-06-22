@@ -51,3 +51,4 @@ config/secrets.yaml
 
 # Kaggle
 kaggle.json
+data/arc-agi-repo/
