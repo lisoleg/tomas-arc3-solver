@@ -456,6 +456,9 @@ class TOMASSolver:
     ) -> list[list[list[int]]]:
         """Generate predictions using a program.
 
+        Each test frame is predicted independently — the program is applied
+        to each test input separately (no iterative chaining).
+
         Args:
             program: ProgramNode to use for prediction.
             demo_pairs: Demo pairs for context.
@@ -467,21 +470,31 @@ class TOMASSolver:
         predictions: list[list[list[int]]] = []
 
         if test_frames:
-            last_frame = test_frames[-1]
-            for _ in range(len(test_frames)):
+            # Apply program to each test frame independently
+            for test_frame in test_frames:
                 try:
-                    predicted = program.apply(last_frame)
-                    predictions.append(np.asarray(predicted, dtype=np.int8).tolist())
-                    last_frame = np.asarray(predicted, dtype=np.int8)
+                    predicted = program.apply(test_frame)
+                    predictions.append(
+                        np.asarray(predicted, dtype=np.int8).tolist()
+                    )
                 except Exception:
-                    predictions.append(last_frame.tolist())
+                    predictions.append(
+                        np.asarray(test_frame, dtype=np.int8).tolist()
+                    )
         elif demo_pairs:
-            last_input = demo_pairs[-1].get("input", [np.zeros((1, 1), dtype=np.int8)])[-1]
+            # Fallback: use last demo input if no test frames
+            last_input = demo_pairs[-1].get(
+                "input", [np.zeros((1, 1), dtype=np.int8)]
+            )[-1]
             try:
                 predicted = program.apply(last_input)
-                predictions.append(np.asarray(predicted, dtype=np.int8).tolist())
+                predictions.append(
+                    np.asarray(predicted, dtype=np.int8).tolist()
+                )
             except Exception:
-                predictions.append(last_input.tolist())
+                predictions.append(
+                    np.asarray(last_input, dtype=np.int8).tolist()
+                )
 
         return predictions
 

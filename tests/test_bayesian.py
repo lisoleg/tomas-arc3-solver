@@ -158,9 +158,14 @@ class TestComputeEvidence:
     """Tests for compute_evidence P(E) marginal."""
 
     def test_evidence_no_candidates(self, bayes_config):
-        """Evidence with no candidates should be 0."""
+        """Evidence with no candidates should be 1.0 (neutral prior).
+
+        v2.4.4: Changed from 0.0 to 1.0 so that compute_posterior()
+        returns likelihood * prior instead of 0 when candidates list
+        is empty (direct call without rank_candidates first).
+        """
         bayes = BayesianConfidence(bayes_config)
-        assert bayes.compute_evidence() == 0.0
+        assert bayes.compute_evidence() == 1.0
 
     def test_evidence_positive_after_ranking(self, bayes_config, mirror_program, mirror_demo_pairs):
         """Evidence should be positive after ranking candidates."""

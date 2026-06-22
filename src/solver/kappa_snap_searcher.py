@@ -20,6 +20,14 @@ from src.core.dsl_primitives import DSLElement, ProgramNode, get_all_primitives
 from src.core.topo_hash import TopoHashFilter
 from src.solver.enpv_decision import ENPVDecision
 
+# v2.5: Parameter inference for real ARC tasks
+try:
+    from src.solver.param_inference import ParamInference
+    _HAVE_PARAM_INFERENCE = True
+except ImportError:
+    _HAVE_PARAM_INFERENCE = False
+    ParamInference = None  # type: ignore[misc, assignment]
+
 # Numba-accelerated grid comparison
 try:
     from src.core.numba_kernels import HAS_NUMBA, grid_equal_kernel
@@ -133,6 +141,11 @@ class KappaSnapSearcher:
         # v2.4: Causal DSL Prior
         self.causal_prior: Any = causal_prior
 
+        # v2.5: Parameter inference for real ARC tasks
+        self.param_inference: ParamInference | None = None
+        if _HAVE_PARAM_INFERENCE:
+            self.param_inference = ParamInference()
+
     def search(self, demo_pairs: list[dict[str, Any]]) -> list[ProgramNode]:
         """Unified search entry point (alias for two_phase_search).
 
@@ -146,6 +159,11 @@ class KappaSnapSearcher:
 
     def two_phase_search(self, demo_pairs: list[dict[str, Any]]) -> list[ProgramNode]:
         """Execute Two-Phase search: topo hash filter then MDL enumeration.
+
+        v2.5: Parameter inference layer — infers DSL primitive parameters
+                 from demo pairs before brute-force enumeration. Inferred
+                 candidates go directly to Phase B verification (skip Phase A
+                 topo hash, since they are already targeted).
 
         Pre-Phase A (v2.3): Fast invariant filters (shape, nonzero count,
                  color histogram, Betti0) to eliminate candidates before
@@ -170,6 +188,22 @@ class KappaSnapSearcher:
         # Clear topo filter cache to ensure deterministic results
         # between repeated search calls on the same searcher instance
         self.topo_filter.clear_cache()
+
+        # v2.5: Parameter inference — generate targeted candidates first
+        inferred_candidates: list[ProgramNode] = []
+        if self.param_inference is not None:
+            inferred_candidates = self.param_inference.infer_candidates(demo_pairs)
+
+        # v2.5: Verify inferred candidates directly (skip Phase A topo hash)
+        # They are already targeted, so topo hash filtering would be redundant
+        inferred_valid: list[ProgramNode] = []
+        if inferred_candidates:
+            inferred_valid = self._phase_b_cpu_verify(inferred_candidates, demo_pairs)
+
+        # If we found valid programs from inference, return them immediately
+        # (they are higher quality than brute-force candidates)
+        if inferred_valid:
+            return self.rank_by_mdl(inferred_valid)
 
         # Generate candidates at all depths (with incremental MDL pruning)
         all_candidates: list[ProgramNode] = []
