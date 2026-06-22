@@ -86,16 +86,12 @@ def run_single_benchmark(
         # Create solver with full config (TOMASSolver handles component initialization)
         solver = TOMASSolver(config)
 
+        # Load raw task data
+        task_path = PROJECT_ROOT / "data" / task_name
+        with open(task_path, "r") as f:
+            task_data = json.load(f)
+
         # Run solve in fusion mode (uses psi_gate if enabled)
-        task_data = {
-            "task_id": task_name,
-            "train": [
-                {"input": [p["input"][i].tolist() for i in range(len(p["input"]))],
-                 "output": [p["output"][i].tolist() for i in range(len(p["output"]))]}
-                for p in demo_pairs
-            ],
-            "test": [p["input"][-1].tolist() for p in demo_pairs[-1:]],
-        }
         solve_start = time.time()
         solve_result = solver.solve(task_data, mode="fusion")
         solve_time = time.time() - solve_start

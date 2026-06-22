@@ -368,7 +368,12 @@ class PsiFusionGate:
                 pass
 
         for prog in candidate_programs:
-            max_complexity = max(max_complexity, len(prog.get("actions", [])))
+            if isinstance(prog, dict):
+                prog_complexity = len(prog.get("actions", []))
+            else:
+                # Assume it's a ProgramNode
+                prog_complexity = len(prog.flatten() if hasattr(prog, "flatten") else [])
+            max_complexity = max(max_complexity, prog_complexity)
 
         est = UncertaintyEstimate(
             info_abundance=info_abundance,

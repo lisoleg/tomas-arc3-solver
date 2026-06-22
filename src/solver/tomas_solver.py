@@ -366,8 +366,8 @@ class TOMASSolver:
             # Use ψ-Gate semantic gating for fusion
             fusion_result = self.psi_gate.fuse(
                 top_candidates[:10], demo_pairs,
-                demo_pairs[0][0] if demo_pairs else [[0]],
-                demo_pairs[0][1] if demo_pairs else [[0]],
+                demo_pairs[0]['input'][0] if demo_pairs else np.zeros((1,1), dtype=np.int8),
+                demo_pairs[0]['output'][0] if demo_pairs else np.zeros((1,1), dtype=np.int8),
             )
             best_prog_from_gate = fusion_result.get("program")
             if best_prog_from_gate is not None:
