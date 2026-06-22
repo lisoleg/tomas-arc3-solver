@@ -147,3 +147,48 @@ pruning:
   enable_heuristic_order: true   # heuristic candidate ordering
   enable_incremental_mdl: true   # incremental MDL pruning at depth 3
   mdl_threshold: 50              # max MDL for valid programs (mirrors search.mdl_threshold)
+
+# ============================================================
+# TOMAS v2.4: Absorbed modules from tomas-agi & mnq repos
+# ============================================================
+
+# --- PsiFusionGate (ψ-Gate semantic gating) ---
+psi_gate:
+  enabled: false                 # set true to replace simple fusion with ψ-Gate
+  use_default_anchors: true     # use default anchor set (topo_invariance, etc.)
+  tolerance_decay_rate: 0.05      # τ for soft-fail tolerance decay
+  verbose: false
+
+# --- AEGIS Program Evolution Engine ---
+aegis:
+  enabled: false                 # set true to upgrade κ-Snap to evolution search
+  population_size: 20            # candidates per generation
+  num_generations: 5             # evolution generations
+  mutation_rate: 0.3
+  crossover_rate: 0.5
+  elitism_count: 3
+  mdl_weight: 0.4
+  accuracy_weight: 0.6
+  use_psi_gate: true
+  verbose: false
+
+# --- Causal DSL Prior ---
+causal_prior:
+  enabled: false                 # set true to guide heuristic_order with causal graph
+  history_path: "logs/solver_history.json"
+  strictness: "moderate"         # "lenient" | "moderate" | "strict"
+  verbose: false
+
+# --- RHAE Evaluation (ARC-AGI-3) ---
+eval:
+  enabled: false                 # set true to enable RHAE scoring
+  dataset_path: "data/arc_agi3_public.json"
+  rhae_scoring: true
+  action_budget_multiplier: 5
+  verbose: false
+
+# --- math_sequences (unified Luzhao DNA tools) ---
+math_sequences:
+  enable_cache: true
+  fibonacci_max_n: 1000
+  bagua_mode: "xiantian"         # "xiantian" | "houtian"

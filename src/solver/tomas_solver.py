@@ -16,6 +16,14 @@ from src.solver.fusion_scorer import FusionScorer
 from src.solver.library_learning import LibraryLearning
 from src.solver.video_solver import VideoSolver
 from src.solver.transfer_solver import TransferSolver
+# v2.4: Optional PsiFusionGate import
+try:
+    from src.solver.psi_fusion_gate import PsiFusionGate, create_default_anchors
+    _HAVE_PSI_GATE = True
+except ImportError:
+    _HAVE_PSI_GATE = False
+    PsiFusionGate = None  # type: ignore
+    create_default_anchors = None  # type: ignore
 from src.utils.kaggle_format import KaggleFormatAdapter, VideoARCTask
 from src.utils.gpu_optimizer import GPUOptimizer
 from src.utils.logger import get_auditor
@@ -86,6 +94,17 @@ class TOMASSolver:
                 self._vl_adapter = None
 
         self.fusion = FusionScorer(config.get("fusion", {}), self._vl_adapter)
+
+        # v2.4: Optional PsiFusionGate for semantic gating
+        self.psi_gate = None
+        if _HAVE_PSI_GATE and config.get("psi_gate", {}).get("enabled", False):
+            psi_config = config.get("psi_gate", {})
+            anchors = create_default_anchors() if psi_config.get("use_default_anchors", True) else []
+            self.psi_gate = PsiFusionGate(
+                anchors=anchors,
+                tolerance_decay_rate=psi_config.get("tolerance_decay_rate", 0.05),
+                verbose=config.get("verbose", False),
+            )
 
         # Solvers
         self.video_solver = VideoSolver(self.searcher, self.verifier, self.library)
@@ -250,14 +269,33 @@ class TOMASSolver:
         multi_scale = MultiScaleAnalyzer(keyframe_extractor, self._vl_adapter)
         analysis = multi_scale.analyze(all_frames)
 
-        # Fusion scoring
-        self.fusion.adapt_weights(len(demo_pairs))
-        fusion_ranked: list[tuple[ProgramNode, float]] = []
-        for program in top_candidates:
-            score = self.fusion.fuse(program, all_frames, demo_pairs)
-            fusion_ranked.append((program, score))
-
-        fusion_ranked.sort(key=lambda x: x[1], reverse=True)
+        # Fusion scoring (v2.4: use PsiFusionGate if enabled)
+        if self.psi_gate is not None:
+            # Use ψ-Gate semantic gating for fusion
+            fusion_result = self.psi_gate.fuse(
+                top_candidates[:10], demo_pairs,
+                demo_pairs[0][0] if demo_pairs else [[0]],
+                demo_pairs[0][1] if demo_pairs else [[0]],
+            )
+            best_prog_from_gate = fusion_result.get("program")
+            if best_prog_from_gate is not None:
+                best_program = best_prog_from_gate
+                best_score = fusion_result.get("confidence", 0.0)
+                fusion_ranked = [(best_program, best_score)]
+            else:
+                # Fallback to standard fusion
+                fusion_ranked = []
+                for program in top_candidates[:10]:
+                    score = self.fusion.fuse(program, all_frames, demo_pairs)
+                    fusion_ranked.append((program, score))
+                fusion_ranked.sort(key=lambda x: x[1], reverse=True)
+        else:
+            # Standard fusion scoring
+            fusion_ranked = []
+            for program in top_candidates[:10]:
+                score = self.fusion.fuse(program, all_frames, demo_pairs)
+                fusion_ranked.append((program, score))
+            fusion_ranked.sort(key=lambda x: x[1], reverse=True)
 
         if fusion_ranked:
             best_program, best_score = fusion_ranked[0]
