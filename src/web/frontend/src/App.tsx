@@ -1,8 +1,17 @@
-import React from 'react';
+import React, { Suspense, lazy } from 'react';
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
-import { AppBar, Toolbar, Typography, Container, Button } from '@mui/material';
-import SolverPage from './pages/SolverPage';
-import HistoryPage from './pages/HistoryPage';
+import { AppBar, Toolbar, Typography, Container, Button, CircularProgress, Box } from '@mui/material';
+
+// 懒加载页面组件 —— 每个页面单独打包成 chunk
+const SolverPage  = lazy(() => import('./pages/SolverPage'));
+const HistoryPage = lazy(() => import('./pages/HistoryPage'));
+
+/** 路由级懒加载的 fallback */
+const PageLoading: React.FC = () => (
+  <Box display="flex" justifyContent="center" alignItems="center" minHeight={200}>
+    <CircularProgress />
+  </Box>
+);
 
 const App: React.FC = () => {
   return (
@@ -22,10 +31,12 @@ const App: React.FC = () => {
       </AppBar>
 
       <Container maxWidth="lg" sx={{ mt: 4 }}>
-        <Routes>
-          <Route path="/" element={<SolverPage />} />
-          <Route path="/history" element={<HistoryPage />} />
-        </Routes>
+        <Suspense fallback={<PageLoading />}>
+          <Routes>
+            <Route path="/" element={<SolverPage />} />
+            <Route path="/history" element={<HistoryPage />} />
+          </Routes>
+        </Suspense>
       </Container>
     </BrowserRouter>
   );
