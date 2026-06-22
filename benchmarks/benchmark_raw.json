@@ -1,0 +1,477 @@
+{
+  "psi_gate": [
+    {
+      "task": "task_001.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.7356,
+      "total_time_sec": 3.7357,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_001.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.1388,
+      "total_time_sec": 3.1389,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_002.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.8556,
+      "total_time_sec": 2.8623,
+      "total_candidates": 633,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_002.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 4.0369,
+      "total_time_sec": 4.0439,
+      "total_candidates": 633,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_003.json",
+      "config": "psi_gate_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 1.8729,
+      "total_time_sec": 1.873,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_003.json",
+      "config": "psi_gate_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.2856,
+      "total_time_sec": 2.2858,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    }
+  ],
+  "aegis": [
+    {
+      "task": "task_001.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.5068,
+      "total_time_sec": 3.5069,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_001.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 6.6511,
+      "total_time_sec": 6.6512,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_002.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 6.4288,
+      "total_time_sec": 6.4432,
+      "total_candidates": 633,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_002.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 6.524,
+      "total_time_sec": 6.5339,
+      "total_candidates": 633,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_003.json",
+      "config": "aegis_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 3.0052,
+      "total_time_sec": 3.0053,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_003.json",
+      "config": "aegis_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.6011,
+      "total_time_sec": 2.6012,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    }
+  ],
+  "causal_prior": [
+    {
+      "task": "task_001.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 5.0451,
+      "total_time_sec": 5.0452,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_001.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 5.2663,
+      "total_time_sec": 5.2664,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 1710,
+        "mdl_pruned": 0,
+        "shape_pruned": 7010,
+        "color_hist_pruned": 2141,
+        "nonzero_pruned": 10765
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_002.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 9.6512,
+      "total_time_sec": 9.6591,
+      "total_candidates": 633,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_002.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 8.6241,
+      "total_time_sec": 8.6312,
+      "total_candidates": 633,
+      "ranked_candidates": 100,
+      "top_confidence": 0.0313,
+      "top_mdl": 5,
+      "correct": true,
+      "pruning_stats": {
+        "betti0_pruned": 31,
+        "symmetry_deduped": 1392,
+        "mdl_pruned": 0,
+        "shape_pruned": 7072,
+        "color_hist_pruned": 4127,
+        "nonzero_pruned": 9679
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_003.json",
+      "config": "causal_prior_disabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.3072,
+      "total_time_sec": 2.3073,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    },
+    {
+      "task": "task_003.json",
+      "config": "causal_prior_enabled",
+      "status": "completed",
+      "error": null,
+      "search_time_sec": 2.8198,
+      "total_time_sec": 2.8199,
+      "total_candidates": 0,
+      "ranked_candidates": 0,
+      "top_confidence": 0.0,
+      "top_mdl": 0,
+      "correct": false,
+      "pruning_stats": {
+        "betti0_pruned": 0,
+        "symmetry_deduped": 0,
+        "mdl_pruned": 0,
+        "shape_pruned": 8499,
+        "color_hist_pruned": 1024,
+        "nonzero_pruned": 18407
+      },
+      "enpv_stats": {
+        "total_evaluations": 0,
+        "early_terminated": false
+      },
+      "cuda_backend": "none"
+    }
+  ],
+  "timestamp": "2026-06-23 01:16:49"
+}

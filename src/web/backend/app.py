@@ -41,8 +41,10 @@ def create_app() -> Flask:
 
     # 注册 API Blueprints
     from api.solver import solver_bp
+    from api.visualizations import viz_bp
 
     app.register_blueprint(solver_bp, url_prefix='/api/solver')
+    app.register_blueprint(viz_bp, url_prefix='/api/viz')
 
     # 健康检查端点
     @app.route('/api/health', methods=['GET'])

@@ -1,7 +1,8 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Link } from 'react-router-dom';
-import { AppBar, Toolbar, Typography, Container, Box, Button } from '@mui/material';
+import { AppBar, Toolbar, Typography, Container, Button } from '@mui/material';
 import SolverPage from './pages/SolverPage';
+import HistoryPage from './pages/HistoryPage';
 
 const App: React.FC = () => {
   return (
@@ -14,12 +15,16 @@ const App: React.FC = () => {
           <Button color="inherit" component={Link} to="/">
             Solver
           </Button>
+          <Button color="inherit" component={Link} to="/history">
+            History
+          </Button>
         </Toolbar>
       </AppBar>
 
       <Container maxWidth="lg" sx={{ mt: 4 }}>
         <Routes>
           <Route path="/" element={<SolverPage />} />
+          <Route path="/history" element={<HistoryPage />} />
         </Routes>
       </Container>
     </BrowserRouter>
