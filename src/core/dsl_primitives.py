@@ -1265,6 +1265,54 @@ def _scale_pattern(grid: np.ndarray, factor: int = 3, **_: Any) -> np.ndarray:
 # Register all primitives
 # ============================================================
 
+
+# ======== v2.4.8 New Primitives ========
+
+def _crop_to_obj(grid: np.ndarray, color: int = 0, **_: Any) -> np.ndarray:
+    "Crop grid to bounding box of a specific color object."
+    g = grid[0] if grid.ndim == 3 else grid
+    mask = (g != 0) if color == 0 else (g == color)
+    if not np.any(mask):
+        return grid
+    rows = np.where(np.any(mask, axis=1))[0]
+    cols = np.where(np.any(mask, axis=0))[0]
+    r0, r1 = int(rows[0]), int(rows[-1])
+    c0, c1 = int(cols[0]), int(cols[-1])
+    result = g[r0:r1+1, c0:c1+1]
+    return result[np.newaxis, :, :] if grid.ndim == 3 else result
+
+
+def _replicate_obj(grid: np.ndarray, direction: str = 'right', **_: Any) -> np.ndarray:
+    "Replicate the largest object in a direction."
+    from scipy import ndimage
+    g = grid[0] if grid.ndim == 3 else grid
+    binary = (g != 0).astype(np.int8)
+    labeled, num = ndimage.label(binary)
+    if num == 0:
+        return grid
+    best = max(range(1, num+1), key=lambda i: np.sum(labeled == i))
+    mask = (labeled == best).astype(g.dtype)
+    if direction == 'right':
+        result = np.hstack([g, mask])
+    elif direction == 'left':
+        result = np.hstack([mask, g])
+    elif direction == 'down':
+        result = np.vstack([g, mask])
+    elif direction == 'up':
+        result = np.vstack([mask, g])
+    else:
+        result = g.copy()
+    return result[np.newaxis, :, :] if grid.ndim == 3 else result
+
+
+def _pad_row(grid: np.ndarray, num: int = 1, top: bool = False, **_: Any) -> np.ndarray:
+    "Pad rows to grid."
+    g = grid[0] if grid.ndim == 3 else grid
+    pad = np.zeros((num, g.shape[1]), dtype=g.dtype)
+    result = np.vstack([pad, g]) if top else np.vstack([g, pad])
+    return result[np.newaxis, :, :] if grid.ndim == 3 else result
+
+
 def _register_primitives() -> None:
     """Register all DSL primitives in the registry."""
     DSLElement._registry = {
@@ -1315,6 +1363,10 @@ def _register_primitives() -> None:
         "sort-obj-by": _sort_obj_by,
         # New primitives v2.4.7
         "scale-pattern": _scale_pattern,
+        # New primitives v2.4.8
+        "crop-to-obj": _crop_to_obj,
+        "replicate-obj": _replicate_obj,
+        "pad-row": _pad_row,
     }
 
 

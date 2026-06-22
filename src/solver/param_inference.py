@@ -85,6 +85,10 @@ class ParamInference:
         candidates.extend(self._gen_tile_repeat(features))
         candidates.extend(self._gen_scale_pattern(features))
 
+        candidates.extend(self._gen_crop_to_obj(features))
+        candidates.extend(self._gen_replicate_obj(features))
+        candidates.extend(self._gen_pad_row(features))
+
         # Generate two-primitive chains (depth 2) for common combos
         candidates.extend(self._gen_chain_candidates(features))
 
@@ -1092,4 +1096,34 @@ class ParamInference:
         candidates = []
         for factor in [2, 3, 4]:
             candidates.append(ProgramNode(DSLElement('scale-pattern', {'factor': factor})))
+        return candidates
+
+
+    # ========= v2.4.8 New inference methods =========
+
+    def _gen_crop_to_obj(self, features: dict) -> list:
+        """Generate crop-to-obj candidates."""
+        candidates = []
+        pairs = features.get('pairs', [])
+        colors = set()
+        for p in pairs:
+            for f in p.get('input', []):
+                colors.update(np.unique(f))
+        for c in colors:
+            candidates.append(ProgramNode(DSLElement('crop-to-obj', {'color': int(c)})))
+        return candidates
+
+    def _gen_replicate_obj(self, features: dict) -> list:
+        """Generate replicate-obj candidates."""
+        candidates = []
+        for d in ['right', 'left', 'down', 'up']:
+            candidates.append(ProgramNode(DSLElement('replicate-obj', {'direction': d})))
+        return candidates
+
+    def _gen_pad_row(self, features: dict) -> list:
+        """Generate pad-row candidates."""
+        candidates = []
+        for num in [1, 2, 3]:
+            for top in [True, False]:
+                candidates.append(ProgramNode(DSLElement('pad-row', {'num': num, 'top': top})))
         return candidates
