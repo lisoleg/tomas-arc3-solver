@@ -1,13 +1,13 @@
 {
-  "id": "lisoleg/tomas-arc3-solver-v241",
-  "title": "TOMAS ARC3 Solver v241",
+  "id": "lisoleg/tomas-arc-agi3-solver",
+  "title": "tomas-arc-agi3-solver",
   "code_file": "notebook_template.ipynb",
   "language": "python",
-  "kernel_type": "notebook",
-  "is_private": false,
-  "enable_gpu": false,
-  "enable_internet": true,
-  "dataset_sources": [],
-  "competition_sources": ["arc-agi-3"],
-  "kernel_sources": []
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": false,
+  "competition_sources": [
+    "arc-agi-3"
+  ],
+  "kernel_type": "notebook"
 }

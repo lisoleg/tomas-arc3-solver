@@ -29,7 +29,7 @@ NOTEBOOK_PATH = PROJECT_ROOT / "kaggle" / "notebook_template.ipynb"
 
 
 def check_kaggle_credentials() -> bool:
-    """Check if Kaggle API credentials are configured."""
+    """Check if Kaggle API credentials are configured and working."""
     kaggle_json = Path.home() / ".kaggle" / "kaggle.json"
 
     if not kaggle_json.exists():
@@ -39,77 +39,93 @@ def check_kaggle_credentials() -> bool:
         print("  1. Go to https://www.kaggle.com/settings")
         print("  2. Click 'Create New API Token' — downloads kaggle.json")
         print(f"  3. Place it at: {kaggle_json}")
-        print("  4. Set permissions: chmod 600 ~/.kaggle/kaggle.json (Linux/macOS)")
-        print("     On Windows: ensure only your user has read access")
         return False
 
     print(f"[OK] Kaggle credentials found at: {kaggle_json}")
 
-    # Verify credentials work
+    # Verify credentials work using Python API
     try:
-        result = subprocess.run(
-            ["kaggle", "competitions", "list", "-s", COMPETITION],
-            capture_output=True, text=True, timeout=30
-        )
-        if result.returncode == 0:
-            print("[OK] Kaggle API connection successful")
-            if COMPETITION in result.stdout:
-                print(f"[OK] Competition '{COMPETITION}' found")
-            else:
-                print(f"[WARN] Competition '{COMPETITION}' not found in list")
-                print(f"  Make sure you've joined: https://www.kaggle.com/competitions/{COMPETITION}")
-            return True
-        else:
-            print(f"[ERROR] Kaggle API failed: {result.stderr}")
-            return False
-    except FileNotFoundError:
-        print("[ERROR] kaggle CLI not found. Install with: pip install kaggle")
+        from kaggle.api.kaggle_api_extended import KaggleApi
+        api = KaggleApi()
+        api.authenticate()
+        print("[OK] Kaggle API authentication successful")
+        return True
+    except ImportError:
+        print("[ERROR] kaggle package not installed. Run: pip install kaggle")
         return False
     except Exception as e:
-        print(f"[ERROR] Kaggle API check failed: {e}")
+        print(f"[ERROR] Kaggle API authentication failed: {e}")
+        print("\n  Possible fixes:")
+        print("  1. Regenerate token at https://www.kaggle.com/settings")
+        print("  2. Ensure kaggle.json format: {\"username\": \"...\", \"key\": \"...\"}")
         return False
 
 
 def upload_notebook() -> bool:
-    """Upload the notebook as a Kaggle notebook."""
+    """Upload the notebook as a Kaggle kernel using Python API.
+
+    Uses kaggle.api.kaggle_api_extended.KaggleApi directly,
+    which handles KGAT_ token format better than the CLI.
+    """
     if not NOTEBOOK_PATH.exists():
         print(f"[ERROR] Notebook not found: {NOTEBOOK_PATH}")
         return False
 
     print(f"Uploading notebook: {NOTEBOOK_PATH}")
 
-    # Create metadata for the notebook
+    # Ensure kernel-metadata.json exists with correct format
+    meta_path = NOTEBOOK_PATH.parent / "kernel-metadata.json"
     metadata = {
-        "id": "tomas-arc-agi3-solver",
-        "title": "TOMAS ARC-AGI-3 Solver v2.4",
-        "code_file": str(NOTEBOOK_PATH),
+        "id": "lisoleg/tomas-arc-agi3-solver",
+        "title": "tomas-arc-agi3-solver",
+        "code_file": "notebook_template.ipynb",
         "language": "python",
         "is_private": True,
         "enable_gpu": True,
         "enable_internet": False,
-        "dataset_sources": [],
         "kernel_type": "notebook",
         "competition_sources": [COMPETITION],
     }
+    with open(meta_path, "w") as f:
+        json.dump(metadata, f, indent=2)
+    print(f"  Wrote kernel-metadata.json")
 
-    # Push notebook
     try:
-        cmd = [
-            "kaggle", "kernels", "push",
-            "-p", str(NOTEBOOK_PATH.parent)
-        ]
-        print(f"Running: {' '.join(cmd)}")
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=120)
+        from kaggle.api.kaggle_api_extended import KaggleApi
+        api = KaggleApi()
+        api.authenticate()
+        print("  Kaggle API authenticated")
 
-        if result.returncode == 0:
-            print("[OK] Notebook uploaded successfully")
-            print(result.stdout)
+        result = api.kernels_push(str(NOTEBOOK_PATH.parent))
+        print(f"  Push result: {result}")
+
+        if result and result.get("error") is None:
+            url = result.get("url", "unknown")
+            version = result.get("versionNumber", "?")
+            print(f"\n[OK] Notebook uploaded successfully!")
+            print(f"  URL: {url}")
+            print(f"  Version: {version}")
+
+            # Check for invalid competition sources
+            invalid_comps = result.get("invalidCompetitionSources", [])
+            if invalid_comps:
+                print(f"\n[WARN] Competition sources invalid: {invalid_comps}")
+                print(f"  You need to join the competition first:")
+                print(f"  https://www.kaggle.com/competitions/{COMPETITION}")
+                print(f"  After joining, re-push the kernel to associate it with the competition.")
+
             return True
         else:
-            print(f"[ERROR] Upload failed: {result.stderr}")
+            err = result.get("error", "unknown") if result else "no result"
+            print(f"[ERROR] Push failed: {err}")
             return False
+    except ImportError:
+        print("[ERROR] kaggle package not installed. Run: pip install kaggle")
+        return False
     except Exception as e:
         print(f"[ERROR] Upload failed: {e}")
+        print("\n  Fallback: try CLI directly:")
+        print(f"  kaggle kernels push -p {NOTEBOOK_PATH.parent}")
         return False
 
 
