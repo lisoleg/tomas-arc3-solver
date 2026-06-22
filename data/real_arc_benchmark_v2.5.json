@@ -1,0 +1,702 @@
+[
+  {
+    "task": "007bbfb7",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      3,
+      3
+    ],
+    "expected_shape": [
+      9,
+      9
+    ]
+  },
+  {
+    "task": "00d62c1b",
+    "correct": true,
+    "num_valid": 1,
+    "best_mdl": 999,
+    "pred_shape": [
+      20,
+      20
+    ],
+    "expected_shape": [
+      20,
+      20
+    ]
+  },
+  {
+    "task": "017c7c7b",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      6,
+      3
+    ],
+    "expected_shape": [
+      9,
+      3
+    ]
+  },
+  {
+    "task": "025d127b",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "045e512c",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      21,
+      21
+    ],
+    "expected_shape": [
+      21,
+      21
+    ]
+  },
+  {
+    "task": "0520fde7",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      3,
+      7
+    ],
+    "expected_shape": [
+      3,
+      3
+    ]
+  },
+  {
+    "task": "05269061",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      7,
+      7
+    ],
+    "expected_shape": [
+      7,
+      7
+    ]
+  },
+  {
+    "task": "05f2a901",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      11,
+      10
+    ],
+    "expected_shape": [
+      11,
+      10
+    ]
+  },
+  {
+    "task": "06df4c85",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      26,
+      26
+    ],
+    "expected_shape": [
+      26,
+      26
+    ]
+  },
+  {
+    "task": "08ed6ac7",
+    "correct": true,
+    "num_valid": 31,
+    "best_mdl": 999,
+    "pred_shape": [
+      9,
+      9
+    ],
+    "expected_shape": [
+      9,
+      9
+    ]
+  },
+  {
+    "task": "09629e4f",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      11,
+      11
+    ],
+    "expected_shape": [
+      11,
+      11
+    ]
+  },
+  {
+    "task": "0962bcdd",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      12,
+      12
+    ],
+    "expected_shape": [
+      12,
+      12
+    ]
+  },
+  {
+    "task": "0a938d79",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      11,
+      27
+    ],
+    "expected_shape": [
+      11,
+      27
+    ]
+  },
+  {
+    "task": "0b148d64",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      15,
+      17
+    ],
+    "expected_shape": [
+      6,
+      6
+    ]
+  },
+  {
+    "task": "0ca9ddb6",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      9,
+      9
+    ],
+    "expected_shape": [
+      9,
+      9
+    ]
+  },
+  {
+    "task": "0d3d703e",
+    "correct": true,
+    "num_valid": 2,
+    "best_mdl": 999,
+    "pred_shape": [
+      3,
+      3
+    ],
+    "expected_shape": [
+      3,
+      3
+    ]
+  },
+  {
+    "task": "0dfd9992",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      21,
+      21
+    ],
+    "expected_shape": [
+      21,
+      21
+    ]
+  },
+  {
+    "task": "0e206a2e",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      24,
+      19
+    ],
+    "expected_shape": [
+      24,
+      19
+    ]
+  },
+  {
+    "task": "10fcaaa3",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      6,
+      5
+    ],
+    "expected_shape": [
+      12,
+      10
+    ]
+  },
+  {
+    "task": "11852cab",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "1190e5a7",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      22,
+      22
+    ],
+    "expected_shape": [
+      5,
+      3
+    ]
+  },
+  {
+    "task": "137eaa0f",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      11,
+      11
+    ],
+    "expected_shape": [
+      3,
+      3
+    ]
+  },
+  {
+    "task": "150deff5",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      8,
+      11
+    ],
+    "expected_shape": [
+      8,
+      11
+    ]
+  },
+  {
+    "task": "178fcbfb",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      12,
+      11
+    ],
+    "expected_shape": [
+      12,
+      11
+    ]
+  },
+  {
+    "task": "1a07d186",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      19,
+      26
+    ],
+    "expected_shape": [
+      19,
+      26
+    ]
+  },
+  {
+    "task": "1b2d62fb",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      5,
+      7
+    ],
+    "expected_shape": [
+      5,
+      3
+    ]
+  },
+  {
+    "task": "1b60fb0c",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "1bfc4729",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "1c786137",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      17,
+      16
+    ],
+    "expected_shape": [
+      8,
+      9
+    ]
+  },
+  {
+    "task": "1caeab9d",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "1cf80156",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      12,
+      12
+    ],
+    "expected_shape": [
+      4,
+      6
+    ]
+  },
+  {
+    "task": "1e0a9b12",
+    "correct": true,
+    "num_valid": 1,
+    "best_mdl": 999,
+    "pred_shape": [
+      5,
+      5
+    ],
+    "expected_shape": [
+      5,
+      5
+    ]
+  },
+  {
+    "task": "1e32b0e9",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      17,
+      17
+    ],
+    "expected_shape": [
+      17,
+      17
+    ]
+  },
+  {
+    "task": "1f0c79e5",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      9,
+      9
+    ],
+    "expected_shape": [
+      9,
+      9
+    ]
+  },
+  {
+    "task": "1f642eb9",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "1f85a75f",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      30,
+      30
+    ],
+    "expected_shape": [
+      4,
+      4
+    ]
+  },
+  {
+    "task": "1f876c06",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "1fad071e",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      9,
+      9
+    ],
+    "expected_shape": [
+      1,
+      5
+    ]
+  },
+  {
+    "task": "2013d3e2",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      3,
+      3
+    ]
+  },
+  {
+    "task": "2204b7a8",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "22168020",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "22233c11",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "2281f1f4",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "228f6490",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "22eb0ac0",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      10,
+      10
+    ],
+    "expected_shape": [
+      10,
+      10
+    ]
+  },
+  {
+    "task": "234bbc79",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      3,
+      11
+    ],
+    "expected_shape": [
+      3,
+      8
+    ]
+  },
+  {
+    "task": "23581191",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      9,
+      9
+    ],
+    "expected_shape": [
+      9,
+      9
+    ]
+  },
+  {
+    "task": "239be575",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      8,
+      6
+    ],
+    "expected_shape": [
+      1,
+      1
+    ]
+  },
+  {
+    "task": "23b5c85d",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      18,
+      18
+    ],
+    "expected_shape": [
+      3,
+      3
+    ]
+  },
+  {
+    "task": "253bf280",
+    "correct": false,
+    "num_valid": 0,
+    "best_mdl": 999,
+    "pred_shape": [
+      12,
+      13
+    ],
+    "expected_shape": [
+      12,
+      13
+    ]
+  }
+]

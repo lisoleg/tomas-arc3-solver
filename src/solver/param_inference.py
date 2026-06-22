@@ -70,6 +70,11 @@ class ParamInference:
         candidates.extend(self._gen_move_copy(features))
         candidates.extend(self._gen_crop_resize(features))
         candidates.extend(self._gen_fill_ops(features))
+        # v2.6: New inference methods
+        candidates.extend(self._gen_multi_swap(features))
+        candidates.extend(self._gen_map_by_function(features))
+        candidates.extend(self._gen_complete_pattern(features))
+        candidates.extend(self._gen_shift_object(features))
 
         # Generate two-primitive chains (depth 2) for common combos
         candidates.extend(self._gen_chain_candidates(features))
@@ -732,3 +737,261 @@ class ParamInference:
         for child in node.children:
             parts.append(self._node_signature(child))
         return f"{node.combo_type}|{'->'.join(parts)}"
+
+    # ============================================================
+    # v2.6: New inference methods for enhanced primitives
+    # ============================================================
+
+    def _infer_swap_pairs(
+        self, demo_pairs: list[dict[str, Any]]
+    ) -> list[list[int]] | None:
+        """Infer multiple color swap pairs from demo pairs.
+
+        Args:
+            demo_pairs: List of demo pairs.
+
+        Returns:
+            List of [color_a, color_b] pairs, or None if not applicable.
+        """
+        try:
+            # Collect all color mappings across pairs
+            all_mappings = []
+            for pair in demo_pairs:
+                inp = pair["input"][0]
+                out = pair["output"][0]
+                if inp.shape != out.shape:
+                    return None
+                mapping = {}
+                for i in range(inp.shape[0]):
+                    for j in range(inp.shape[1]):
+                        if inp[i,j] != out[i,j]:
+                            mapping[int(inp[i,j])] = int(out[i,j])
+                all_mappings.append(mapping)
+            
+            if not all_mappings:
+                return None
+            
+            # Check if all mappings are consistent swaps
+            # A swap means: if a->b, then b->a in some other pair
+            swap_pairs = []
+            processed = set()
+            
+            # Collect all mapped colors
+            all_colors = set()
+            for m in all_mappings:
+                all_colors.update(m.keys())
+                all_colors.update(m.values())
+            
+            # Try to find swap pairs
+            for c in sorted(all_colors):
+                if c in processed:
+                    continue
+                # Find what c maps to
+                targets = set()
+                for m in all_mappings:
+                    if c in m:
+                        targets.add(m[c])
+                
+                if len(targets) == 1:
+                    target = targets.pop()
+                    # Check if target maps back to c
+                    target_maps_to_c = False
+                    for m in all_mappings:
+                        if target in m and m[target] == c:
+                            target_maps_to_c = True
+                            break
+                    
+                    if target_maps_to_c:
+                        swap_pairs.append([c, target])
+                        processed.add(c)
+                        processed.add(target)
+            
+            return swap_pairs if swap_pairs else None
+        except Exception:
+            return None
+
+    def _gen_multi_swap(self, features: dict[str, Any]) -> list[ProgramNode]:
+        """Generate multi-swap candidates.
+
+        Args:
+            features: Extracted features.
+
+        Returns:
+            List of ProgramNode candidates.
+        """
+        candidates: list[ProgramNode] = []
+
+        if not features.get("size_same", False):
+            return candidates
+
+        # Try to infer swap pairs from pairs
+        pairs = features.get("pairs", [])
+        if not pairs:
+            return candidates
+
+        demo_pairs = []
+        for p in pairs:
+            inp = p.get("input", None)
+            out = p.get("output", None)
+            if inp is not None and out is not None:
+                demo_pairs.append({"input": [inp], "output": [out]})
+
+        swap_pairs = self._infer_swap_pairs(demo_pairs)
+        if swap_pairs:
+            candidates.append(
+                ProgramNode(DSLElement("multi-swap", {"swap_pairs": swap_pairs}))
+            )
+        
+        # Also try heuristic: pair (1,5), (2,6), (3,7), (4,8), (9,0)
+        heuristic_pairs = []
+        for c in range(10):
+            pair = (c + 4) % 10
+            if [c, pair] not in heuristic_pairs and [pair, c] not in heuristic_pairs:
+                heuristic_pairs.append([c, pair])
+        
+        candidates.append(
+            ProgramNode(DSLElement("multi-swap", {"swap_pairs": heuristic_pairs}))
+        )
+
+        return candidates
+
+    def _gen_map_by_function(self, features: dict[str, Any]) -> list[ProgramNode]:
+        """Generate map-by-function candidates.
+
+        Args:
+            features: Extracted features.
+
+        Returns:
+            List of ProgramNode candidates.
+        """
+        candidates: list[ProgramNode] = []
+
+        if not features.get("size_same", False):
+            return candidates
+
+        pairs = features.get("pairs", [])
+        if not pairs:
+            return candidates
+
+        # Try to infer a mathematical mapping
+        # Check if output = (input + const) % 10
+        for const in range(1, 10):
+            all_match = True
+            for p in pairs:
+                inp = p["input"]
+                out = p["output"]
+                if inp.shape != out.shape:
+                    all_match = False
+                    break
+                # Check if out = (inp + const) % 10 for all non-zero
+                for i in range(inp.shape[0]):
+                    for j in range(inp.shape[1]):
+                        if inp[i,j] != 0:
+                            expected = (inp[i,j] + const) % 10
+                            if out[i,j] != expected:
+                                all_match = False
+                                break
+                    if not all_match:
+                        break
+                if not all_match:
+                    break
+            
+            if all_match:
+                candidates.append(
+                    ProgramNode(DSLElement("map-by-function", {
+                        "func_type": "add",
+                        "value": const,
+                        "modulo": 10,
+                    }))
+                )
+        
+        # Check if output = (input - const) % 10
+        for const in range(1, 10):
+            all_match = True
+            for p in pairs:
+                inp = p["input"]
+                out = p["output"]
+                if inp.shape != out.shape:
+                    all_match = False
+                    break
+                for i in range(inp.shape[0]):
+                    for j in range(inp.shape[1]):
+                        if inp[i,j] != 0:
+                            expected = (inp[i,j] - const) % 10
+                            if out[i,j] != expected:
+                                all_match = False
+                                break
+                    if not all_match:
+                        break
+                if not all_match:
+                    break
+            
+            if all_match:
+                candidates.append(
+                    ProgramNode(DSLElement("map-by-function", {
+                        "func_type": "sub",
+                        "value": const,
+                        "modulo": 10,
+                    }))
+                )
+        
+        # Also add "inv_mod" (swap pairs) as candidate
+        candidates.append(
+            ProgramNode(DSLElement("map-by-function", {
+                "func_type": "inv_mod",
+                "value": 0,
+                "modulo": 10,
+            }))
+        )
+
+        return candidates
+
+    def _gen_complete_pattern(self, features: dict[str, Any]) -> list[ProgramNode]:
+        """Generate complete-pattern candidates.
+
+        Args:
+            features: Extracted features.
+
+        Returns:
+            List of ProgramNode candidates.
+        """
+        candidates: list[ProgramNode] = []
+
+        # Always add complete-pattern as a candidate
+        # (it will be filtered by verification)
+        candidates.append(ProgramNode(DSLElement("complete-pattern")))
+
+        return candidates
+
+    def _gen_shift_object(self, features: dict[str, Any]) -> list[ProgramNode]:
+        """Generate shift-object candidates.
+
+        Args:
+            features: Extracted features.
+
+        Returns:
+            List of ProgramNode candidates.
+        """
+        candidates: list[ProgramNode] = []
+
+        if not features.get("size_same", False):
+            return candidates
+
+        pairs = features.get("pairs", [])
+        if len(pairs) < 1:
+            return candidates
+
+        # Try to find a consistent object shift
+        inp = pairs[0]["input"]
+        out = pairs[0]["output"]
+
+        # Find move offset for the entire grid
+        offset = self._find_move_offset(inp, out)
+        if offset:
+            dx, dy = offset
+            # Use move primitive (which shifts all non-zero pixels)
+            candidates.append(
+                ProgramNode(DSLElement("move", {"dx": dx, "dy": dy}))
+            )
+
+        return candidates

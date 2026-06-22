@@ -431,6 +431,34 @@ def _color_swap(grid: np.ndarray, color_a: int = 0, color_b: int = 1, **_: Any) 
     return result
 
 
+def _multi_swap(grid: np.ndarray, swap_pairs: list[list[int]] | None = None, **_: Any) -> np.ndarray:
+    """Swap multiple color pairs at once.
+    
+    Args:
+        swap_pairs: List of [color_a, color_b] pairs to swap.
+                    If None, tries to infer from grid.
+    """
+    result = grid.copy()
+    if swap_pairs is None:
+        # Try to infer: find all non-zero colors and pair them
+        # This is a heuristic: pair (1,5), (2,6), (3,7), (4,8), (9,0)
+        non_zero = sorted(set(grid.flatten()) - {0})
+        swap_pairs = []
+        for c in non_zero:
+            pair = (c + 4) % 10
+            if pair in non_zero and [pair, c] not in swap_pairs:
+                swap_pairs.append([c, pair])
+    
+    if swap_pairs:
+        for a, b in swap_pairs:
+            mask_a = result == a
+            mask_b = result == b
+            result[mask_a] = b
+            result[mask_b] = a
+    
+    return result
+
+
 def _mirror(grid: np.ndarray, axis: str = "horizontal", **_: Any) -> np.ndarray:
     """Mirror the grid along an axis."""
     if axis == "horizontal":
@@ -770,6 +798,94 @@ def _draw_line(grid: np.ndarray, x1: int = 0, y1: int = 0, x2: int = 0, y2: int 
     return result
 
 
+def _shift_object(grid: np.ndarray, color: int = 1, dx: int = 0, dy: int = 0, **_: Any) -> np.ndarray:
+    """Shift an object (connected component of given color) by (dx, dy)."""
+    result = grid.copy()
+    binary = (grid == color).astype(np.int8)
+    if not np.any(binary):
+        return result
+    # Find bounding box of the object
+    rows = np.where(np.any(binary, axis=1))[0]
+    cols = np.where(np.any(binary, axis=0))[0]
+    if len(rows) == 0 or len(cols) == 0:
+        return result
+    min_r, max_r = rows[0], rows[-1]
+    min_c, max_c = cols[0], cols[-1]
+    # Extract object
+    obj = result[min_r:max_r+1, min_c:max_c+1].copy()
+    # Clear original position
+    result[min_r:max_r+1, min_c:max_c+1][binary[min_r:max_r+1, min_c:max_c+1] == 1] = 0
+    # Place at new position
+    new_r = min_r + dy
+    new_c = min_c + dx
+    if 0 <= new_r and 0 <= new_c:
+        end_r = min(new_r + obj.shape[0], grid.shape[0])
+        end_c = min(new_c + obj.shape[1], grid.shape[1])
+        if end_r > new_r and end_c > new_c:
+            result[new_r:end_r, new_c:end_c] = obj[:end_r-new_r, :end_c-new_c]
+    return result
+
+
+def _complete_pattern(grid: np.ndarray, **_: Any) -> np.ndarray:
+    """Detect periodic pattern in input and complete it to fill the grid."""
+    result = grid.copy()
+    h, w = grid.shape
+    
+    # Try to detect a repeating pattern
+    # Look for non-zero regions that could be pattern seeds
+    non_zero = grid != 0
+    if not np.any(non_zero):
+        return result
+    
+    # Find the pattern from the first non-zero region
+    rows = np.where(np.any(non_zero, axis=1))[0]
+    cols = np.where(np.any(non_zero, axis=0))[0]
+    if len(rows) == 0 or len(cols) == 0:
+        return result
+    
+    min_r, max_r = rows[0], rows[-1]
+    min_c, max_c = cols[0], cols[-1]
+    
+    # Extract pattern (bounding box of non-zero)
+    pattern = grid[min_r:max_r+1, min_c:max_c+1].copy()
+    ph, pw = pattern.shape
+    
+    # Tile the pattern across the grid
+    for r in range(0, h, ph):
+        for c in range(0, w, pw):
+            end_r = min(r + ph, h)
+            end_c = min(c + pw, w)
+            result[r:end_r, c:end_c] = pattern[:end_r-r, :end_c-c]
+    
+    return result
+
+
+def _map_by_function(grid: np.ndarray, func_type: str = "add", value: int = 1, modulo: int = 10, **_: Any) -> np.ndarray:
+    """Map colors by a function: new = f(old).
+    
+    Args:
+        func_type: 'add', 'sub', 'mul', 'mod', 'inv_mod'
+        value: parameter for the function
+        modulo: modulo base (usualy 10 for ARC)
+    """
+    result = grid.copy()
+    mask = grid != 0  # Only map non-background colors
+    
+    if func_type == "add":
+        result[mask] = (result[mask] + value) % modulo
+    elif func_type == "sub":
+        result[mask] = (result[mask] - value) % modulo
+    elif func_type == "mul":
+        result[mask] = (result[mask] * value) % modulo
+    elif func_type == "mod":
+        result[mask] = result[mask] % value
+    elif func_type == "inv_mod":
+        # Map X to Y such that X + Y = modulo - 1 (swap pairs)
+        result[mask] = (modulo - 1 - result[mask]) % modulo
+    
+    return result
+
+
 # ============================================================
 # Register all primitives
 # ============================================================
@@ -807,6 +923,11 @@ def _register_primitives() -> None:
         "histogram": _histogram,
         "find-objects": _find_objects,
         "draw-line": _draw_line,
+        # New primitives v2.6
+        "multi-swap": _multi_swap,
+        "shift-object": _shift_object,
+        "complete-pattern": _complete_pattern,
+        "map-by-function": _map_by_function,
     }
 
 
