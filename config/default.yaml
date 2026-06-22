@@ -156,16 +156,15 @@ pruning:
 psi_gate:
   enabled: true                  # ✅ v2.4: enable ψ-Gate (replaces simple fusion)
   use_default_anchors: true     # use default anchor set (topo_invariance, etc.)
-  tolerance_decay_rate: 0.03      # τ for soft-fail tolerance decay (lowered for stricter matching)
+  tolerance_decay_rate: 0.05      # τ for soft-fail tolerance decay
   verbose: false
-  enable_multi_world: true      # ✅ v2.4.1: enable multi-world hypothesis tracking
 
 # --- AEGIS Program Evolution Engine ---
 aegis:
-  enabled: true                  # ✅ v2.4.1: ENABLE AEGIS (was false!)
-  population_size: 30            # candidates per generation (increased from 20)
-  num_generations: 5             # evolution generations (increased from 3)
-  mutation_rate: 0.15            # lowered for stability (was 0.3)
+  enabled: false                 # set true to upgrade κ-Snap to evolution search
+  population_size: 20            # candidates per generation
+  num_generations: 5             # evolution generations
+  mutation_rate: 0.3
   crossover_rate: 0.5
   elitism_count: 3
   mdl_weight: 0.4
@@ -175,18 +174,10 @@ aegis:
 
 # --- Causal DSL Prior ---
 causal_prior:
-  enabled: true                  # ✅ v2.4.1: ENABLE causal prior (was false!)
+  enabled: false                 # set true to guide heuristic_order with causal graph
   history_path: "logs/solver_history.json"
   strictness: "moderate"         # "lenient" | "moderate" | "strict"
   verbose: false
-
-# --- Library Learning (v2.4.1) ---
-library_learning:
-  enabled: true                  # ✅ v2.4.1: ENABLE library learning
-  persistence_path: "library.json"
-  frequency_threshold: 3       # pattern must appear ≥3 times to be added
-  max_abstractions: 200
-  enable_cross_task_transfer: true  # transfer patterns between tasks
 
 # --- RHAE Evaluation (ARC-AGI-3) ---
 eval:

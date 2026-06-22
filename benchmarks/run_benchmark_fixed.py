@@ -1,13 +1,10 @@
 #!/usr/bin/env python
-"""TOMAS ARC-AGI-3 Solver Performance Benchmark
+"""TOMAS benchmark with proper config handling.
 
-Comprehensive benchmark comparing:
-1. psi-Gate enabled vs disabled (search quality, confidence, timing)
-2. AEGIS evolution vs normal search (success rate, convergence)
-3. Causal DSL prior enabled vs disabled (heuristic ordering quality)
-
-Usage:
-    python benchmarks/run_benchmark.py [--tasks data/]
+Fixes:
+- Pass full config to solver (not just search section)
+- Properly merge config sections for KappaSnapSearcher
+- Enable/disable psi_gate, aegis, causal_prior correctly
 """
 
 from __future__ import annotations
@@ -28,7 +25,30 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))
 
 from src.utils.config import ConfigLoader
-from src.core.dsl_primitives import ProgramNode
+
+
+def merge_config_for_searcher(config: dict[str, Any]) -> dict[str, Any]:
+    """Merge nested config sections into flat structure for KappaSnapSearcher.
+    
+    KappaSnapSearcher expects flat config:
+    - max_depth, mdl_threshold, etc. at top level
+    - cuda config at config['cuda']
+    - pruning config at config['pruning']
+    
+    But our YAML has them under 'search:' section.
+    This function merges them properly.
+    """
+    merged = copy.deepcopy(config)
+    
+    # Merge search section into top level
+    search_cfg = config.get("search", {})
+    for key, value in search_cfg.items():
+        merged[key] = value
+    
+    # Keep psi_gate, aegis, causal_prior at top level (solver will read them)
+    # They are already at top level in config, so no need to move them
+    
+    return merged
 
 
 def load_tasks(data_dir: str = "data") -> list[dict[str, Any]]:
@@ -64,14 +84,9 @@ def run_single_benchmark(
     task_name: str,
     config_name: str,
 ) -> dict[str, Any]:
-    """Run a single benchmark with given config and demo pairs.
-
-    Returns metrics dict.
-    """
-    from src.solver.kappa_snap_searcher import KappaSnapSearcher
-    from src.solver.gaussex_verifier import GaussExVerifier
-    from src.solver.bayesian_confidence import BayesianConfidence
-
+    """Run a single benchmark with given config and demo pairs."""
+    from src.solver.tomas_solver import TOMASSolver
+    
     start_time = time.time()
 
     result: dict[str, Any] = {
@@ -82,44 +97,27 @@ def run_single_benchmark(
     }
 
     try:
-        # Create searcher with config - PASS FULL CONFIG, not just search section
-        # The searcher needs psi_gate, aegis, causal_prior settings from top-level config
-        searcher = KappaSnapSearcher(config)
-
-        # Run search
+        # Use TOMASSolver which properly handles config
+        solver = TOMASSolver(config)
+        
+        # Run solve
         search_start = time.time()
-        candidates = searcher.search(demo_pairs)
+        solution = solver.solve(demo_pairs)
         search_time = time.time() - search_start
 
-        # Get pruning stats if available
-        pruning_stats = {}
-        if searcher.pruning is not None:
-            pruning_stats = dict(searcher.pruning.stats)
-
-        # Get ENPV stats
-        enpv_stats = {
-            "total_evaluations": getattr(searcher.enpv, "_eval_count", 0),
-            "early_terminated": getattr(searcher.enpv, "_early_terminated", False),
-        }
-
-        # Bayesian ranking
-        bayes = BayesianConfidence(config.get("bayesian", {}))
-        ranked = bayes.rank_candidates(candidates, demo_pairs)
-
-        # Top candidate
-        top_confidence = ranked[0][1] if ranked else 0.0
-        top_mdl = ranked[0][0].total_mdl if ranked else 0
-
-        # Check accuracy: does top candidate produce correct output?
+        # Get stats from solver
+        searcher = solver.searcher
+        
+        # Check correctness
         correct = False
-        if ranked:
-            top_prog = ranked[0][0]
+        if solution and solution.get("program"):
+            prog = solution["program"]
             try:
                 all_correct = True
                 for pair in demo_pairs:
                     for i, inp in enumerate(pair["input"]):
                         if i < len(pair["output"]):
-                            predicted = top_prog.apply(inp)
+                            predicted = prog.apply(inp)
                             expected = pair["output"][i]
                             if not np.array_equal(predicted, expected):
                                 all_correct = False
@@ -131,19 +129,22 @@ def run_single_benchmark(
                 correct = False
 
         total_time = time.time() - start_time
+        
+        # Get candidate count from searcher
+        candidates = getattr(searcher, '_last_candidates', [])
+        top_confidence = solution.get("confidence", 0.0) if solution else 0.0
+        top_mdl = solution.get("mdl", 0) if solution else 0
 
         result.update({
             "status": "completed",
             "search_time_sec": round(search_time, 4),
             "total_time_sec": round(total_time, 4),
             "total_candidates": len(candidates),
-            "ranked_candidates": len(ranked),
+            "ranked_candidates": len(candidates),
             "top_confidence": round(top_confidence, 4),
             "top_mdl": top_mdl,
             "correct": correct,
-            "pruning_stats": pruning_stats,
-            "enpv_stats": enpv_stats,
-            "cuda_backend": searcher._cuda_backend,
+            "cuda_backend": getattr(searcher, '_cuda_backend', 'none'),
         })
 
     except Exception as e:
@@ -279,6 +280,7 @@ def generate_report(
     lines.append("")
     lines.append(f"**Generated**: {time.strftime('%Y-%m-%d %H:%M:%S')}")
     lines.append(f"**Tasks**: {len(set(r.get('task', '') for r in psi_gate_results))}")
+    lines.append(f"**Config**: search.max_depth={psi_gate_results[0].get('config', {}).get('max_depth', 'N/A') if psi_gate_results else 'N/A'}")
     lines.append("")
 
     # Helper to aggregate results
@@ -425,26 +427,8 @@ def generate_report(
 
     lines.append("")
 
-    # 5. Pruning statistics
-    lines.append("## 5. Pruning Statistics")
-    lines.append("")
-    pruning_examples = [
-        r for r in psi_gate_results
-        if r.get("pruning_stats") and r.get("status") == "completed"
-    ]
-    if pruning_examples:
-        first = pruning_examples[0]
-        lines.append(f"**Task**: {first['task']} | **Config**: {first['config']}")
-        lines.append("")
-        lines.append("| Strategy | Count Pruned |")
-        lines.append("|----------|-------------|")
-        for key, val in first["pruning_stats"].items():
-            lines.append(f"| {key} | {val} |")
-
-    lines.append("")
-
-    # 6. Conclusions
-    lines.append("## 6. Conclusions")
+    # 5. Conclusions
+    lines.append("## 5. Conclusions")
     lines.append("")
     if agg_enabled.get("count", 0) > 0 and agg_disabled.get("count", 0) > 0:
         if agg_enabled["accuracy"] > agg_disabled["accuracy"]:
@@ -469,13 +453,16 @@ def generate_report(
 def main():
     """Main benchmark entry point."""
     print("=" * 60)
-    print("TOMAS ARC-AGI-3 Solver Performance Benchmark")
+    print("TOMAS ARC-AGI-3 Solver Performance Benchmark (Fixed)")
     print("=" * 60)
 
     # Load config
     config_path = PROJECT_ROOT / "config" / "default.yaml"
     config = ConfigLoader.load(str(config_path))
     print(f"Config loaded from: {config_path}")
+    print(f"  search.max_depth: {config.get('search', {}).get('max_depth', 'N/A')}")
+    print(f"  psi_gate.enabled: {config.get('psi_gate', {}).get('enabled', 'N/A')}")
+    print(f"  aegis.enabled: {config.get('aegis', {}).get('enabled', 'N/A')}")
 
     # Load tasks
     tasks = load_tasks("data")
