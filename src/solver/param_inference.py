@@ -78,6 +78,12 @@ class ParamInference:
         # v2.4.5: Object extraction primitives (no parameters needed)
         candidates.append(ProgramNode(DSLElement("extract-largest-object")))
         candidates.append(ProgramNode(DSLElement("extract-smallest-object")))
+        # v2.4.6: New primitives
+        candidates.extend(self._gen_invert_colors(features))
+        candidates.extend(self._gen_fill_connected(features))
+        candidates.extend(self._gen_recolor_by_cc(features))
+        candidates.extend(self._gen_tile_repeat(features))
+        candidates.extend(self._gen_scale_pattern(features))
 
         # Generate two-primitive chains (depth 2) for common combos
         candidates.extend(self._gen_chain_candidates(features))
@@ -1032,4 +1038,58 @@ class ParamInference:
                 ProgramNode(DSLElement("move", {"dx": dx, "dy": dy}))
             )
 
+        return candidates
+
+    # ======== v2.4.6 New inference methods ========
+
+    def _gen_invert_colors(self, features: dict) -> list:
+        """Generate invert-colors candidates (no parameters)."""
+        return [ProgramNode(DSLElement("invert-colors"))]
+
+    def _gen_fill_connected(self, features: dict) -> list:
+        """Generate fill-connected candidates (try all non-zero colors)."""
+        candidates = []
+        pairs = features.get("pairs", [])
+        if not pairs:
+            return candidates
+        inp = pairs[0]["input"]
+        colors = np.unique(inp)
+        for c in colors:
+            if c == 0:
+                continue
+            candidates.append(ProgramNode(DSLElement("fill-connected", {"color": int(c)})))
+        return candidates
+
+    def _gen_recolor_by_cc(self, features: dict) -> list:
+        """Generate recolor-by-cc candidates (no parameters)."""
+        return [ProgramNode(DSLElement("recolor-by-cc"))]
+
+    def _gen_tile_repeat(self, features: dict) -> list:
+        """Generate tile-repeat candidates (try repeats=2,3)."""
+        candidates = []
+        for r in [2, 3]:
+            candidates.append(ProgramNode(DSLElement("tile-repeat", {"repeats": r})))
+        return candidates
+
+
+    def _gen_select_obj_by(self, features: dict) -> list:
+        """Generate select-obj-by candidates."""
+        candidates = []
+        for prop in ['size', 'color', 'leftmost', 'rightmost', 'topmost', 'bottommost']:
+            candidates.append(ProgramNode(DSLElement('select-obj-by', {'prop': prop})))
+        return candidates
+
+    def _gen_sort_obj_by(self, features: dict) -> list:
+        """Generate sort-obj-by candidates."""
+        candidates = []
+        for prop in ['size', 'color', 'row', 'col']:
+            candidates.append(ProgramNode(DSLElement('sort-obj-by', {'prop': prop})))
+        return candidates
+
+
+    def _gen_scale_pattern(self, features: dict) -> list:
+        """Generate scale-pattern candidates (try factor=2,3,4)."""
+        candidates = []
+        for factor in [2, 3, 4]:
+            candidates.append(ProgramNode(DSLElement('scale-pattern', {'factor': factor})))
         return candidates

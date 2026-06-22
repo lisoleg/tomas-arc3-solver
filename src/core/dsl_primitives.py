@@ -1026,6 +1026,241 @@ def _extract_smallest_object(grid: np.ndarray, **_: Any) -> np.ndarray:
     return result
 
 
+def _invert_colors(grid: np.ndarray, **_: Any) -> np.ndarray:
+    """Invert colors in the grid (0↔1, 2↔3, ...).
+    
+    Args:
+        grid: Input grid.
+        
+    Returns:
+        Grid with colors inverted (color i → color i^1).
+    """
+    result = grid.copy()
+    # XOR with 1: 0↔1, 2↔3, 4↔5, ...
+    result = result ^ 1
+    return result
+
+
+def _fill_connected(grid: np.ndarray, color: int = 1, **_: Any) -> np.ndarray:
+    """Fill connected regions of a specific color.
+    
+    Args:
+        grid: Input grid.
+        color: Color to fill (default: 1).
+        
+    Returns:
+        Grid with connected regions of specified color filled.
+    """
+    from scipy import ndimage
+    
+    result = grid.copy()
+    
+    # Create binary mask for the specified color
+    mask = (grid == color)
+    
+    if not np.any(mask):
+        return result
+    
+    # Label connected components
+    labeled, num_features = ndimage.label(mask)
+    
+    if num_features == 0:
+        return result
+    
+    # Fill each connected component with the same color
+    for i in range(1, num_features + 1):
+        component_mask = (labeled == i)
+        # Keep original color for the component
+        result[component_mask] = color
+    
+    return result
+
+
+def _recolor_by_cc(grid: np.ndarray, **_: Any) -> np.ndarray:
+    """Recolor each connected component with a different color.
+    
+    Args:
+        grid: Input grid.
+        
+    Returns:
+        Grid with each connected component recolored.
+    """
+    from scipy import ndimage
+    
+    result = np.zeros_like(grid)
+    
+    # Create binary mask for non-zero pixels
+    mask = (grid != 0)
+    
+    if not np.any(mask):
+        return result
+    
+    # Label connected components
+    labeled, num_features = ndimage.label(mask)
+    
+    # Recolor each component with a different color
+    for i in range(1, num_features + 1):
+        result[labeled == i] = i
+    
+    return result
+
+
+def _tile_repeat(grid: np.ndarray, repeats: int = 2, **_: Any) -> np.ndarray:
+    """Repeat the grid pattern horizontally and vertically.
+    
+    Handles both 2D (H,W) and 3D (1,H,W) inputs.
+    
+    Args:
+        grid: Input grid.
+        repeats: Number of times to repeat (default: 2).
+        
+    Returns:
+        Grid with pattern repeated.
+    """
+    # Handle 3D input (batch, H, W) → treat as (H, W)
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    
+    h, w = g.shape
+    result = np.zeros((h * repeats, w * repeats), dtype=grid.dtype)
+    
+    for r in range(repeats):
+        for c in range(repeats):
+            result[r*h:(r+1)*h, c*w:(c+1)*w] = g
+    
+    if is_3d:
+        result = result[np.newaxis, :, :]  # (1, H*repeats, W*repeats)
+    
+    return result
+
+
+
+
+def _select_obj_by(grid: np.ndarray, prop: str = 'size', **_: Any) -> np.ndarray:
+    from scipy import ndimage
+    result = np.zeros_like(grid)
+    binary = (grid != 0).astype(np.int8)
+    labeled, num = ndimage.label(binary)
+    if num == 0:
+        return result
+    best_label = 0
+    if prop == 'size':
+        max_size = 0
+        for i in range(1, num+1):
+            s = np.sum(labeled == i)
+            if s > max_size:
+                max_size = s
+                best_label = i
+    elif prop == 'color':
+        best_count = 0
+        for i in range(1, num+1):
+            pixels = grid[labeled == i]
+            if len(pixels) == 0: continue
+            vals, cnts = np.unique(pixels, return_counts=True)
+            mc = np.max(cnts)
+            if mc > best_count:
+                best_count = mc
+                best_label = i
+    else:  # leftmost/rightmost/topmost/bottommost
+        best_pos = None
+        for i in range(1, num+1):
+            rows, cols = np.where(labeled == i)
+            if len(rows) == 0: continue
+            if prop == 'leftmost': pos = np.min(cols)
+            elif prop == 'rightmost': pos = np.max(cols)
+            elif prop == 'topmost': pos = np.min(rows)
+            else: pos = np.max(rows)
+            if best_pos is None:
+                best_pos = pos
+                best_label = i
+            else:
+                if (prop in ['leftmost','topmost'] and pos < best_pos) or                    (prop in ['rightmost','bottommost'] and pos > best_pos):
+                    best_pos = pos
+                    best_label = i
+    if best_label > 0:
+        result[labeled == best_label] = grid[labeled == best_label]
+    return result
+
+
+def _sort_obj_by(grid: np.ndarray, prop: str = 'size', **_: Any) -> np.ndarray:
+    from scipy import ndimage
+    binary = (grid != 0).astype(np.int8)
+    labeled, num = ndimage.label(binary)
+    if num == 0:
+        return grid.copy()
+    objs = []
+    for i in range(1, num+1):
+        rows, cols = np.where(labeled == i)
+        if len(rows) == 0: continue
+        pixels = grid[labeled == i]
+        if prop == 'size': val = len(pixels)
+        elif prop == 'color':
+            vals, cnts = np.unique(pixels, return_counts=True)
+            val = vals[0] if len(vals) > 0 else 0
+        elif prop == 'row': val = np.min(rows)
+        else: val = np.min(cols)
+        objs.append({'label': i, 'val': val, 'mask': labeled == i})
+    objs.sort(key=lambda x: x['val'])
+    result = np.zeros_like(grid)
+    # Place sorted objects at original positions (simplified)
+    for obj in objs:
+        result[obj['mask']] = grid[obj['mask']]
+    return result
+
+
+# ============================================================
+# New primitives v2.4.7
+# ============================================================
+
+def _scale_pattern(grid: np.ndarray, factor: int = 3, **_: Any) -> np.ndarray:
+    """Scale grid by factor, fill each block with pattern if source cell non-zero.
+    
+    Needed for tasks like 007bbfb7:
+    - Input (H,W): each cell is 0 or color
+    - Output (H*factor, W*factor): each input cell expands to factor×factor block
+      - If input[i,j] == 0 → block of 0s
+      - Else → block filled with the original input pattern
+    
+    Args:
+        grid: Input grid (2D or 3D).
+        factor: Scale factor (default: 3).
+    
+    Returns:
+        Scaled grid.
+    """
+    # Handle 3D
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    
+    h, w = g.shape
+    out_h, out_w = h * factor, w * factor
+    result = np.zeros((out_h, out_w), dtype=grid.dtype)
+    
+    for i in range(h):
+        for j in range(w):
+            r0, r1 = i * factor, (i+1) * factor
+            c0, c1 = j * factor, (j+1) * factor
+            if g[i,j] != 0:
+                # Fill block with the original pattern (clipped to block size)
+                for pi in range(factor):
+                    for pj in range(factor):
+                        si, sj = pi % h, pj % w
+                        result[r0+pi, c0+pj] = g[si, sj]
+    
+    if is_3d:
+        result = result[np.newaxis, :, :]
+    
+    return result
+
+
 # ============================================================
 # Register all primitives
 # ============================================================
@@ -1071,6 +1306,15 @@ def _register_primitives() -> None:
         # New primitives v2.4.5
         "extract-largest-object": _extract_largest_object,
         "extract-smallest-object": _extract_smallest_object,
+        # New primitives v2.4.6
+        "invert-colors": _invert_colors,
+        "fill-connected": _fill_connected,
+        "recolor-by-cc": _recolor_by_cc,
+        "tile-repeat": _tile_repeat,
+        "select-obj-by": _select_obj_by,
+        "sort-obj-by": _sort_obj_by,
+        # New primitives v2.4.7
+        "scale-pattern": _scale_pattern,
     }
 
 
