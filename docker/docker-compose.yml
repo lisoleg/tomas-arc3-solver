@@ -1,0 +1,47 @@
+version: "3.8"
+
+services:
+  tomas-solver:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: tomas-arc3-solver
+    runtime: nvidia
+    environment:
+      - NVIDIA_VISIBLE_DEVICES=all
+      - PYTHONPATH=/app
+      - TOMAS__LOGGING__LOG_DIR=/app/logs
+    volumes:
+      - ../:/app
+      - ../config:/app/config:ro
+      - tomas_logs:/app/logs
+      - tomas_runs:/app/runs
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: >
+      python main.py
+      --mode auto
+      --input /app/data
+      --output /app/submission.json
+      --config /app/config/default.yaml
+
+  tensorboard:
+    image: pytorch/pytorch:2.1.0-cuda12.1-cudnn8-runtime
+    container_name: tomas-tensorboard
+    ports:
+      - "6006:6006"
+    volumes:
+      - tomas_runs:/app/runs:ro
+    command: >
+      bash -c "pip install tensorboard && tensorboard --logdir=/app/runs --host=0.0.0.0 --port=6006"
+    depends_on:
+      - tomas-solver
+
+volumes:
+  tomas_logs:
+  tomas_runs:

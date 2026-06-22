@@ -1,0 +1,92 @@
+# ============================================================
+# TOMAS ARC-AGI-3 Solver — Default Configuration
+# ============================================================
+
+# --- General ---
+general:
+  project_name: "tomas-arc3-solver"
+  version: "1.0.0"
+  random_seed: 42
+
+# --- DSL parameters ---
+dsl:
+  num_primitives: 30
+  max_color_value: 9          # ARC colors 0-9
+  default_grid_dtype: "int8"
+  fail_safe_on_error: true     # return original grid on primitive failure
+
+# --- Search parameters ---
+search:
+  max_depth: 3                 # max composition depth
+  mdl_threshold: 50            # max MDL cost for a valid program
+  time_limit_seconds: 80       # per-task time budget
+  phase_a_target_filter_rate: 0.90  # Phase A should filter 90%+ candidates
+  topo_hash_cache_size: 10000
+
+# --- Bayesian parameters ---
+bayesian:
+  prior_lambda: 0.1            # prior temperature: P(H) ∝ exp(-λ·MDL)
+  noise_sigma: 0.5             # observation noise std dev
+  max_candidates: 100          # max candidates for posterior ranking
+
+# --- Fusion parameters ---
+fusion:
+  alpha: 0.4                   # symbolic weight
+  beta: 0.35                   # visual weight
+  gamma: 0.25                  # cross-modal weight
+  # Degraded weights (when VL unavailable)
+  alpha_degraded: 0.6
+  gamma_degraded: 0.4
+  vl_embedding_dim: 512
+
+# --- Mode auto-switch thresholds ---
+mode_switch:
+  video_time_threshold: 40     # <40s → video mode
+  bayesian_time_threshold: 80  # 40-80s → bayesian; >80s → fusion
+  video_complexity_threshold: 2
+  bayesian_complexity_threshold: 4
+
+# --- GPU parameters ---
+gpu:
+  device: "auto"               # auto / cuda:0 / cpu
+  max_vram_gb: 16              # T4 16GB limit
+  initial_batch_size: 32
+  min_batch_size: 1
+  amp_enabled: true            # automatic mixed precision
+  checkpoint_enabled: true     # gradient checkpointing
+  int8_enabled: false          # INT8 quantization
+  frame_diff_threshold: 0.01   # static frame pre-filter threshold
+
+# --- VL API ---
+vl_api:
+  api_key: ""                  # DeepSeek API key placeholder
+  base_url: "https://api.deepseek.com/v1"
+  model_name: "deepseek-vl"
+  chat_model: "deepseek-chat"
+  reasoner_model: "deepseek-reasoner"
+  timeout_seconds: 30
+  max_retries: 3
+  available: false             # set true if API is reachable
+
+# --- Library Learning ---
+library:
+  persistence_path: "library.json"
+  frequency_threshold: 3       # pattern must appear ≥3 times to be added
+  max_abstractions: 200
+
+# --- Logging ---
+logging:
+  level: "INFO"
+  audit_log_path: "logs/kappa_snap_audit.jsonl"
+  log_dir: "logs"
+
+# --- TensorBoard ---
+tensorboard:
+  log_dir: "runs/tomas_arc3"
+  flush_secs: 10
+
+# --- Kaggle ---
+kaggle:
+  input_dir: "/kaggle/input/arc-agi-3"
+  output_dir: "/kaggle/working"
+  submission_filename: "submission.json"
