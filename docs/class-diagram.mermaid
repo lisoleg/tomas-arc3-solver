@@ -1,0 +1,220 @@
+classDiagram
+    %% ===== 核心数据结构 =====
+    class ProgramNode {
+        +DSLElement|None element
+        +list~ProgramNode~ children
+        +str combo_type
+        +int total_mdl
+        +apply(grid) ndarray
+        +compute_mdl() int
+        +flatten() list~DSLElement~
+        +clone() ProgramNode
+        +to_dict() dict
+    }
+
+    class DSLElement {
+        +str name
+        +dict params
+        +int mdl_cost
+        +str octonion_transform
+        +ProgramNode|None subtree
+        +apply(grid) ndarray
+        +clone() DSLElement
+        +to_dict() dict
+        +from_dict(d) DSLElement
+    }
+
+    %% ===== κ-Snap 搜索器 =====
+    class SnapResult {
+        <<enumeration>>
+        MANIFESTED
+        REJECT_DZ
+        SUSPEND_MUS
+        REJECT_FTEL
+    }
+
+    class CandidateProgram {
+        +str candidate_id
+        +ProgramNode program
+        +float ftel_score
+        +float similarity
+        +bool is_dead_zero
+        +bool mus_conflict
+        +dict features
+        +timestamp float
+    }
+
+    class ManifestedSolution {
+        +str solution_id
+        +ProgramNode program
+        +float ftel_score
+        +str psi_anchor
+        +float snap_timestamp
+        +dict verification_result
+    }
+
+    class SnapEvent {
+        +str event_id
+        +str candidate_id
+        +SnapResult result
+        +str reason
+        +float timestamp
+        +ManifestedSolution|None manifested
+        +to_dict() dict
+    }
+
+    class KSnapAbductiveSearcher {
+        -KappaSnapSearcher _candidate_generator
+        -GaussExVerifier _verifier
+        -TopoHashFilter _topo_filter
+        -float _theta_ftel
+        -float _theta_dead_zero
+        -float _time_limit
+        -list~SnapEvent~ _causal_log
+        -dict~str, ManifestedSolution~ _manifested_solutions
+        -list~CandidateProgram~ _latent_pool
+        -float _start_time
+        +__init__(config, library, candidate_generator)
+        +search(demo_pairs) list~ProgramNode~
+        -_generate_candidates(demo_pairs) list~CandidateProgram~
+        -_compute_ftel(program, demo_pairs) float
+        -_check_dead_zero(program, demo_pairs) tuple~bool, str~
+        -_check_mus(candidates) dict~str, list~
+        -_execute_snap(candidate, demo_pairs) SnapEvent
+        -_batch_snap(candidates, demo_pairs) list~SnapEvent~
+        +get_causal_log() list~SnapEvent~
+        +get_stats() dict
+        -_is_timeout() bool
+    }
+
+    %% ===== Library Learning 升级 =====
+    class SubExpression {
+        +str canonical_hash
+        +ProgramNode subtree
+        +int frequency
+        +int mdl_gain
+        +int depth
+        +str signature
+    }
+
+    class LibraryLearning {
+        +dict library
+        +int frequency_threshold
+        +str persistence_path
+        +int max_abstractions
+        -dict _pattern_counts
+        -int max_ast_depth
+        -int max_total_subexprs
+        -int min_freq
+        -int mdl_gain_threshold
+        -int max_new_per_sleep
+        +extract_patterns(solved_programs) list~DSLElement~
+        +add_to_library(pattern) void
+        +match_library(deltaT) DSLElement|None
+        +save() void
+        +load() void
+        +get_abstractions() list~DSLElement~
+        +get_size() int
+        +clear() void
+        +extract_subexpressions(prog, max_ast_depth) list~SubExpression~
+        +compute_mdl_gain(subexpr, frequency) int
+        +sleep_step(solved_programs) list~DSLElement~
+        -_canonicalize_subtree(node) str
+        -_count_subexpressions(subexprs) dict~str, SubExpression~
+        -_filter_and_rank(subexprs) list~SubExpression~
+        -_register_new_primitive(subexpr) DSLElement
+    }
+
+    %% ===== 持续学习管线 =====
+    class EpochResult {
+        +int epoch
+        +float accuracy
+        +int solved_count
+        +int total_tasks
+        +int new_primitives_added
+        +int library_size
+        +float solve_time_seconds
+        +float sleep_time_seconds
+        +list~str~ solved_task_ids
+        +list~str~ failed_task_ids
+    }
+
+    class ContinualSolver {
+        -KSnapAbductiveSearcher _searcher
+        -LibraryLearning _library
+        -GaussExVerifier _verifier
+        -dict _config
+        -list~EpochResult~ _epoch_history
+        -str _library_path
+        +__init__(config)
+        +run_continual_learning(tasks, epochs) dict
+        -_wake_phase(tasks) list~ProgramNode~
+        -_sleep_phase(solved_programs) list~DSLElement~
+        -_evaluate_accuracy(tasks) float
+        -_save_state() void
+        -_load_state() bool
+        +get_epoch_history() list~EpochResult~
+        +get_library() LibraryLearning
+        +get_stats() dict
+    }
+
+    %% ===== 现有模块（参考，不修改核心逻辑）=====
+    class KappaSnapSearcher {
+        +search(demo_pairs) list~ProgramNode~
+        +two_phase_search(demo_pairs) list~ProgramNode~
+    }
+
+    class GaussExVerifier {
+        +verify_program(program, demo_pairs) bool
+        +verify_program_batch(programs, demo_pairs) list~ProgramNode~
+        +set_demo_pairs(demo_pairs) void
+    }
+
+    class TopoHashFilter {
+        +quick_filter(candidates, demo_pairs) list
+        +compute_hash_for_grid(grid) str
+    }
+
+    class ParamInference {
+        +infer_candidates(demo_pairs) list~ProgramNode~
+    }
+
+    class OctonionHyperEdge {
+        +encode_grid(grid) ndarray
+        +decode_to_grid() ndarray
+        +compute_topo_invariants() dict
+    }
+
+    class TOMASSolver {
+        +solve(task, mode) dict
+        +solve_continual(tasks, epochs) dict
+    }
+
+    %% ===== 关系 =====
+    KSnapAbductiveSearcher --> KappaSnapSearcher : 复用候选生成
+    KSnapAbductiveSearcher --> GaussExVerifier : 投影验证
+    KSnapAbductiveSearcher --> TopoHashFilter : Ftel预过滤
+    KSnapAbductiveSearcher --> CandidateProgram : 生成
+    KSnapAbductiveSearcher --> SnapEvent : 产出
+    KSnapAbductiveSearcher --> ManifestedSolution : 显影
+    SnapEvent --> ManifestedSolution : 包含
+    CandidateProgram --> ProgramNode : 持有
+    ManifestedSolution --> ProgramNode : 持有
+
+    LibraryLearning --> SubExpression : 产出
+    LibraryLearning --> ProgramNode : 遍历AST
+    LibraryLearning --> DSLElement : 注册新原语
+
+    ContinualSolver --> KSnapAbductiveSearcher : Wake阶段
+    ContinualSolver --> LibraryLearning : Sleep阶段
+    ContinualSolver --> GaussExVerifier : 验证
+    ContinualSolver --> EpochResult : 记录
+
+    TOMASSolver --> ContinualSolver : 集成
+    TOMASSolver --> KSnapAbductiveSearcher : 替代KappaSnapSearcher
+    KappaSnapSearcher --> ParamInference : 候选生成
+    KappaSnapSearcher --> TopoHashFilter : Phase A过滤
+    KappaSnapSearcher --> GaussExVerifier : Phase B验证
+    TopoHashFilter --> OctonionHyperEdge : 编码计算哈希
+
+    ProgramNode --> DSLElement : 持有

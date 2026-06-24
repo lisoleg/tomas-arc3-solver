@@ -24,6 +24,14 @@ except ImportError:
     HAS_CUDA = False
     CudaBatchVerifier = None  # type: ignore[misc, assignment]
 
+# CuPy batch verification (v2.9) — GPU-accelerated batch grid comparison
+try:
+    import cupy as _cp  # type: ignore[import-untyped]
+    _HAS_CUPY: bool = True
+except ImportError:
+    _HAS_CUPY = False
+    _cp = None  # type: ignore[assignment]
+
 
 class GaussExVerifier:
     """GaussEx interconnected verification using Willems behavioral fibers.
@@ -47,6 +55,7 @@ class GaussExVerifier:
         self,
         program: ProgramNode,
         demo_pairs: list[dict[str, Any]],
+        pre_computed: dict[tuple[int, int], np.ndarray] | None = None,
     ) -> bool:
         """Verify a program against all demo pairs (JIT grid comparison).
 
@@ -56,6 +65,9 @@ class GaussExVerifier:
         Args:
             program: ProgramNode to verify.
             demo_pairs: List of demo pairs with 'input' and 'output'.
+            pre_computed: Optional dict mapping (pair_idx, input_idx)
+                to pre-computed predicted output. If provided,
+                skips program.apply() and uses cached output directly.
 
         Returns:
             True if program satisfies all demo constraints.
@@ -67,7 +79,14 @@ class GaussExVerifier:
                 if i >= len(output_grids):
                     continue
                 try:
-                    predicted = program.apply(input_grid)
+                    if pre_computed is not None:
+                        pred_key = (pair_idx, i)
+                        if pred_key in pre_computed:
+                            predicted = pre_computed[pred_key]
+                        else:
+                            predicted = program.apply(input_grid)
+                    else:
+                        predicted = program.apply(input_grid)
                     if HAS_NUMBA:
                         if not grid_equal_kernel(predicted, output_grids[i]):
                             return False
@@ -215,8 +234,12 @@ class GaussExVerifier:
         """Batch verify multiple programs against demo pairs.
 
         v2.3: When a CudaBatchVerifier is provided, uses GPU batch
-        comparison for accelerated verification. Falls back to serial
-        verification otherwise.
+        comparison for accelerated verification.
+        v2.9: When CuPy is available (and no cuda_verifier), uses CuPy
+        for GPU-accelerated batch grid comparison. Falls back to CPU
+        serial verification otherwise.
+
+        Priority: cuda_verifier (Numba CUDA) > CuPy > CPU serial.
 
         Args:
             programs: List of ProgramNodes to verify.
@@ -229,12 +252,18 @@ class GaussExVerifier:
         if not programs:
             return []
 
-        # GPU batch path
+        # GPU batch path — Numba CUDA (highest priority)
         if cuda_verifier is not None and hasattr(
             cuda_verifier, "batch_grid_equal"
         ):
             return self._verify_batch_gpu(
                 programs, demo_pairs, cuda_verifier
+            )
+
+        # GPU batch path — CuPy (v2.9)
+        if _HAS_CUPY:
+            return self._verify_batch_cupy(
+                programs, demo_pairs
             )
 
         # CPU serial path
@@ -306,6 +335,102 @@ class GaussExVerifier:
                     pred_batch, exp_batch
                 )
                 candidate_mask &= equal_matrix[:, 0]
+
+                if not np.any(candidate_mask):
+                    return []
+
+        return [
+            programs[i] for i in range(len(programs))
+            if candidate_mask[i]
+        ]
+
+    def _verify_batch_cupy(
+        self,
+        programs: list[ProgramNode],
+        demo_pairs: list[dict[str, Any]],
+    ) -> list[ProgramNode]:
+        """CuPy-accelerated batch verification (v2.9).
+
+        Uploads all predicted and expected grids to GPU memory as CuPy
+        arrays and performs batch element-wise comparison. This is
+        significantly faster than serial CPU verification when there are
+        many programs with same-shaped outputs.
+
+        Falls back to CPU serial path if shapes are inconsistent (CuPy
+        requires same-shape arrays for stacking).
+
+        Args:
+            programs: List of ProgramNodes to verify.
+            demo_pairs: List of demo pairs.
+
+        Returns:
+            List of valid programs.
+        """
+        candidate_mask = np.ones(len(programs), dtype=bool)
+
+        for pair in demo_pairs:
+            input_grids = pair.get("input", [])
+            output_grids = pair.get("output", [])
+
+            for grid_idx, input_grid in enumerate(input_grids):
+                if grid_idx >= len(output_grids):
+                    continue
+
+                expected = np.asarray(
+                    output_grids[grid_idx], dtype=np.int8
+                )
+
+                # Apply all programs to this input
+                predictions: list[np.ndarray] = []
+                for program in programs:
+                    try:
+                        pred = program.apply(input_grid)
+                        predictions.append(
+                            np.asarray(pred, dtype=np.int8)
+                        )
+                    except Exception:
+                        predictions.append(
+                            np.zeros_like(
+                                np.asarray(input_grid, dtype=np.int8)
+                            )
+                        )
+
+                # Check shape consistency — CuPy requires same shape
+                # for stacking. If shapes differ, fall back to numpy.
+                shapes = {p.shape for p in predictions}
+                if (
+                    len(shapes) > 1
+                    or predictions[0].shape != expected.shape
+                ):
+                    # Shape mismatch — use numpy comparison
+                    for i, pred in enumerate(predictions):
+                        if candidate_mask[i]:
+                            if not np.array_equal(pred, expected):
+                                candidate_mask[i] = False
+                    continue
+
+                # CuPy batch comparison: upload to GPU, compare all at once
+                try:
+                    pred_batch_cp = _cp.asarray(
+                        np.stack(predictions)
+                    )
+                    exp_batch_cp = _cp.asarray(
+                        np.expand_dims(expected, axis=0)
+                    )
+                    # Broadcast comparison: (N, H, W) == (1, H, W) → (N, H, W)
+                    equal_all = _cp.all(
+                        pred_batch_cp == exp_batch_cp,
+                        axis=(1, 2),
+                    )
+                    # Transfer result back to CPU
+                    equal_np = _cp.asnumpy(equal_all).astype(bool)
+                    candidate_mask &= equal_np
+                except Exception:
+                    # CuPy failure — fall back to numpy
+                    for i, pred in enumerate(predictions):
+                        if candidate_mask[i]:
+                            if not np.array_equal(pred, expected):
+                                candidate_mask[i] = False
 
                 if not np.any(candidate_mask):
                     return []

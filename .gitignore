@@ -52,3 +52,54 @@ config/secrets.yaml
 # Kaggle
 kaggle.json
 data/arc-agi-repo/
+
+# ARC-AGI-3 SDK (not our code)
+environment_files/
+
+# Debug / diagnostic scripts (one-off, not part of codebase)
+diag_*.py
+diagnose_*.py
+debug_*.py
+verify_*.py
+explore_*.py
+analyze_*.py
+check_*.py
+extract_*.py
+minimal_*.py
+test_bfs_integration.py
+test_ls20.py
+test_switcher_detection.py
+
+# Output logs
+*_output.txt
+beam_output.txt
+smart_output.txt
+continual_learning_output.txt
+
+# Benchmark debug scripts
+benchmarks/analyze_*.py
+benchmarks/debug_*.py
+benchmarks/eval_*.py
+benchmarks/profile_*.py
+benchmarks/run_*.py
+benchmarks/smart_*.py
+benchmarks/test_*.py
+benchmarks/results/
+
+# Data files (large, generated)
+data/beam_*.log
+data/beam_*.json
+data/learned_library.json
+
+# Old oracle solver versions (keep v17 only)
+tests/oracle_solver_v[0-9]*.py
+tests/oracle_solver_ls20.py
+tests/oracle_debug.py
+tests/debug_*.py
+tests/diag_*.py
+tests/diagnose_*.py
+tests/deep_debug_*.py
+tests/benchmark_ls20.py
+tests/test_agent_ls20.py
+tests/test_dopamine_ls20.py
+tests/test_explorer_ls20.py

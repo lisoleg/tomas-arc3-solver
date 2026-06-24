@@ -85,12 +85,86 @@ class ParamInference:
         candidates.extend(self._gen_tile_repeat(features))
         candidates.extend(self._gen_scale_pattern(features))
 
+        # v2.8: Removed broken v2.4.9 map-color block that used {"from":..,"to":..}
+        # params instead of {"mapping":{..}}. The _gen_color_ops method
+        # already generates correct map-color candidates.
+        pairs = features.get("pairs", [])
+
         candidates.extend(self._gen_crop_to_obj(features))
         candidates.extend(self._gen_replicate_obj(features))
         candidates.extend(self._gen_pad_row(features))
-
+        
+        # v2.5.0: Add new high-value primitives (optimized - only use colors from output)
+        # Get output colors to reduce candidates
+        out_colors = set()
+        if len(pairs) >= 1:
+            out0 = pairs[0]["output"][0]
+            out_colors = set(out0.flatten().tolist())
+            if 0 in out_colors:
+                out_colors.remove(0)
+        out_colors_list = sorted(out_colors) if out_colors else [1, 2, 3]  # default if no color info
+        
+        # apply-if: condition-based operation (use output colors + common conditions)
+        for op in ['invert', 'clear', 'fill']:
+            for cond in ['has_color', 'all_same', 'is_uniform']:
+                for color in out_colors_list[:2]:  # limit to top 2 colors
+                    elem = DSLElement("apply-if", {
+                        "cond": cond, "color": color, "op": op
+                    })
+                    candidates.append(ProgramNode(elem))
+        
+        # fill-if: condition-based fill (only use output colors)
+        for color in out_colors_list[:3]:  # limit to top 3 colors
+            for cond in ['has_color', 'is_uniform']:
+                for cond_color in out_colors_list[:2]:
+                    elem = DSLElement("fill-if", {"color": color, "cond": cond, "cond_color": cond_color})
+                    candidates.append(ProgramNode(elem))
+        
+        # rotate-object: rotate largest object (keep all 3 candidates)
+        for k in [1, 2, 3]:
+            elem = DSLElement("rotate-object", {"k": k})
+            candidates.append(ProgramNode(elem))
+        
+        # scale-object: scale largest object (keep all 3 candidates)
+        for factor in [2, 3, 4]:
+            elem = DSLElement("scale-object", {"factor": factor})
+            candidates.append(ProgramNode(elem))
+        
+        # diagonal-fill: fill diagonal lines (only use output colors)
+        for color in out_colors_list[:2]:  # limit to top 2 colors
+            for diag in ['main', 'anti']:  # skip 'all' to reduce candidates
+                elem = DSLElement("diagonal-fill", {"color": color, "diag": diag})
+                candidates.append(ProgramNode(elem))
+        
+        # pattern-extend: extend pattern (only use output colors)
+        for color in out_colors_list[:2]:  # limit to top 2 colors
+            for pattern in ['checkerboard', 'striped_h']:  # skip 'dot' to reduce candidates
+                elem = DSLElement("pattern-extend", {"color": color, "pattern": pattern})
+                candidates.append(ProgramNode(elem))
+        
         # Generate two-primitive chains (depth 2) for common combos
         candidates.extend(self._gen_chain_candidates(features))
+
+        # v2.9: High-impact new primitives
+        candidates.extend(self._gen_tile_seed(features))
+        candidates.extend(self._gen_fill_by_period(features, demo_pairs))
+        candidates.extend(self._gen_crop_to_bbox(features))
+        candidates.extend(self._gen_fill_empty_neighbor(features))
+        candidates.extend(self._gen_direct_map(features, demo_pairs))
+        candidates.extend(self._gen_repeat_grid(features))
+
+        # v3.0: High-impact inference methods for 68% accuracy target
+        candidates.extend(self._gen_universal_color_map(features, demo_pairs))
+        candidates.extend(self._gen_smart_flood_fill(features, demo_pairs))
+        candidates.extend(self._gen_grid_diff_apply(features, demo_pairs))
+        candidates.extend(self._gen_object_transform(features, demo_pairs))
+        candidates.extend(self._gen_conditional_map(features, demo_pairs))
+        candidates.extend(self._gen_nearest_neighbor_transform(features, demo_pairs))
+        candidates.extend(self._gen_replace_marker_with_border(features, demo_pairs))
+        candidates.extend(self._gen_gravity_stack(features))
+        candidates.extend(self._gen_draw_frame(features))
+        candidates.extend(self._gen_sort_objects(features))
+        candidates.extend(self._gen_propagate_color(features))
 
         # Deduplicate by program signature
         seen: set[str] = set()
@@ -101,7 +175,95 @@ class ParamInference:
                 seen.add(sig)
                 unique.append(node)
 
+        # v2.9: Score and truncate candidates to reduce search space.
+        # Use ALL demo pairs for scoring. Keep top 200 candidates
+        # (increased from 80 to give more chances for complex tasks).
+        unique = self._score_and_truncate(unique, demo_pairs, max_candidates=200)
+
         return unique
+
+    def _score_and_truncate(
+        self,
+        candidates: list[ProgramNode],
+        demo_pairs: list[dict[str, Any]],
+        max_candidates: int = 60,
+    ) -> list[ProgramNode]:
+        """Score candidates by demo pair similarity and truncate to top-N.
+
+        v2.8: Use ALL demo pairs for scoring (not just the first).
+        A candidate that matches pair 1 but not pair 2 is likely
+        overfitting — we want candidates that generalize across
+        all pairs.
+
+        Scoring: apply each candidate to ALL demo inputs, compute
+        average pixel similarity to expected outputs. Candidates
+        that crash or produce wrong-sized output get score 0.
+
+        Args:
+            candidates: List of ProgramNode candidates.
+            demo_pairs: Demo pairs for scoring.
+            max_candidates: Maximum candidates to keep.
+
+        Returns:
+            Truncated and sorted list of ProgramNode candidates.
+        """
+        if len(candidates) <= max_candidates:
+            return candidates
+
+        if not demo_pairs:
+            return candidates[:max_candidates]
+
+        # v2.8: Collect all (input, expected) pairs for scoring
+        eval_pairs: list[tuple[np.ndarray, np.ndarray]] = []
+        for pair in demo_pairs:
+            input_grids = pair.get("input", [])
+            output_grids = pair.get("output", [])
+            for i, inp in enumerate(input_grids):
+                if i < len(output_grids):
+                    eval_pairs.append(
+                        (np.asarray(inp, dtype=np.int8),
+                         np.asarray(output_grids[i], dtype=np.int8))
+                    )
+
+        if not eval_pairs:
+            return candidates[:max_candidates]
+
+        scored: list[tuple[float, int, ProgramNode]] = []
+        for idx, node in enumerate(candidates):
+            total_score = 0.0
+            valid_pairs = 0
+            for inp, expected in eval_pairs:
+                score = 0.0
+                try:
+                    pred = node.apply(inp)
+                    pred_arr = np.asarray(pred, dtype=np.int8)
+                    if pred_arr.shape == expected.shape:
+                        total_pixels = expected.size
+                        if total_pixels > 0:
+                            match = int(np.sum(pred_arr == expected))
+                            score = match / total_pixels
+                    else:
+                        # Shape mismatch — partial credit for overlapping region
+                        h = min(pred_arr.shape[0], expected.shape[0])
+                        w = min(pred_arr.shape[1], expected.shape[1])
+                        if h > 0 and w > 0:
+                            total = h * w
+                            match = int(np.sum(pred_arr[:h, :w] == expected[:h, :w]))
+                            score = match / total * 0.5
+                except Exception:
+                    score = 0.0
+
+                total_score += score
+                valid_pairs += 1
+
+            avg_score = total_score / max(valid_pairs, 1)
+            scored.append((avg_score, idx, node))
+
+        # Sort by score descending, keep top max_candidates
+        scored.sort(key=lambda x: (-x[0], x[1]))
+        truncated = [node for _, _, node in scored[:max_candidates]]
+
+        return truncated
 
     def _extract_features(
         self, demo_pairs: list[dict[str, Any]]
@@ -328,10 +490,12 @@ class ParamInference:
     def _gen_color_ops(self, features: dict[str, Any]) -> list[ProgramNode]:
         """Generate color-swap and map-color candidates.
 
-        v2.5.1: Try ALL single-color mappings (color X → color Y) for
-                 every pair of colors present in the grids, not just the
-                 inferred consistent mapping. This covers tasks where a
-                 single color is replaced.
+        v2.8: Multi-color mapping inference with cross-pair consistency.
+        Instead of trying ALL single-color X→Y pairs (which generates
+        O(N²) noise candidates), we:
+        1. Infer the complete color mapping from ALL demo pairs
+        2. Only generate candidates for mappings that are consistent
+        3. For single-color swaps, only try colors that actually change
 
         Args:
             features: Extracted features.
@@ -344,12 +508,12 @@ class ParamInference:
         if not features.get("size_same", False):
             return candidates
 
-        # Consistent color mapping across all pairs
-        if features.get("color_map", {}):
+        # v2.8: Use the consistent color map from ALL pairs
+        # This is the most important candidate — the full mapping
+        if features.get("consistent_color_map", False):
             mapping = features.get("color_map", {})
-            if mapping:
-                # Always generate the inferred mapping as a candidate
-                # (even if not fully consistent — let Phase B decide)
+            if mapping and len(mapping) > 0:
+                # Generate the full multi-color mapping as top candidate
                 candidates.append(
                     ProgramNode(DSLElement("map-color", {"mapping": dict(mapping)}))
                 )
@@ -368,27 +532,60 @@ class ParamInference:
                             )
                         )
 
-        # Try all pairwise color swaps from present colors
-        all_colors = sorted(features.get("all_colors", set()))
-        for i in range(len(all_colors)):
-            for j in range(i + 1, min(len(all_colors), 10)):
-                ca, cb = all_colors[i], all_colors[j]
-                candidates.append(
-                    ProgramNode(
-                        DSLElement("color-swap", {"color_a": ca, "color_b": cb})
+                # Also generate individual single-color mappings
+                # from the consistent map (for tasks where only some
+                # colors change)
+                for old_c, new_c in mapping.items():
+                    if old_c != new_c:
+                        candidates.append(
+                            ProgramNode(
+                                DSLElement("map-color", {"mapping": {old_c: new_c}})
+                            )
+                        )
+        else:
+            # Inconsistent mapping — try the first pair's mapping anyway
+            if features.get("color_mappings"):
+                first_map = features["color_mappings"][0]
+                if first_map:
+                    candidates.append(
+                        ProgramNode(DSLElement("map-color", {"mapping": dict(first_map)}))
                     )
-                )
 
-        # v2.5.1: Try ALL single-color mappings (X → Y)
-        # This covers tasks like "replace all red with blue"
-        for old_c in all_colors:
-            for new_c in all_colors:
-                if old_c != new_c:
+        # v2.8: For single-color swaps, only try colors that ACTUALLY
+        # differ between input and output (not all N² pairs)
+        pairs = features.get("pairs", [])
+        if pairs:
+            # Find colors that change between input and output
+            changed_colors: set[int] = set()
+            for p in pairs:
+                inp = p["input"]
+                out = p["output"]
+                if inp.shape == out.shape:
+                    diff_mask = inp != out
+                    changed_colors.update(inp[diff_mask].tolist())
+                    changed_colors.update(out[diff_mask].tolist())
+
+            # Only try color-swap between colors that actually change
+            changed_list = sorted(changed_colors)
+            for i in range(len(changed_list)):
+                for j in range(i + 1, len(changed_list)):
+                    ca, cb = changed_list[i], changed_list[j]
                     candidates.append(
                         ProgramNode(
-                            DSLElement("map-color", {"mapping": {old_c: new_c}})
+                            DSLElement("color-swap", {"color_a": ca, "color_b": cb})
                         )
                     )
+
+            # Try single-color mappings only for changed colors
+            all_colors = sorted(features.get("all_colors", set()))
+            for old_c in changed_list:
+                for new_c in all_colors:
+                    if old_c != new_c:
+                        candidates.append(
+                            ProgramNode(
+                                DSLElement("map-color", {"mapping": {old_c: new_c}})
+                            )
+                        )
 
         return candidates
 
@@ -983,12 +1180,15 @@ class ParamInference:
 
         # Strategy 2: Sequence tiling (for color sequence tasks)
         # Extract color sequence from first training pair's input
-        inp = pairs[0]["input"]
+        inp = np.array(pairs[0]["input"])  # Convert to numpy array
+        # Ensure 2D array
+        if inp.ndim == 3:
+            inp = inp[0]
         seq = []
         seen = set()
         for r in range(inp.shape[0]):
             for c in range(inp.shape[1]):
-                color = inp[r, c]
+                color = int(inp[r, c])  # Convert to Python int
                 if color != 0 and color not in seen:
                     seq.append(color)
                     seen.add(color)
@@ -1030,7 +1230,7 @@ class ParamInference:
             return candidates
 
         # Try to find a consistent object shift
-        inp = pairs[0]["input"]
+        inp = np.array(pairs[0]["input"])  # Convert to numpy array
         out = pairs[0]["output"]
 
         # Find move offset for the entire grid
@@ -1121,9 +1321,785 @@ class ParamInference:
         return candidates
 
     def _gen_pad_row(self, features: dict) -> list:
-        """Generate pad-row candidates."""
+        """Generate pad-row candidates (improved v2.5.1: infer num from shape diff)."""
         candidates = []
-        for num in [1, 2, 3]:
-            for top in [True, False]:
-                candidates.append(ProgramNode(DSLElement('pad-row', {'num': num, 'top': top})))
+        
+        # v2.5.1: Infer num from output/input height difference
+        out_h = features.get("out_h", 0)
+        in_h = features.get("in_h", 0)
+        if out_h > in_h and out_h - in_h <= 5:
+            # Likely needs to pad rows at bottom (or top)
+            num = out_h - in_h
+            # Try both top=True and top=False
+            candidates.append(ProgramNode(DSLElement('pad-row', {'num': num, 'top': True})))
+            candidates.append(ProgramNode(DSLElement('pad-row', {'num': num, 'top': False})))
+        else:
+            # Fallback: try num=1,2,3
+            for num in [1, 2, 3]:
+                for top in [True, False]:
+                    candidates.append(ProgramNode(DSLElement('pad-row', {'num': num, 'top': top})))
+        
+        return candidates
+
+    # ============================================================
+    # v2.9: High-impact candidate generators for 68% accuracy
+    # ============================================================
+
+    def _gen_tile_seed(self, features: dict) -> list[ProgramNode]:
+        """Generate tile-seed candidates.
+        
+        Detects a seed pattern (bounding box of non-zero) and tiles it.
+        Effective for pattern completion/tiling tasks.
+        """
+        candidates: list[ProgramNode] = []
+        
+        if not features.get("size_same", False):
+            return candidates
+        
+        pairs = features.get("pairs", [])
+        if not pairs:
+            return candidates
+        
+        inp = pairs[0]["input"]
+        non_zero = inp != 0
+        if not np.any(non_zero):
+            return candidates
+        
+        rows = np.where(np.any(non_zero, axis=1))[0]
+        cols = np.where(np.any(non_zero, axis=0))[0]
+        
+        seed_h = rows[-1] - rows[0] + 1
+        seed_w = cols[-1] - cols[0] + 1
+        grid_h, grid_w = inp.shape
+        
+        if seed_h < grid_h or seed_w < grid_w:
+            candidates.append(ProgramNode(DSLElement("tile-seed", {"bg_color": 0})))
+        
+        return candidates
+
+    def _gen_fill_by_period(self, features: dict, demo_pairs: list) -> list[ProgramNode]:
+        """Generate fill-by-period candidates with auto-detected periods."""
+        candidates: list[ProgramNode] = []
+        
+        if not features.get("size_same", False):
+            return candidates
+        
+        candidates.append(ProgramNode(DSLElement("fill-by-period", {
+            "period_h": 0, "period_w": 0
+        })))
+        
+        pairs = features.get("pairs", [])
+        if pairs:
+            inp = pairs[0]["input"]
+            h, w = inp.shape
+            
+            for ph in range(1, min(h, 8) + 1):
+                if h % ph == 0 and ph > 1:
+                    for pw in range(1, min(w, 8) + 1):
+                        if w % pw == 0 and pw > 1:
+                            candidates.append(ProgramNode(DSLElement("fill-by-period", {
+                                "period_h": ph, "period_w": pw
+                            })))
+        
+        return candidates
+
+    def _gen_crop_to_bbox(self, features: dict) -> list[ProgramNode]:
+        """Generate crop-to-bbox and crop-to-largest-cc candidates for size-decrease tasks."""
+        candidates: list[ProgramNode] = []
+        
+        out_h = features.get("out_h", 0)
+        out_w = features.get("out_w", 0)
+        in_h = features.get("in_h", 0)
+        in_w = features.get("in_w", 0)
+        
+        if out_h < in_h or out_w < in_w:
+            # crop-to-bbox: crop to bounding box of all non-zero cells
+            candidates.append(ProgramNode(DSLElement("crop-to-bbox", {"bg_color": 0})))
+            # crop-to-largest-cc: crop to largest connected component (color-independent)
+            candidates.append(ProgramNode(DSLElement("crop-to-largest-cc", {"bg_color": 0})))
+        
+        return candidates
+
+    def _gen_fill_empty_neighbor(self, features: dict) -> list[ProgramNode]:
+        """Generate fill-empty-neighbor candidates."""
+        candidates: list[ProgramNode] = []
+        
+        if not features.get("size_same", False):
+            return candidates
+        
+        pairs = features.get("pairs", [])
+        if pairs:
+            inp = pairs[0]["input"]
+            out = pairs[0]["output"]
+            inp_zeros = int(np.sum(inp == 0))
+            out_zeros = int(np.sum(out == 0))
+            
+            if out_zeros < inp_zeros:
+                candidates.append(ProgramNode(DSLElement("fill-empty-neighbor", {"bg_color": 0})))
+        
+        return candidates
+
+    def _gen_direct_map(self, features: dict, demo_pairs: list) -> list[ProgramNode]:
+        """Generate direct-map candidates by learning transformation from demo pairs.
+        
+        Finds a period (ph, pw) such that (color, r%ph, c%pw) -> new_color
+        is consistent across all demo pairs. This is the most powerful generator.
+        
+        v2.9.1: Also generates fill-by-position-map candidates that map
+        (r%ph, c%pw) -> new_color for background cells only, handling
+        tasks where different pairs have different color schemes.
+        """
+        candidates: list[ProgramNode] = []
+        
+        if not features.get("size_same", False):
+            return candidates
+        
+        pairs = features.get("pairs", [])
+        if len(pairs) < 1:
+            return candidates
+        
+        first_pair = pairs[0]
+        inp0 = first_pair["input"]
+        h, w = inp0.shape
+        
+        max_period = min(h, w, 12)
+        
+        # Strategy 1: Full (color, r%ph, c%pw) -> new_color mapping
+        for ph in range(1, max_period + 1):
+            for pw in range(1, max_period + 1):
+                mapping: dict[tuple, int] = {}
+                consistent = True
+                
+                for p in pairs:
+                    inp = p["input"]
+                    out = p["output"]
+                    if inp.shape != out.shape:
+                        consistent = False
+                        break
+                    
+                    for r in range(inp.shape[0]):
+                        for c in range(inp.shape[1]):
+                            key = (int(inp[r, c]), r % ph, c % pw)
+                            expected = int(out[r, c])
+                            if key in mapping:
+                                if mapping[key] != expected:
+                                    consistent = False
+                                    break
+                            else:
+                                mapping[key] = expected
+                        if not consistent:
+                            break
+                    if not consistent:
+                        break
+                
+                if consistent and len(mapping) > 0:
+                    has_change = False
+                    for p in pairs:
+                        inp = p["input"]
+                        for r in range(inp.shape[0]):
+                            for c in range(inp.shape[1]):
+                                key = (int(inp[r, c]), r % ph, c % pw)
+                                if key in mapping and mapping[key] != int(inp[r, c]):
+                                    has_change = True
+                                    break
+                            if has_change:
+                                break
+                        if has_change:
+                            break
+                    
+                    if has_change:
+                        str_mapping = {f"{k[0]},{k[1]},{k[2]}": v for k, v in mapping.items()}
+                        elem = DSLElement("direct-map", {
+                            "mapping": str_mapping,
+                            "period_h": ph,
+                            "period_w": pw,
+                        })
+                        candidates.append(ProgramNode(elem))
+        
+        # Strategy 2: Position-only mapping for background (0) cells
+        # (r%ph, c%pw) -> new_color, only for cells where input=0
+        # This handles tasks where different pairs have different color schemes
+        for ph in range(1, max_period + 1):
+            for pw in range(1, max_period + 1):
+                pos_mapping: dict[tuple, int] = {}
+                consistent = True
+                
+                for p in pairs:
+                    inp = p["input"]
+                    out = p["output"]
+                    if inp.shape != out.shape:
+                        consistent = False
+                        break
+                    
+                    for r in range(inp.shape[0]):
+                        for c in range(inp.shape[1]):
+                            if inp[r, c] == 0:  # Only background cells
+                                key = (r % ph, c % pw)
+                                expected = int(out[r, c])
+                                if key in pos_mapping:
+                                    if pos_mapping[key] != expected:
+                                        consistent = False
+                                        break
+                                else:
+                                    pos_mapping[key] = expected
+                        if not consistent:
+                            break
+                    if not consistent:
+                        break
+                
+                if consistent and len(pos_mapping) > 0:
+                    # Check that this mapping actually changes something
+                    has_change = any(v != 0 for v in pos_mapping.values())
+                    if has_change:
+                        # Create a fill-by-period candidate with this period
+                        # The fill-by-period primitive will use the detected pattern
+                        elem = DSLElement("fill-by-period", {
+                            "period_h": ph,
+                            "period_w": pw,
+                        })
+                        candidates.append(ProgramNode(elem))
+                        
+                        # Also create a direct-map variant
+                        # Build full mapping: non-zero cells keep their color,
+                        # zero cells get filled by position mapping
+                        full_mapping = {}
+                        for p in pairs:
+                            inp = p["input"]
+                            out = p["output"]
+                            for r in range(inp.shape[0]):
+                                for c in range(inp.shape[1]):
+                                    if inp[r, c] == 0:
+                                        key_str = f"0,{r % ph},{c % pw}"
+                                        full_mapping[key_str] = int(out[r, c])
+                        
+                        if full_mapping:
+                            elem2 = DSLElement("direct-map", {
+                                "mapping": full_mapping,
+                                "period_h": ph,
+                                "period_w": pw,
+                            })
+                            candidates.append(ProgramNode(elem2))
+        
+        return candidates
+
+    def _gen_repeat_grid(self, features: dict) -> list[ProgramNode]:
+        """Generate repeat-grid candidates for size-increase tasks."""
+        candidates: list[ProgramNode] = []
+        
+        out_h = features.get("out_h", 0)
+        out_w = features.get("out_w", 0)
+        in_h = features.get("in_h", 0)
+        in_w = features.get("in_w", 0)
+        
+        if out_h > in_h and out_w > in_w:
+            fh = out_h / in_h if in_h > 0 else 0
+            fw = out_w / in_w if in_w > 0 else 0
+            
+            if abs(fh - round(fh)) < 0.01 and abs(fw - round(fw)) < 0.01:
+                fh_int = int(round(fh))
+                fw_int = int(round(fw))
+                if fh_int > 1 or fw_int > 1:
+                    candidates.append(ProgramNode(DSLElement("repeat-grid", {
+                        "factor_h": fh_int, "factor_w": fw_int
+                    })))
+        
+        return candidates
+
+    # ============================================================
+    # v3.0: High-impact inference methods for 68% accuracy target
+    # ============================================================
+
+    def _gen_universal_color_map(
+        self, features: dict, demo_pairs: list
+    ) -> list[ProgramNode]:
+        """Generate universal-color-map candidates with cross-pair consistency.
+
+        Learns input_color -> output_color mapping from ALL demo pairs.
+        Only generates a candidate if the mapping is consistent across all pairs.
+        Handles multi-to-one mappings (multiple input colors -> same output color).
+        """
+        candidates: list[ProgramNode] = []
+        pairs = features.get("pairs", [])
+        if len(pairs) < 1:
+            return candidates
+
+        if not features.get("size_same", False):
+            return candidates
+
+        # Build universal color mapping from all pairs
+        merged_map: dict[int, int] = {}
+        compatible = True
+
+        for p in pairs:
+            inp = p["input"]
+            out = p["output"]
+            if inp.shape != out.shape:
+                compatible = False
+                break
+
+            for r in range(inp.shape[0]):
+                for c in range(inp.shape[1]):
+                    old_c = int(inp[r, c])
+                    new_c = int(out[r, c])
+                    if old_c != new_c:
+                        if old_c in merged_map:
+                            if merged_map[old_c] != new_c:
+                                compatible = False
+                                break
+                        else:
+                            merged_map[old_c] = new_c
+                if not compatible:
+                    break
+            if not compatible:
+                break
+
+        if compatible and len(merged_map) > 0:
+            # Generate the full universal color map
+            mapping_str = {str(k): v for k, v in merged_map.items()}
+            candidates.append(
+                ProgramNode(DSLElement("universal-color-map", {"mapping": mapping_str}))
+            )
+
+            # Also try map-color with the same mapping (as fallback)
+            candidates.append(
+                ProgramNode(DSLElement("map-color", {"mapping": dict(merged_map)}))
+            )
+
+        # Also try per-pair color mapping (for tasks where colors differ between pairs)
+        # but the mapping RULE is the same (e.g., "all non-zero -> color X")
+        if not compatible:
+            # Try to find a consistent rule: "all non-zero -> most common output color"
+            for p in pairs:
+                inp = p["input"]
+                out = p["output"]
+                if inp.shape != out.shape:
+                    continue
+
+                inp_nz = inp[inp != 0]
+                out_nz = out[out != 0]
+                if len(inp_nz) == 0 or len(out_nz) == 0:
+                    continue
+
+                # Check if all non-zero input maps to a single output color
+                out_colors_for_nz = set()
+                for r in range(inp.shape[0]):
+                    for c in range(inp.shape[1]):
+                        if inp[r, c] != 0:
+                            out_colors_for_nz.add(int(out[r, c]))
+
+                if len(out_colors_for_nz) == 1:
+                    target = out_colors_for_nz.pop()
+                    # Check consistency across all pairs
+                    all_match = True
+                    for p2 in pairs:
+                        inp2 = p2["input"]
+                        out2 = p2["output"]
+                        if inp2.shape != out2.shape:
+                            all_match = False
+                            break
+                        for r in range(inp2.shape[0]):
+                            for c in range(inp2.shape[1]):
+                                if inp2[r, c] != 0 and int(out2[r, c]) != target:
+                                    all_match = False
+                                    break
+                            if not all_match:
+                                break
+                        if not all_match:
+                            break
+
+                    if all_match:
+                        # Generate mapping: all input non-zero colors -> target
+                        all_in_colors = set()
+                        for p2 in pairs:
+                            inp2 = p2["input"]
+                            all_in_colors.update(int(x) for x in np.unique(inp2) if x != 0)
+                        
+                        rule_map = {str(c): target for c in all_in_colors}
+                        candidates.append(
+                            ProgramNode(DSLElement("universal-color-map", {"mapping": rule_map}))
+                        )
+                        break
+
+        return candidates
+
+    def _gen_smart_flood_fill(
+        self, features: dict, demo_pairs: list
+    ) -> list[ProgramNode]:
+        """Generate smart-flood-fill candidates with multiple variants.
+
+        Tries different connectivity (4/8), fill targets (enclosed/border/all_bg),
+        and auto-infers fill color from output.
+        """
+        candidates: list[ProgramNode] = []
+
+        if not features.get("size_same", False):
+            return candidates
+
+        pairs = features.get("pairs", [])
+        if not pairs:
+            return candidates
+
+        # Infer fill colors from output
+        fill_colors: set[int] = set()
+        for p in pairs:
+            inp = p["input"]
+            out = p["output"]
+            if inp.shape != out.shape:
+                continue
+            # Colors that appear in output but not input (new colors = fill candidates)
+            new_colors = set(out.flatten()) - set(inp.flatten())
+            fill_colors.update(int(c) for c in new_colors if c != 0)
+            # Also try colors that increase in count
+            for c in range(1, 10):
+                inp_count = int(np.sum(inp == c))
+                out_count = int(np.sum(out == c))
+                if out_count > inp_count:
+                    fill_colors.add(c)
+
+        if not fill_colors:
+            fill_colors = {1, 2, 3}
+
+        # Generate variants
+        for color in sorted(fill_colors)[:5]:  # limit to top 5 colors
+            for connectivity in [4, 8]:
+                for fill_target in ["enclosed", "border", "all_bg"]:
+                    candidates.append(
+                        ProgramNode(DSLElement("smart-flood-fill", {
+                            "color": color,
+                            "connectivity": connectivity,
+                            "fill_target": fill_target,
+                        }))
+                    )
+
+        # Also generate fill-enclosed-regions candidates
+        for color in sorted(fill_colors)[:5]:
+            candidates.append(
+                ProgramNode(DSLElement("fill-enclosed-regions", {
+                    "color": color, "bg_color": 0
+                }))
+            )
+
+        return candidates
+
+    def _gen_grid_diff_apply(
+        self, features: dict, demo_pairs: list
+    ) -> list[ProgramNode]:
+        """Generate grid-diff-apply candidates by learning diff patterns.
+
+        For same-size tasks, computes the difference between output and input
+        and tries to find a consistent diff pattern (border, frame, etc.).
+        """
+        candidates: list[ProgramNode] = []
+
+        if not features.get("size_same", False):
+            return candidates
+
+        pairs = features.get("pairs", [])
+        if not pairs:
+            return candidates
+
+        # Try all diff types with colors from output
+        out_colors: set[int] = set()
+        for p in pairs:
+            out_colors.update(int(c) for c in np.unique(p["output"]) if c != 0)
+
+        if not out_colors:
+            out_colors = {1, 2}
+
+        for color in sorted(out_colors)[:4]:
+            for diff_type in ["border", "frame", "corners", "extend_lines", "fill_adjacent"]:
+                candidates.append(
+                    ProgramNode(DSLElement("grid-diff-apply", {
+                        "diff_type": diff_type, "color": color
+                    }))
+                )
+
+        return candidates
+
+    def _gen_object_transform(
+        self, features: dict, demo_pairs: list
+    ) -> list[ProgramNode]:
+        """Generate object-level transform candidates.
+
+        Includes extract-and-recolor, move-object-to-pos, count-objects-mark.
+        """
+        candidates: list[ProgramNode] = []
+
+        pairs = features.get("pairs", [])
+        if not pairs:
+            return candidates
+
+        # Extract and recolor: try all color pairs that change
+        if features.get("size_same", False):
+            changed_colors: set[int] = set()
+            for p in pairs:
+                inp = p["input"]
+                out = p["output"]
+                if inp.shape != out.shape:
+                    continue
+                diff_mask = inp != out
+                changed_colors.update(int(c) for c in inp[diff_mask])
+
+            all_colors = sorted(features.get("all_colors", set()))
+            for src_c in sorted(changed_colors)[:5]:
+                for tgt_c in all_colors:
+                    if src_c != tgt_c:
+                        candidates.append(
+                            ProgramNode(DSLElement("extract-and-recolor", {
+                                "source_color": src_c,
+                                "target_color": tgt_c,
+                                "keep_others": True,
+                            }))
+                        )
+
+        # Move object to position: try moving objects to corners
+        if features.get("size_same", False):
+            for color in sorted(features.get("all_colors", {1}))[:3]:
+                if color == 0:
+                    continue
+                for tr in [0, 1]:
+                    for tc in [0, 1]:
+                        candidates.append(
+                            ProgramNode(DSLElement("move-object-to-pos", {
+                                "color": color,
+                                "target_row": tr,
+                                "target_col": tc,
+                            }))
+                        )
+
+        return candidates
+
+    def _gen_conditional_map(
+        self, features: dict, demo_pairs: list
+    ) -> list[ProgramNode]:
+        """Generate conditional-map candidates by mining context rules.
+
+        Learns rules like: if input[r,c]==A and neighbor==B: output[r,c]=C.
+        """
+        candidates: list[ProgramNode] = []
+        pairs = features.get("pairs", [])
+
+        if not features.get("size_same", False) or len(pairs) < 1:
+            return candidates
+
+        # Mine conditional rules from first pair
+        inp = pairs[0]["input"]
+        out = pairs[0]["output"]
+        h, w = inp.shape
+
+        # Find pixels that change
+        changed = inp != out
+        if not np.any(changed):
+            return candidates
+
+        # For each changed pixel, check neighbor context
+        rules: set[tuple] = set()
+        for r in range(h):
+            for c in range(w):
+                if not changed[r, c]:
+                    continue
+                center_c = int(inp[r, c])
+                output_c = int(out[r, c])
+                if center_c == output_c:
+                    continue
+
+                # Check all 4 neighbors
+                for direction, (dr, dc) in [("up", (-1, 0)), ("down", (1, 0)),
+                                             ("left", (0, -1)), ("right", (0, 1))]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w:
+                        neighbor_c = int(inp[nr, nc])
+                        if neighbor_c != center_c:
+                            rules.add((center_c, neighbor_c, direction, output_c))
+
+                # Also check "any" direction
+                for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                    nr, nc = r + dr, c + dc
+                    if 0 <= nr < h and 0 <= nc < w:
+                        neighbor_c = int(inp[nr, nc])
+                        if neighbor_c != center_c:
+                            rules.add((center_c, neighbor_c, "any", output_c))
+                            break
+
+        # Generate candidates from mined rules (limit to top 10)
+        rule_list = sorted(rules)[:10]
+        if rule_list:
+            rule_dicts = [
+                {"center": r[0], "neighbor": r[1], "direction": r[2], "output": r[3]}
+                for r in rule_list
+            ]
+            # Single rule
+            for rd in rule_dicts:
+                candidates.append(
+                    ProgramNode(DSLElement("conditional-map", {"rules": [rd]}))
+                )
+            # All rules combined
+            candidates.append(
+                ProgramNode(DSLElement("conditional-map", {"rules": rule_dicts}))
+            )
+
+        return candidates
+
+    def _gen_nearest_neighbor_transform(
+        self, features: dict, demo_pairs: list
+    ) -> list[ProgramNode]:
+        """Generate nearest-neighbor-transform candidates.
+
+        For test input, find most similar training input and apply same transform.
+        """
+        candidates: list[ProgramNode] = []
+
+        pairs = features.get("pairs", [])
+        if len(pairs) < 1:
+            return candidates
+
+        # Build train_data for the primitive
+        train_data = []
+        for p in pairs:
+            train_data.append([p["input"].tolist(), p["output"].tolist()])
+
+        candidates.append(
+            ProgramNode(DSLElement("nearest-neighbor-transform", {
+                "train_data": train_data
+            }))
+        )
+
+        return candidates
+
+    def _gen_replace_marker_with_border(
+        self, features: dict, demo_pairs: list
+    ) -> list[ProgramNode]:
+        """Generate replace-marker-with-border candidates.
+
+        Detects a marker color (color that appears in input but is replaced
+        in output) and generates candidates to replace it with border colors.
+        """
+        candidates: list[ProgramNode] = []
+
+        pairs = features.get("pairs", [])
+        if not features.get("size_same", False) or not pairs:
+            return candidates
+
+        # Find potential marker colors: colors that are replaced by different colors
+        # in different positions (indicating position-dependent replacement)
+        for p in pairs:
+            inp = p["input"]
+            out = p["output"]
+            if inp.shape != out.shape:
+                continue
+
+            for marker_c in range(1, 10):
+                marker_mask = inp == marker_c
+                if not np.any(marker_mask):
+                    continue
+
+                # Check if marker pixels are replaced by different colors
+                out_at_marker = out[marker_mask]
+                unique_out = set(out_at_marker.tolist())
+                if len(unique_out) > 1:
+                    # This is a marker color that gets replaced differently
+                    candidates.append(
+                        ProgramNode(DSLElement("replace-marker-with-border", {
+                            "marker_color": marker_c
+                        }))
+                    )
+
+        # Also try common marker colors (3 is common in ARC)
+        for mc in [3, 5, 2, 4, 6]:
+            candidates.append(
+                ProgramNode(DSLElement("replace-marker-with-border", {
+                    "marker_color": mc
+                }))
+            )
+
+        return candidates
+
+    def _gen_gravity_stack(self, features: dict) -> list[ProgramNode]:
+        """Generate gravity-stack candidates for all directions."""
+        candidates: list[ProgramNode] = []
+
+        if not features.get("size_same", False):
+            return candidates
+
+        for direction in ["down", "up", "left", "right"]:
+            candidates.append(
+                ProgramNode(DSLElement("gravity-stack", {"direction": direction}))
+            )
+
+        return candidates
+
+    def _gen_draw_frame(self, features: dict) -> list[ProgramNode]:
+        """Generate draw-frame-around-objects candidates."""
+        candidates: list[ProgramNode] = []
+
+        if not features.get("size_same", False):
+            return candidates
+
+        pairs = features.get("pairs", [])
+        if not pairs:
+            return candidates
+
+        # Try frame colors from output
+        out_colors: set[int] = set()
+        for p in pairs:
+            out_colors.update(int(c) for c in np.unique(p["output"]) if c != 0)
+
+        for color in sorted(out_colors)[:4]:
+            candidates.append(
+                ProgramNode(DSLElement("draw-frame-around-objects", {
+                    "frame_color": color
+                }))
+            )
+
+        # Default frame color
+        candidates.append(
+            ProgramNode(DSLElement("draw-frame-around-objects", {"frame_color": 1}))
+        )
+
+        return candidates
+
+    def _gen_sort_objects(self, features: dict) -> list[ProgramNode]:
+        """Generate sort-objects-by-size candidates."""
+        candidates: list[ProgramNode] = []
+
+        if not features.get("size_same", False):
+            return candidates
+
+        candidates.append(
+            ProgramNode(DSLElement("sort-objects-by-size", {
+                "ascending": True, "start_color": 1
+            }))
+        )
+        candidates.append(
+            ProgramNode(DSLElement("sort-objects-by-size", {
+                "ascending": False, "start_color": 1
+            }))
+        )
+
+        return candidates
+
+    def _gen_propagate_color(self, features: dict) -> list[ProgramNode]:
+        """Generate propagate-color candidates."""
+        candidates: list[ProgramNode] = []
+
+        if not features.get("size_same", False):
+            return candidates
+
+        pairs = features.get("pairs", [])
+        if not pairs:
+            return candidates
+
+        # Try propagating each non-zero color from input
+        inp_colors: set[int] = set()
+        for p in pairs:
+            inp_colors.update(int(c) for c in np.unique(p["input"]) if c != 0)
+
+        for src_c in sorted(inp_colors)[:5]:
+            candidates.append(
+                ProgramNode(DSLElement("propagate-color", {
+                    "source_color": src_c,
+                    "target_color": 0
+                }))
+            )
+
         return candidates

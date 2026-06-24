@@ -513,3 +513,159 @@ class TOMASSolver:
             self.library.save()
         except Exception:
             pass
+
+    # ============================================================
+    # 太一理论 (Taiyi) Integration: κ-Snap search + continual learning
+    # ============================================================
+
+    def solve_with_taiyi(
+        self, task_data: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Solve a single task using the κ-Snap abductive searcher.
+
+        Uses the KSnapSearcher (太一理论 κ-Snap projection) to search
+        for a solution program with four-level filtering:
+        Ftel threshold → Dead-Zero → MUS → GaussEx projection.
+
+        Args:
+            task_data: Raw task dictionary with 'train' and 'test' keys.
+
+        Returns:
+            Result dictionary with:
+                - predictions: List of predicted output grids.
+                - best_program: Solution ProgramNode (or None).
+                - depth: Search depth at which solution was found.
+                - causal_log: κ-Snap causal event log.
+                - solved: Whether a solution was found.
+        """
+        from src.solver.ksnap_searcher import KSnapSearcher
+
+        # Initialize κ-Snap searcher with default parameters
+        searcher = KSnapSearcher(
+            theta_ftel=0.1,
+            theta_dead=0.01,
+            beam_width=100,
+            max_depth=4,
+        )
+
+        # Execute κ-Snap search
+        prog, depth, causal_log = searcher.search(task_data)
+
+        # Generate predictions if a solution was found
+        predictions: list[list[list[int]]] = []
+        if prog is not None:
+            try:
+                video_task = self.parse_input(task_data)
+                predictions = self._predict_with_program(
+                    prog,
+                    video_task.demo_pairs,
+                    video_task.test_frames,
+                )
+            except Exception:
+                # Fallback: apply to test input directly
+                test_items = task_data.get("test", [])
+                if test_items:
+                    test_inputs = test_items[0].get("input", [])
+                    for test_inp in test_inputs:
+                        try:
+                            inp_arr = np.array(test_inp, dtype=np.int8)
+                            pred = prog.apply(inp_arr)
+                            predictions.append(
+                                np.asarray(pred, dtype=np.int8).tolist()
+                            )
+                        except Exception:
+                            predictions.append(
+                                np.array(test_inp, dtype=np.int8).tolist()
+                            )
+
+        return {
+            "predictions": predictions,
+            "best_program": prog,
+            "depth": depth,
+            "causal_log": causal_log,
+            "solved": prog is not None,
+            "mode": "taiyi_ksnap",
+        }
+
+    def solve_with_continual_learning(
+        self,
+        tasks: list[dict[str, Any]],
+        epochs: int = 3,
+    ) -> dict[str, Any]:
+        """Solve multiple tasks using the continual learning pipeline.
+
+        Runs Wake-Sleep cycles to iteratively improve accuracy:
+            - Wake: Solve all tasks with current DSL (κ-Snap search)
+            - Sleep: Extract new primitives from solved programs
+            - Next epoch: Expanded DSL enables solving more tasks
+
+        Theorem 4 guarantee: Coverage is monotonically non-decreasing
+        across epochs (⟨𝓛ₑ₊₁⟩ ⊇ ⟨𝓛ₑ⟩).
+
+        Args:
+            tasks: List of task dictionaries to solve.
+            epochs: Number of Wake-Sleep cycles (default 3).
+
+        Returns:
+            Result dictionary with:
+                - epoch_results: List of per-epoch results.
+                - final_accuracy: Accuracy in the last epoch.
+                - total_new_primitives: Total primitives learned.
+                - accuracy_history: Accuracy per epoch.
+                - mode: "continual_learning".
+        """
+        from src.solver.continual_solver import ContinualSolver
+
+        # Initialize continual solver with current config
+        library_config = dict(self.config.get("library", {}))
+        search_config = {
+            "theta_ftel": 0.1,
+            "theta_dead": 0.01,
+            "beam_width": 100,
+            "max_depth": 4,
+        }
+
+        solver = ContinualSolver(
+            library_config=library_config,
+            search_config=search_config,
+        )
+
+        # Load any existing state
+        solver.load_state()
+
+        # Run continual learning
+        results = solver.run_continual_learning(tasks, epochs)
+
+        # Compile results
+        epoch_dicts = [r.to_dict() for r in results]
+        final_accuracy: float = (
+            results[-1].accuracy if results else 0.0
+        )
+        total_new_primitives: int = sum(
+            r.new_primitives for r in results
+        )
+        accuracy_history: list[float] = [
+            r.accuracy for r in results
+        ]
+
+        # Record audit
+        auditor = get_auditor()
+        auditor.record(
+            task_id="continual_learning_batch",
+            action="continual_learning_complete",
+            decision_path=[
+                f"epochs={epochs}",
+                f"tasks={len(tasks)}",
+                f"final_accuracy={final_accuracy:.4f}",
+                f"new_primitives={total_new_primitives}",
+            ],
+        )
+
+        return {
+            "epoch_results": epoch_dicts,
+            "final_accuracy": final_accuracy,
+            "total_new_primitives": total_new_primitives,
+            "accuracy_history": accuracy_history,
+            "library_size": solver.get_library_size(),
+            "mode": "continual_learning",
+        }

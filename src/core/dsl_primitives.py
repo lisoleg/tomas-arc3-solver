@@ -78,12 +78,19 @@ class DSLElement:
         SIMPLE_PRIMITIVES = {
             "resize", "fill-region", "color-swap", "mirror", "rotate", "scale",
             "map-color", "move", "copy", "crop", "draw-line", "boundary-detect",
+            "universal-color-map",
         }
         MEDIUM_PRIMITIVES = {
             "complete-shape", "objects-complete", "gravity", "flood-fill",
             "extract-pattern", "symmetry-detect", "tile", "overlay", "subtract",
             "union", "intersection", "skeleton", "dilate", "erode",
             "label-connected", "histogram", "find-objects", "count",
+            "smart-flood-fill", "grid-diff-apply", "extract-and-recolor",
+            "conditional-map", "nearest-neighbor-transform",
+            "replace-marker-with-border", "gravity-stack",
+            "draw-frame-around-objects", "fill-enclosed-regions",
+            "sort-objects-by-size", "move-object-to-pos",
+            "count-objects-mark", "propagate-color", "connect-dots",
         }
         if name in SIMPLE_PRIMITIVES:
             return 5
@@ -1282,6 +1289,44 @@ def _crop_to_obj(grid: np.ndarray, color: int = 0, **_: Any) -> np.ndarray:
     return result[np.newaxis, :, :] if grid.ndim == 3 else result
 
 
+def _crop_to_largest_cc(grid: np.ndarray, bg_color: int = 0, **_: Any) -> np.ndarray:
+    """Crop to the bounding box of the largest connected component (color-independent).
+    
+    Finds all connected components of non-background cells, selects the largest
+    one (by area), and crops to its bounding box. This is color-independent,
+    making it robust to tasks where the target object has different colors
+    in different demo pairs.
+    
+    Args:
+        grid: Input grid.
+        bg_color: Background color (default 0).
+    """
+    from scipy import ndimage
+    g = grid[0] if grid.ndim == 3 else grid
+    
+    # Find connected components of non-background cells
+    mask = g != bg_color
+    if not np.any(mask):
+        return grid
+    
+    labeled, num = ndimage.label(mask)
+    if num == 0:
+        return grid
+    
+    # Find the largest CC by area
+    sizes = ndimage.sum(mask, labeled, range(1, num + 1))
+    largest_idx = int(np.argmax(sizes)) + 1
+    
+    # Get bounding box of largest CC
+    objs = ndimage.find_objects(labeled)
+    if largest_idx - 1 >= len(objs) or objs[largest_idx - 1] is None:
+        return grid
+    
+    sl = objs[largest_idx - 1]
+    result = g[sl[0], sl[1]]
+    return result[np.newaxis, :, :] if grid.ndim == 3 else result
+
+
 def _replicate_obj(grid: np.ndarray, direction: str = 'right', **_: Any) -> np.ndarray:
     "Replicate the largest object in a direction."
     from scipy import ndimage
@@ -1311,6 +1356,1244 @@ def _pad_row(grid: np.ndarray, num: int = 1, top: bool = False, **_: Any) -> np.
     pad = np.zeros((num, g.shape[1]), dtype=g.dtype)
     result = np.vstack([pad, g]) if top else np.vstack([g, pad])
     return result[np.newaxis, :, :] if grid.ndim == 3 else result
+
+
+
+# ======== v2.4.9 New Primitives (batch add) ========
+
+def _label_cc(grid: np.ndarray, **_: Any) -> np.ndarray:
+    """Label connected components. Each component gets a unique integer ID."""
+    if grid.ndim == 3:
+        g = grid[0]
+        result = np.zeros_like(g)
+        labeled, num = ndimage.label(g != 0)
+        result = labeled.astype(grid.dtype)
+        return result[np.newaxis, :, :]
+    else:
+        result = np.zeros_like(grid)
+        labeled, num = ndimage.label(grid != 0)
+        return labeled.astype(grid.dtype)
+
+
+def _count_cc(grid: np.ndarray, **_: Any) -> np.ndarray:
+    """Count connected components. Return grid filled with count value."""
+    if grid.ndim == 3:
+        g = grid[0]
+    else:
+        g = grid
+    labeled, num = ndimage.label(g != 0)
+    result = np.full_like(g, num)
+    if grid.ndim == 3:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _symmetric_fill(grid: np.ndarray, axis: str = 'horizontal', **_: Any) -> np.ndarray:
+    """Complete symmetric pattern by mirroring across axis."""
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    h, w = g.shape
+    result = g.copy()
+    if axis == 'horizontal':
+        # Mirror top half to bottom half
+        for r in range(h // 2):
+            result[h - 1 - r, :] = g[r, :]
+    elif axis == 'vertical':
+        for c in range(w // 2):
+            result[:, w - 1 - c] = g[:, c]
+    elif axis == 'diag_main':
+        # Mirror across main diagonal
+        result = np.maximum(result, result.T)
+    elif axis == 'diag_anti':
+        # Mirror across anti-diagonal  
+        flipped = np.flipud(np.fliplr(g))
+        result = np.maximum(g, flipped)
+    
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _apply_if(grid: np.ndarray, cond: str = 'has_color', 
+             color: int = 1, op: str = 'invert', **_: Any) -> np.ndarray:
+    """Apply operation only if condition is met."""
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    
+    result = g.copy()
+    meet = False
+    if cond == 'has_color':
+        meet = np.any(g == color)
+    elif cond == 'all_same':
+        meet = len(np.unique(g[g != 0])) <= 1
+    elif cond == 'is_uniform':
+        meet = np.all(g[g != 0] == g[g != 0][0]) if np.any(g != 0) else True
+        
+    if meet:
+        if op == 'invert':
+            result = (g.max() - g) * (g != 0)  # simplified invert
+        elif op == 'clear':
+            result = np.zeros_like(g)
+        elif op == 'fill':
+            result = np.full_like(g, color)
+            
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _remove_obj(grid: np.ndarray, prop: str = 'smallest', **_: Any) -> np.ndarray:
+    """Remove object by property (smallest/largest/leftmost/etc)."""
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    
+    binary = (g != 0).astype(np.int8)
+    labeled, num = ndimage.label(binary)
+    if num == 0:
+        if is_3d:
+            return grid
+        return g
+        
+    # Find target object
+    target = 0
+    if prop == 'smallest':
+        sizes = [np.sum(labeled == i) for i in range(1, num+1)]
+        target = np.argmin(sizes) + 1
+    elif prop == 'largest':
+        sizes = [np.sum(labeled == i) for i in range(1, num+1)]
+        target = np.argmax(sizes) + 1
+    elif prop == 'leftmost':
+        for i in range(1, num+1):
+            cols = np.where(labeled == i)[1]
+            if target == 0 or cols.min() < np.where(labeled == target)[1].min():
+                target = i
+                
+    result = g.copy()
+    if target > 0:
+        result[labeled == target] = 0
+            
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _object_count(grid: np.ndarray, **_: Any) -> np.ndarray:
+    """Replace grid with object count (each cell = count)."""
+    if grid.ndim == 3:
+        g = grid[0]
+    else:
+        g = grid
+    labeled, num = ndimage.label(g != 0)
+    result = np.full_like(g, num)
+    if grid.ndim == 3:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _fill_gradient(grid: np.ndarray, direction: str = 'left_to_right', **_: Any) -> np.ndarray:
+    """Fill with gradient pattern."""
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    h, w = g.shape
+    result = np.zeros_like(g)
+    if direction == 'left_to_right':
+        for c in range(w):
+            result[:, c] = c + 1
+    elif direction == 'top_to_bottom':
+        for r in range(h):
+            result[r, :] = r + 1
+    elif direction == 'diag':
+        for r in range(h):
+            for c in range(w):
+                result[r, c] = (r + c) % 10 + 1
+                
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+
+def _fill_if(grid: np.ndarray, color: int = 1, cond: str = 'has_color', 
+             cond_color: int = 1, **_: Any) -> np.ndarray:
+    """Fill with color only if condition is met.
+    
+    Args:
+        color: Fill color
+        cond: Condition type ('has_color', 'is_uniform', 'count_eq')
+        cond_color: Condition parameter (color to check, or count threshold)
+    """
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    
+    result = g.copy()
+    meet = False
+    
+    if cond == 'has_color':
+        meet = np.any(g == cond_color)
+    elif cond == 'is_uniform':
+        non_zero = g[g != 0]
+        meet = len(np.unique(non_zero)) <= 1 if len(non_zero) > 0 else True
+    elif cond == 'count_eq':
+        meet = np.sum(g != 0) == cond_color
+        
+    if meet:
+        result[g != 0] = color
+        
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _rotate_object(grid: np.ndarray, k: int = 1, **_: Any) -> np.ndarray:
+    """Rotate the largest object by k*90 degrees.
+    
+    Args:
+        k: Number of 90-degree rotations (1, 2, 3)
+    """
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    
+    # Find largest object
+    binary = (g != 0).astype(np.int8)
+    labeled, num = ndimage.label(binary)
+    if num == 0:
+        if is_3d:
+            return grid
+        return g
+    
+    sizes = [np.sum(labeled == i) for i in range(1, num+1)]
+    largest = np.argmax(sizes) + 1
+    
+    # Extract object mask and bounding box
+    mask = labeled == largest
+    rows, cols = np.where(mask)
+    r_min, r_max = rows.min(), rows.max()
+    c_min, c_max = cols.min(), cols.max()
+    
+    # Extract object region
+    obj_region = g[r_min:r_max+1, c_min:c_max+1].copy()
+    obj_mask = mask[r_min:r_max+1, c_min:c_max+1]
+    
+    # Rotate region
+    rotated = np.rot90(obj_region, k=k)
+    rotated_mask = np.rot90(obj_mask, k=k)
+    
+    # Create result with same shape as original
+    result = g.copy()
+    r_new, c_new = rotated.shape
+    
+    # Place rotated object at same location
+    r_place = r_min
+    c_place = c_min
+    
+    # Make sure it fits
+    if r_place + r_new <= g.shape[0] and c_place + c_new <= g.shape[1]:
+        result[r_place:r_place+r_new, c_place:c_place+c_new][rotated_mask] = rotated[rotated_mask]
+    
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _scale_object(grid: np.ndarray, factor: int = 2, **_: Any) -> np.ndarray:
+    """Scale the largest object by factor.
+    
+    Args:
+        factor: Scaling factor (2, 3, 4)
+    """
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    
+    # Find largest object
+    binary = (g != 0).astype(np.int8)
+    labeled, num = ndimage.label(binary)
+    if num == 0:
+        if is_3d:
+            return grid
+        return g
+    
+    sizes = [np.sum(labeled == i) for i in range(1, num+1)]
+    largest = np.argmax(sizes) + 1
+    
+    # Extract object mask
+    mask = labeled == largest
+    color = g[mask][0] if np.any(mask) else 1
+    
+    # Create scaled object
+    h, w = g.shape
+    new_h, new_w = h * factor, w * factor
+    result = np.zeros((new_h, new_w), dtype=g.dtype)
+    
+    # Scale: each pixel becomes factor x factor block
+    for r in range(h):
+        for c in range(w):
+            if g[r, c] != 0:
+                result[r*factor:(r+1)*factor, c*factor:(c+1)*factor] = g[r, c]
+    
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _diagonal_fill(grid: np.ndarray, color: int = 1, diag: str = 'main', **_: Any) -> np.ndarray:
+    """Fill diagonal lines with color.
+    
+    Args:
+        color: Fill color
+        diag: Diagonal type ('main', 'anti', 'all')
+    """
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    
+    result = g.copy()
+    h, w = g.shape
+    
+    if diag == 'main':
+        for i in range(min(h, w)):
+            result[i, i] = color
+    elif diag == 'anti':
+        for i in range(min(h, w)):
+            result[i, w-1-i] = color
+    elif diag == 'all':
+        # Fill both diagonals
+        for i in range(min(h, w)):
+            result[i, i] = color
+            result[i, w-1-i] = color
+            
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _pattern_extend(grid: np.ndarray, pattern: str = 'checkerboard', 
+                   color: int = 1, **_: Any) -> np.ndarray:
+    """Extend pattern to fill entire grid.
+    
+    Args:
+        pattern: Pattern type ('checkerboard', 'striped_h', 'striped_v', 'dot')
+        color: Pattern color
+    """
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    
+    h, w = g.shape
+    result = np.zeros((h, w), dtype=g.dtype)
+    
+    if pattern == 'checkerboard':
+        for r in range(h):
+            for c in range(w):
+                if (r + c) % 2 == 0:
+                    result[r, c] = color
+    elif pattern == 'striped_h':
+        for r in range(h):
+            if r % 2 == 0:
+                result[r, :] = color
+    elif pattern == 'striped_v':
+        for c in range(w):
+            if c % 2 == 0:
+                result[:, c] = color
+    elif pattern == 'dot':
+        for r in range(0, h, 2):
+            for c in range(0, w, 2):
+                result[r, c] = color
+                
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+# ============================================================
+# v2.9: High-impact primitives for 68% accuracy target
+# ============================================================
+
+def _tile_seed(grid: np.ndarray, bg_color: int = 0, **_: Any) -> np.ndarray:
+    """Detect the seed pattern (bounding box of non-bg) and tile it across the entire grid.
+    
+    This handles tasks where the input has a small pattern in one corner
+    and the output tiles that pattern across the whole grid.
+    
+    Args:
+        grid: Input grid.
+        bg_color: Background color to detect seed against (default 0).
+    """
+    h, w = grid.shape
+    result = np.zeros_like(grid)
+    
+    # Find bounding box of non-background region
+    non_bg = grid != bg_color
+    if not np.any(non_bg):
+        return grid
+    
+    rows = np.where(np.any(non_bg, axis=1))[0]
+    cols = np.where(np.any(non_bg, axis=0))[0]
+    
+    if len(rows) == 0 or len(cols) == 0:
+        return grid
+    
+    min_r, max_r = rows[0], rows[-1]
+    min_c, max_c = cols[0], cols[-1]
+    
+    # Extract seed pattern
+    seed = grid[min_r:max_r+1, min_c:max_c+1].copy()
+    ph, pw = seed.shape
+    
+    if ph == 0 or pw == 0:
+        return grid
+    
+    # Tile seed across entire grid (starting from 0,0)
+    for r in range(0, h, ph):
+        for c in range(0, w, pw):
+            end_r = min(r + ph, h)
+            end_c = min(c + pw, w)
+            result[r:end_r, c:end_c] = seed[:end_r-r, :end_c-c]
+    
+    return result
+
+
+def _fill_by_period(grid: np.ndarray, period_h: int = 0, period_w: int = 0, **_: Any) -> np.ndarray:
+    """Fill empty (0) cells using a detected periodic pattern.
+    
+    v2.9.1: Improved period detection — also considers output pattern
+    from all cells (not just non-zero). For background fill tasks,
+    detects the period from the non-zero cells and fills 0s accordingly.
+    
+    Args:
+        grid: Input grid.
+        period_h: Pre-detected horizontal period (0 = auto-detect).
+        period_w: Pre-detected vertical period (0 = auto-detect).
+    """
+    h, w = grid.shape
+    result = grid.copy()
+    
+    non_zero = grid != 0
+    if not np.any(non_zero):
+        return result
+    
+    # Auto-detect period if not provided
+    if period_h <= 0 or period_w <= 0:
+        # Strategy: find the smallest period (ph, pw) such that all non-zero
+        # cells are consistent with a repeating pattern of that size
+        best_ph, best_pw = 1, 1
+        best_score = -1
+        best_pattern = {}
+        
+        max_ph = min(h, 12)
+        max_pw = min(w, 12)
+        
+        for ph in range(1, max_ph + 1):
+            for pw in range(1, max_pw + 1):
+                pattern = {}
+                consistent = True
+                filled_count = 0
+                
+                for r in range(h):
+                    for c in range(w):
+                        if grid[r, c] != 0:
+                            key = (r % ph, c % pw)
+                            if key in pattern:
+                                if pattern[key] != grid[r, c]:
+                                    consistent = False
+                                    break
+                            else:
+                                pattern[key] = grid[r, c]
+                                filled_count += 1
+                    if not consistent:
+                        break
+                
+                if consistent and filled_count > 0:
+                    # Prefer periods that explain more cells with fewer pattern entries
+                    score = filled_count / (ph * pw + 1)
+                    if score > best_score:
+                        best_score = score
+                        best_ph, best_pw = ph, pw
+                        best_pattern = pattern
+        
+        if best_score <= 0:
+            return result
+        
+        period_h = best_ph
+        period_w = best_pw
+        pattern = best_pattern
+    else:
+        # Build pattern from provided period
+        pattern = {}
+        for r in range(h):
+            for c in range(w):
+                if grid[r, c] != 0:
+                    key = (r % period_h, c % period_w)
+                    pattern[key] = grid[r, c]
+    
+    # Fill empty cells using the detected pattern
+    for r in range(h):
+        for c in range(w):
+            if result[r, c] == 0:
+                key = (r % period_h, c % period_w)
+                if key in pattern:
+                    result[r, c] = pattern[key]
+    
+    return result
+
+
+def _crop_to_bbox(grid: np.ndarray, bg_color: int = 0, **_: Any) -> np.ndarray:
+    """Crop grid to the bounding box of non-background region.
+    
+    Handles size-decrease tasks where the output is a sub-region of the input.
+    
+    Args:
+        grid: Input grid.
+        bg_color: Background color (default 0).
+    """
+    non_bg = grid != bg_color
+    if not np.any(non_bg):
+        return grid
+    
+    rows = np.where(np.any(non_bg, axis=1))[0]
+    cols = np.where(np.any(non_bg, axis=0))[0]
+    
+    min_r, max_r = rows[0], rows[-1]
+    min_c, max_c = cols[0], cols[-1]
+    
+    return grid[min_r:max_r+1, min_c:max_c+1].copy()
+
+
+def _fill_empty_neighbor(grid: np.ndarray, bg_color: int = 0, **_: Any) -> np.ndarray:
+    """Fill empty (background) cells with the color of the nearest non-empty neighbor.
+    
+    Uses BFS from non-empty cells to fill empty cells.
+    Handles tasks where empty regions are filled based on surrounding colors.
+    
+    Args:
+        grid: Input grid.
+        bg_color: Background color to fill (default 0).
+    """
+    h, w = grid.shape
+    result = grid.copy()
+    
+    # BFS from non-background cells
+    from collections import deque
+    queue = deque()
+    visited = np.zeros((h, w), dtype=bool)
+    
+    # Initialize queue with all non-background cells
+    for r in range(h):
+        for c in range(w):
+            if grid[r, c] != bg_color:
+                queue.append((r, c, grid[r, c]))
+                visited[r, c] = True
+    
+    # BFS to fill empty cells
+    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    while queue:
+        r, c, color = queue.popleft()
+        for dr, dc in directions:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and not visited[nr, nc]:
+                if result[nr, nc] == bg_color:
+                    result[nr, nc] = color
+                    visited[nr, nc] = True
+                    queue.append((nr, nc, color))
+    
+    return result
+
+
+def _direct_map(grid: np.ndarray, mapping: dict | None = None, 
+                period_h: int = 1, period_w: int = 1, **_: Any) -> np.ndarray:
+    """Apply a pre-computed pixel mapping from demo pairs.
+    
+    The mapping uses (color, r % period_h, c % period_w) as key.
+    This is the most powerful primitive — it directly learns the
+    transformation from examples.
+    
+    Args:
+        grid: Input grid.
+        mapping: Dict mapping "color,row_mod,col_mod" -> new_color (string keys for JSON compat).
+        period_h: Horizontal period for position-dependent mapping.
+        period_w: Vertical period for position-dependent mapping.
+    """
+    if mapping is None:
+        return grid
+    
+    h, w = grid.shape
+    result = grid.copy()
+    
+    for r in range(h):
+        for c in range(w):
+            key = f"{int(grid[r, c])},{r % period_h},{c % period_w}"
+            if key in mapping:
+                result[r, c] = mapping[key]
+    
+    return result
+
+
+def _repeat_grid(grid: np.ndarray, factor_h: int = 2, factor_w: int = 2, **_: Any) -> np.ndarray:
+    """Repeat the entire grid factor_h × factor_w times.
+    
+    Handles size-increase tasks where the output is a tiled version of input.
+    Different from 'tile' in that it repeats the ENTIRE grid (including padding).
+    
+    Args:
+        grid: Input grid.
+        factor_h: Vertical repeat factor.
+        factor_w: Horizontal repeat factor.
+    """
+    if factor_h <= 1 and factor_w <= 1:
+        return grid
+    
+    result = np.tile(grid, (factor_h, factor_w))
+    return result
+
+
+# ============================================================
+# v3.0: High-impact primitives for 68% accuracy target
+# ============================================================
+
+def _universal_color_map(grid: np.ndarray, mapping: dict | None = None, **_: Any) -> np.ndarray:
+    """Apply universal color mapping learned from all demo pairs.
+
+    Handles multi-to-one mappings (multiple input colors -> same output color).
+    Only applies to colors present in the mapping; unmapped colors are unchanged.
+
+    Args:
+        grid: Input grid as int8 ndarray.
+        mapping: Dict mapping old_color (int or str key) -> new_color (int).
+
+    Returns:
+        Grid with colors remapped.
+    """
+    result = grid.copy()
+    if not mapping:
+        return result
+    for old_color, new_color in mapping.items():
+        old_c = int(old_color)
+        new_c = int(new_color)
+        if old_c != new_c:
+            result[grid == old_c] = new_c
+    return result
+
+
+def _smart_flood_fill(grid: np.ndarray, color: int = 1, connectivity: int = 4,
+                      fill_target: str = "enclosed", **_: Any) -> np.ndarray:
+    """Smart flood-fill with configurable connectivity and target region.
+
+    Args:
+        grid: Input grid.
+        color: Fill color.
+        connectivity: 4 (orthogonal) or 8 (orthogonal + diagonal).
+        fill_target: 'enclosed' (fill bg regions not touching border),
+                     'border' (fill bg regions touching border),
+                     'all_bg' (fill all background),
+                     'all_nonzero' (fill all non-zero regions with color).
+
+    Returns:
+        Grid with flood-fill applied.
+    """
+    result = grid.copy()
+
+    if connectivity == 8:
+        structure = np.ones((3, 3), dtype=np.int32)
+    else:
+        structure = np.array([[0, 1, 0], [1, 1, 1], [0, 1, 0]], dtype=np.int32)
+
+    if fill_target == "all_bg":
+        result[grid == 0] = color
+        return result
+    elif fill_target == "all_nonzero":
+        result[grid != 0] = color
+        return result
+
+    # For enclosed/border: label background regions
+    binary = (grid == 0).astype(np.int32)
+    labeled, num = ndimage.label(binary, structure=structure)
+    if num == 0:
+        return result
+
+    # Find border-touching labels
+    border_labels: set[int] = set()
+    border_labels.update(labeled[0, :].tolist())
+    border_labels.update(labeled[-1, :].tolist())
+    border_labels.update(labeled[:, 0].tolist())
+    border_labels.update(labeled[:, -1].tolist())
+    border_labels.discard(0)
+
+    for label_id in range(1, num + 1):
+        if fill_target == "enclosed" and label_id not in border_labels:
+            result[labeled == label_id] = color
+        elif fill_target == "border" and label_id in border_labels:
+            result[labeled == label_id] = color
+
+    return result
+
+
+def _grid_diff_apply(grid: np.ndarray, diff_type: str = "border",
+                     color: int = 1, **_: Any) -> np.ndarray:
+    """Apply a pattern-based difference to the grid.
+
+    Args:
+        grid: Input grid.
+        diff_type: 'border' (add border), 'frame' (add frame around objects),
+                   'corners' (fill corners), 'extend_lines' (extend lines),
+                   'fill_adjacent' (fill cells adjacent to non-zero).
+        color: Color to use for the difference.
+
+    Returns:
+        Grid with the difference pattern applied.
+    """
+    result = grid.copy()
+    h, w = grid.shape
+
+    if diff_type == "border":
+        result[0, :] = color
+        result[-1, :] = color
+        result[:, 0] = color
+        result[:, -1] = color
+    elif diff_type == "frame":
+        binary = (grid != 0).astype(np.int32)
+        dilated = ndimage.binary_dilation(binary, iterations=1)
+        frame = dilated & ~binary.astype(bool)
+        result[frame] = color
+    elif diff_type == "corners":
+        if h > 0 and w > 0:
+            result[0, 0] = color
+            result[0, w - 1] = color
+            result[h - 1, 0] = color
+            result[h - 1, w - 1] = color
+    elif diff_type == "extend_lines":
+        for r in range(h):
+            non_zero_cols = np.where(grid[r, :] != 0)[0]
+            if len(non_zero_cols) >= 2:
+                c_val = int(grid[r, non_zero_cols[0]])
+                result[r, non_zero_cols[0]:non_zero_cols[-1] + 1] = c_val
+        for c in range(w):
+            non_zero_rows = np.where(grid[:, c] != 0)[0]
+            if len(non_zero_rows) >= 2:
+                r_val = int(grid[non_zero_rows[0], c])
+                result[non_zero_rows[0]:non_zero_rows[-1] + 1, c] = r_val
+    elif diff_type == "fill_adjacent":
+        binary = (grid != 0).astype(np.int32)
+        dilated = ndimage.binary_dilation(binary, iterations=1)
+        adjacent = dilated & (grid == 0)
+        result[adjacent] = color
+
+    return result
+
+
+def _extract_and_recolor(grid: np.ndarray, source_color: int = 1,
+                         target_color: int = 2, keep_others: bool = True,
+                         **_: Any) -> np.ndarray:
+    """Extract objects of a specific color and recolor them.
+
+    Args:
+        grid: Input grid.
+        source_color: Color of objects to recolor.
+        target_color: New color for the objects.
+        keep_others: If True, keep other objects unchanged. If False, remove them.
+
+    Returns:
+        Grid with objects recolored.
+    """
+    result = grid.copy()
+    if not keep_others:
+        mask_other = (grid != source_color) & (grid != 0)
+        result[mask_other] = 0
+    result[grid == source_color] = target_color
+    return result
+
+
+def _conditional_map(grid: np.ndarray, rules: list | None = None,
+                     **_: Any) -> np.ndarray:
+    """Apply conditional pixel mapping based on neighbor context.
+
+    Args:
+        grid: Input grid.
+        rules: List of rule dicts, each with:
+            'center': center pixel color to match,
+            'neighbor': neighbor color to check,
+            'direction': 'up', 'down', 'left', 'right', 'any',
+            'output': output color for matching pixels.
+
+    Returns:
+        Grid with conditional mapping applied.
+    """
+    if not rules:
+        return grid.copy()
+
+    result = grid.copy()
+    h, w = grid.shape
+
+    for rule in rules:
+        center_c = int(rule.get("center", -1))
+        neighbor_c = int(rule.get("neighbor", -1))
+        direction = rule.get("direction", "any")
+        output_c = int(rule.get("output", 0))
+
+        for r in range(h):
+            for c in range(w):
+                if int(grid[r, c]) != center_c:
+                    continue
+
+                match = False
+                neighbors: list[tuple[int, int]] = []
+                if direction == "any":
+                    for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < h and 0 <= nc < w:
+                            neighbors.append((nr, nc))
+                elif direction == "up" and r > 0:
+                    neighbors = [(r - 1, c)]
+                elif direction == "down" and r < h - 1:
+                    neighbors = [(r + 1, c)]
+                elif direction == "left" and c > 0:
+                    neighbors = [(r, c - 1)]
+                elif direction == "right" and c < w - 1:
+                    neighbors = [(r, c + 1)]
+
+                for nr, nc in neighbors:
+                    if int(grid[nr, nc]) == neighbor_c:
+                        match = True
+                        break
+
+                if match:
+                    result[r, c] = output_c
+
+    return result
+
+
+def _nearest_neighbor_transform(grid: np.ndarray, train_data: list | None = None,
+                                **_: Any) -> np.ndarray:
+    """Transform input using the transformation from the most similar training pair.
+
+    Finds the training input most similar to the test input, then applies
+    the same color mapping that transforms that training input to its output.
+
+    Args:
+        grid: Input grid.
+        train_data: List of (input_grid, output_grid) tuples from training pairs.
+
+    Returns:
+        Transformed grid.
+    """
+    if not train_data:
+        return grid.copy()
+
+    g = grid[0] if grid.ndim == 3 else grid
+
+    best_sim = -1.0
+    best_idx = 0
+
+    for idx, (train_in, train_out) in enumerate(train_data):
+        t_in = np.array(train_in, dtype=np.int8)
+        if t_in.ndim == 3:
+            t_in = t_in[0]
+
+        if t_in.shape == g.shape:
+            sim = float(np.sum(t_in == g)) / max(g.size, 1)
+        else:
+            h = min(t_in.shape[0], g.shape[0])
+            w = min(t_in.shape[1], g.shape[1])
+            if h > 0 and w > 0:
+                sim = float(np.sum(t_in[:h, :w] == g[:h, :w])) / (h * w)
+            else:
+                sim = 0.0
+
+        if sim > best_sim:
+            best_sim = sim
+            best_idx = idx
+
+    train_in, train_out = train_data[best_idx]
+    t_in = np.array(train_in, dtype=np.int8)
+    t_out = np.array(train_out, dtype=np.int8)
+    if t_in.ndim == 3:
+        t_in = t_in[0]
+    if t_out.ndim == 3:
+        t_out = t_out[0]
+
+    # Apply same color mapping
+    if t_in.shape == g.shape:
+        color_map: dict[int, int] = {}
+        for r in range(t_in.shape[0]):
+            for c in range(t_in.shape[1]):
+                if t_in[r, c] != t_out[r, c]:
+                    color_map[int(t_in[r, c])] = int(t_out[r, c])
+
+        result = g.copy()
+        for old_c, new_c in color_map.items():
+            result[g == old_c] = new_c
+        return result
+
+    return g.copy()
+
+
+def _replace_marker_with_border(grid: np.ndarray, marker_color: int = 3,
+                                **_: Any) -> np.ndarray:
+    """Replace marker pixels with the nearest border color.
+
+    Detects border colors (non-zero colors on grid edges) and replaces
+    all marker_color pixels with the color of the nearest border.
+    Only considers borders with a single consistent non-zero color.
+
+    Args:
+        grid: Input grid.
+        marker_color: Color of pixels to replace.
+
+    Returns:
+        Grid with marker pixels replaced by nearest border color.
+    """
+    result = grid.copy()
+    h, w = grid.shape
+
+    border_colors: dict[str, int] = {}
+
+    # Only use borders with a single consistent non-zero color
+    def _check_border(colors_1d: np.ndarray, name: str) -> None:
+        """Register a border color if all non-zero pixels share one color."""
+        nz = colors_1d[colors_1d != 0]
+        if len(nz) > 0:
+            unique_nz = set(nz.tolist())
+            if len(unique_nz) == 1:
+                border_colors[name] = int(unique_nz.pop())
+
+    _check_border(grid[0, :], "top")
+    _check_border(grid[-1, :], "bottom")
+    _check_border(grid[:, 0], "left")
+    _check_border(grid[:, -1], "right")
+
+    if not border_colors:
+        return result
+
+    for r in range(h):
+        for c in range(w):
+            if int(grid[r, c]) == marker_color:
+                min_dist = float("inf")
+                nearest_c = int(grid[r, c])
+
+                for bname, bc in border_colors.items():
+                    if bname == "top":
+                        dist = r
+                    elif bname == "bottom":
+                        dist = h - 1 - r
+                    elif bname == "left":
+                        dist = c
+                    elif bname == "right":
+                        dist = w - 1 - c
+                    else:
+                        continue
+
+                    if dist < min_dist:
+                        min_dist = dist
+                        nearest_c = bc
+
+                result[r, c] = nearest_c
+
+    return result
+
+
+def _gravity_stack(grid: np.ndarray, direction: str = "down",
+                   **_: Any) -> np.ndarray:
+    """Apply gravity to stack all non-zero pixels in a direction.
+
+    Preserves the relative order of pixels within each row/column.
+
+    Args:
+        grid: Input grid.
+        direction: 'down', 'up', 'left', or 'right'.
+
+    Returns:
+        Grid with pixels stacked in the specified direction.
+    """
+    result = np.zeros_like(grid)
+    h, w = grid.shape
+
+    if direction == "down":
+        for c in range(w):
+            col = grid[:, c]
+            nz = col[col != 0]
+            if len(nz) > 0:
+                result[h - len(nz):, c] = nz
+    elif direction == "up":
+        for c in range(w):
+            col = grid[:, c]
+            nz = col[col != 0]
+            if len(nz) > 0:
+                result[:len(nz), c] = nz
+    elif direction == "left":
+        for r in range(h):
+            row = grid[r, :]
+            nz = row[row != 0]
+            if len(nz) > 0:
+                result[r, :len(nz)] = nz
+    elif direction == "right":
+        for r in range(h):
+            row = grid[r, :]
+            nz = row[row != 0]
+            if len(nz) > 0:
+                result[r, w - len(nz):] = nz
+
+    return result
+
+
+def _draw_frame_around_objects(grid: np.ndarray, frame_color: int = 1,
+                               **_: Any) -> np.ndarray:
+    """Draw a 1-pixel frame around each connected object.
+
+    Args:
+        grid: Input grid.
+        frame_color: Color of the frame.
+
+    Returns:
+        Grid with frames drawn around objects.
+    """
+    result = grid.copy()
+    binary = (grid != 0).astype(np.int32)
+    labeled, num = ndimage.label(binary)
+
+    if num == 0:
+        return result
+
+    for label_id in range(1, num + 1):
+        mask = labeled == label_id
+        dilated = ndimage.binary_dilation(mask, iterations=1)
+        frame = dilated & ~mask
+        frame = frame & (grid == 0)
+        result[frame] = frame_color
+
+    return result
+
+
+def _fill_enclosed_regions(grid: np.ndarray, color: int = 1,
+                           bg_color: int = 0, **_: Any) -> np.ndarray:
+    """Fill enclosed background regions with the specified color.
+
+    Args:
+        grid: Input grid.
+        color: Fill color.
+        bg_color: Background color to fill.
+
+    Returns:
+        Grid with enclosed regions filled.
+    """
+    result = grid.copy()
+    binary = (grid == bg_color).astype(np.int32)
+    labeled, num = ndimage.label(binary)
+
+    if num == 0:
+        return result
+
+    border_labels: set[int] = set()
+    border_labels.update(labeled[0, :].tolist())
+    border_labels.update(labeled[-1, :].tolist())
+    border_labels.update(labeled[:, 0].tolist())
+    border_labels.update(labeled[:, -1].tolist())
+    border_labels.discard(0)
+
+    for label_id in range(1, num + 1):
+        if label_id not in border_labels:
+            result[labeled == label_id] = color
+
+    return result
+
+
+def _sort_objects_by_size(grid: np.ndarray, ascending: bool = True,
+                          start_color: int = 1, **_: Any) -> np.ndarray:
+    """Sort objects by size and recolor them sequentially.
+
+    Args:
+        grid: Input grid.
+        ascending: If True, smallest gets color start_color.
+        start_color: Starting color for the smallest/largest object.
+
+    Returns:
+        Grid with objects recolored by size rank.
+    """
+    result = np.zeros_like(grid)
+    binary = (grid != 0).astype(np.int32)
+    labeled, num = ndimage.label(binary)
+
+    if num == 0:
+        return grid.copy()
+
+    obj_info: list[tuple[int, int]] = []
+    for i in range(1, num + 1):
+        size = int(np.sum(labeled == i))
+        obj_info.append((size, i))
+
+    obj_info.sort(reverse=not ascending)
+
+    for rank, (_size, label_id) in enumerate(obj_info):
+        c = start_color + rank
+        if c > 9:
+            c = 9
+        result[labeled == label_id] = c
+
+    return result
+
+
+def _move_object_to_pos(grid: np.ndarray, color: int = 1,
+                        target_row: int = 0, target_col: int = 0,
+                        **_: Any) -> np.ndarray:
+    """Move all pixels of a specific color to a target position.
+
+    Args:
+        grid: Input grid.
+        color: Color of pixels to move.
+        target_row: Target row for top-left of the moved object.
+        target_col: Target column for top-left of the moved object.
+
+    Returns:
+        Grid with the object moved to the target position.
+    """
+    result = grid.copy()
+    mask = grid == color
+    if not np.any(mask):
+        return result
+
+    rows, cols = np.where(mask)
+    min_r, max_r = int(rows.min()), int(rows.max())
+    min_c, max_c = int(cols.min()), int(cols.max())
+
+    obj = grid[min_r:max_r + 1, min_c:max_c + 1].copy()
+    obj_mask = mask[min_r:max_r + 1, min_c:max_c + 1]
+
+    result[mask] = 0
+
+    h, w = result.shape
+    for r in range(obj.shape[0]):
+        for c in range(obj.shape[1]):
+            nr, nc = target_row + r, target_col + c
+            if 0 <= nr < h and 0 <= nc < w and obj_mask[r, c]:
+                result[nr, nc] = obj[r, c]
+
+    return result
+
+
+def _count_objects_mark(grid: np.ndarray, bg_color: int = 0,
+                        mark_color: int = 1, **_: Any) -> np.ndarray:
+    """Count objects and represent the count as a grid.
+
+    Creates a grid where each cell contains the count of objects.
+
+    Args:
+        grid: Input grid.
+        bg_color: Background color.
+        mark_color: Unused (kept for API compatibility).
+
+    Returns:
+        Grid filled with object count.
+    """
+    binary = (grid != bg_color).astype(np.int32)
+    _, num = ndimage.label(binary)
+    result = np.full_like(grid, num)
+    return result
+
+
+def _propagate_color(grid: np.ndarray, source_color: int = 1,
+                     target_color: int = 0, **_: Any) -> np.ndarray:
+    """Propagate source color to adjacent target color cells via BFS.
+
+    Args:
+        grid: Input grid.
+        source_color: Color to propagate.
+        target_color: Color to replace (default 0 = background).
+
+    Returns:
+        Grid with color propagated.
+    """
+    from collections import deque
+
+    result = grid.copy()
+    h, w = grid.shape
+
+    queue: deque = deque()
+    visited = np.zeros((h, w), dtype=bool)
+
+    for r in range(h):
+        for c in range(w):
+            if grid[r, c] == source_color:
+                queue.append((r, c))
+                visited[r, c] = True
+
+    directions = [(-1, 0), (1, 0), (0, -1), (0, 1)]
+    while queue:
+        r, c = queue.popleft()
+        for dr, dc in directions:
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w and not visited[nr, nc]:
+                if result[nr, nc] == target_color:
+                    result[nr, nc] = source_color
+                    visited[nr, nc] = True
+                    queue.append((nr, nc))
+
+    return result
+
+
+def _connect_dots(grid: np.ndarray, color: int = 1, **_: Any) -> np.ndarray:
+    """Connect dots (single pixels) with lines in row-major order.
+
+    Args:
+        grid: Input grid.
+        color: Unused (lines use original pixel colors).
+
+    Returns:
+        Grid with dots connected by lines.
+    """
+    result = grid.copy()
+    h, w = grid.shape
+
+    points: list[tuple[int, int, int]] = []
+    for r in range(h):
+        for c in range(w):
+            if grid[r, c] != 0:
+                points.append((r, c, int(grid[r, c])))
+
+    for i in range(len(points) - 1):
+        r1, c1, col1 = points[i]
+        r2, c2, col2 = points[i + 1]
+        if col1 == col2:
+            dr = abs(r2 - r1)
+            dc = abs(c2 - c1)
+            steps = max(dr, dc, 1)
+            for s in range(steps + 1):
+                r = int(round(r1 + (r2 - r1) * s / steps))
+                c = int(round(c1 + (c2 - c1) * s / steps))
+                if 0 <= r < h and 0 <= c < w:
+                    result[r, c] = col1
+
+    return result
 
 
 def _register_primitives() -> None:
@@ -1367,6 +2650,44 @@ def _register_primitives() -> None:
         "crop-to-obj": _crop_to_obj,
         "replicate-obj": _replicate_obj,
         "pad-row": _pad_row,
+        # New primitives v2.4.9
+        "label-cc": _label_cc,
+        "count-cc": _count_cc,
+        "symmetric-fill": _symmetric_fill,
+        "apply-if": _apply_if,
+        "remove-obj": _remove_obj,
+        "object-count": _object_count,
+        "fill-gradient": _fill_gradient,
+        # New primitives v2.5.0 - High-value primitives
+        "fill-if": _fill_if,
+        "rotate-object": _rotate_object,
+        "scale-object": _scale_object,
+        "diagonal-fill": _diagonal_fill,
+        "pattern-extend": _pattern_extend,
+        # v2.9: High-impact primitives for 68% accuracy target
+        "tile-seed": _tile_seed,
+        "fill-by-period": _fill_by_period,
+        "crop-to-bbox": _crop_to_bbox,
+        "fill-empty-neighbor": _fill_empty_neighbor,
+        "direct-map": _direct_map,
+        "repeat-grid": _repeat_grid,
+        "crop-to-largest-cc": _crop_to_largest_cc,
+        # v3.0: High-impact primitives for 68% accuracy target
+        "universal-color-map": _universal_color_map,
+        "smart-flood-fill": _smart_flood_fill,
+        "grid-diff-apply": _grid_diff_apply,
+        "extract-and-recolor": _extract_and_recolor,
+        "conditional-map": _conditional_map,
+        "nearest-neighbor-transform": _nearest_neighbor_transform,
+        "replace-marker-with-border": _replace_marker_with_border,
+        "gravity-stack": _gravity_stack,
+        "draw-frame-around-objects": _draw_frame_around_objects,
+        "fill-enclosed-regions": _fill_enclosed_regions,
+        "sort-objects-by-size": _sort_objects_by_size,
+        "move-object-to-pos": _move_object_to_pos,
+        "count-objects-mark": _count_objects_mark,
+        "propagate-color": _propagate_color,
+        "connect-dots": _connect_dots,
     }
 
 
