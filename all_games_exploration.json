@@ -1,0 +1,4755 @@
+{
+  "ls20": {
+    "game_id": "ls20",
+    "attrs": {
+      "akoadfsur": 0,
+      "aqygnziho": 3,
+      "cklxociuu": 3,
+      "drtdqwdbc": 64,
+      "ebfuxzbvn": 0,
+      "fwckfzsyc": 5,
+      "game_id": "ls20",
+      "gisrhqpee": 5,
+      "hiaauhahz": 1,
+      "level_index": 0,
+      "ltwrkifkx": 34,
+      "oeuabekjf": false,
+      "qlgmdayuo": 64,
+      "tbwnoxqgc": 5,
+      "win_score": 7,
+      "zyoimjaei": 45
+    },
+    "sprite_lists": {
+      "dhksvilbb": {
+        "count": 4,
+        "type": "int"
+      },
+      "ehwheiwsk": {
+        "count": 1,
+        "type": "int"
+      },
+      "ijessuuig": {
+        "count": 6,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            0
+          ]
+        ],
+        "tags_sample": [
+          [],
+          [],
+          []
+        ],
+        "names_sample": [
+          "gngifvjddu",
+          "fywfjzkxlm",
+          "mkfbgalsbe"
+        ],
+        "sizes_sample": [
+          [
+            3,
+            3
+          ],
+          [
+            3,
+            3
+          ],
+          [
+            3,
+            3
+          ]
+        ]
+      },
+      "ldxlnycps": {
+        "count": 1,
+        "type": "int"
+      },
+      "lvrnuajbl": {
+        "count": 1,
+        "type": "bool"
+      },
+      "plrpelhym": {
+        "count": 1,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            34,
+            10
+          ]
+        ],
+        "tags_sample": [
+          [
+            "rjlbuycveu"
+          ]
+        ],
+        "names_sample": [
+          "rjlbuycveu"
+        ],
+        "sizes_sample": [
+          [
+            5,
+            5
+          ]
+        ]
+      },
+      "srgbthxut": {
+        "count": 1,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            35,
+            11
+          ]
+        ],
+        "tags_sample": [
+          [
+            "kvynsvxbpi"
+          ]
+        ],
+        "names_sample": [
+          "kvynsvxbpi"
+        ],
+        "sizes_sample": [
+          [
+            3,
+            3
+          ]
+        ]
+      },
+      "tnkekoeuk": {
+        "count": 4,
+        "type": "int"
+      },
+      "yjdexjsoa": {
+        "count": 1,
+        "type": "int"
+      }
+    },
+    "single_sprites": {
+      "aqdxgoyvu": {
+        "type": "Sprite",
+        "x": 0,
+        "y": 0,
+        "tags": [],
+        "name": "sqpmiygfvh",
+        "size": [
+          1,
+          1
+        ]
+      },
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      },
+      "gudziatsk": {
+        "type": "Sprite",
+        "x": 34,
+        "y": 45,
+        "tags": [
+          "sfqyzhzkij"
+        ],
+        "name": "sfqyzhzkij",
+        "size": [
+          5,
+          5
+        ]
+      },
+      "htkmubhry": {
+        "type": "Sprite",
+        "x": 3,
+        "y": 55,
+        "tags": [
+          "wgmbtyhvbc"
+        ],
+        "name": "wgmbtyhvbc",
+        "size": [
+          6,
+          6
+        ]
+      },
+      "htkmubhry_2": {
+        "type": "Sprite",
+        "x": 1,
+        "y": 53,
+        "tags": [
+          "eqatonpohu"
+        ],
+        "name": "eqatonpohu",
+        "size": [
+          10,
+          10
+        ]
+      },
+      "tsynhckng": {
+        "type": "Sprite",
+        "x": 1,
+        "y": 53,
+        "tags": [
+          "ghizzeqtoh"
+        ],
+        "name": "ghizzeqtoh",
+        "size": [
+          10,
+          10
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      1,
+      3,
+      4,
+      5,
+      8,
+      9,
+      11,
+      12
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "win_levels": 7,
+    "game_type": "Ls20",
+    "all_attrs": [
+      "action",
+      "akoadfsur",
+      "alsxlhizr",
+      "aqdxgoyvu",
+      "aqygnziho",
+      "bejndxqqzf",
+      "byotxmvkt",
+      "camera",
+      "cklxociuu",
+      "complete_action",
+      "current_level",
+      "debug",
+      "dhksvilbb",
+      "drtdqwdbc",
+      "ebfuxzbvn",
+      "ehwheiwsk",
+      "euemavvxz",
+      "full_reset",
+      "fwckfzsyc",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "gisrhqpee",
+      "gudziatsk",
+      "handle_reset",
+      "hasivfwip",
+      "hiaauhahz",
+      "htkmubhry",
+      "htkmubhry_2",
+      "ijessuuig",
+      "is_action_complete",
+      "is_last_level",
+      "ldxlnycps",
+      "level_index",
+      "level_reset",
+      "lose",
+      "ltwrkifkx",
+      "lvrnuajbl",
+      "mrznumynfe",
+      "next_level",
+      "oeuabekjf",
+      "ofoahudlo",
+      "on_set_level",
+      "pbznecvnfr",
+      "perform_action",
+      "plrpelhym",
+      "qetwzqzzik",
+      "qlgmdayuo",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "srgbthxut",
+      "step",
+      "tbwnoxqgc",
+      "tnkekoeuk",
+      "try_move",
+      "try_move_sprite",
+      "tsynhckng",
+      "txnfzvzetn",
+      "vqfjzzkhid",
+      "wbcenorpju",
+      "win",
+      "win_score",
+      "wsoslqeku",
+      "yjdexjsoa",
+      "zyoimjaei"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ],
+    "level_tags": {
+      "ihdgageizm": 116
+    }
+  },
+  "vc33": {
+    "game_id": "vc33",
+    "attrs": {
+      "game_id": "vc33",
+      "level_index": 0,
+      "win_score": 7,
+      "wrcxjliglr": "dict(2 keys: [<arcengine.sprites.Sprite object at 0x0000018388124B50>, <arcengine.sprites.Sprite object at 0x0000018388124AA0>])"
+    },
+    "sprite_lists": {
+      "dwwmpxqsza": {
+        "count": 2,
+        "type": "int"
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          32,
+          32
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      3,
+      4,
+      5,
+      7,
+      9,
+      11
+    ],
+    "actions": [
+      6
+    ],
+    "win_levels": 7,
+    "game_type": "Vc33",
+    "all_attrs": [
+      "action",
+      "bcpuwqzpxw",
+      "bnnqyrupir",
+      "camera",
+      "cicmkyghjc",
+      "complete_action",
+      "current_level",
+      "debug",
+      "dwwmpxqsza",
+      "ezbubuphlm",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "heczcoeosi",
+      "hpakcxndwy",
+      "ielczunthe",
+      "iootdyzbwv",
+      "is_action_complete",
+      "is_last_level",
+      "kectayqmfn",
+      "ldbtzvbmoj",
+      "level_index",
+      "level_reset",
+      "lose",
+      "mwsdltsaxd",
+      "mzqwlqlkrv",
+      "next_level",
+      "on_set_level",
+      "perform_action",
+      "pjfzvvjgud",
+      "qhmwbtpcsk",
+      "rcbyiqlbza",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "usqfmpzewf",
+      "vktvbwfvhu",
+      "vmjlfzxesj",
+      "win",
+      "win_score",
+      "wpcgsoumbr",
+      "wrcxjliglr",
+      "xitrlzpbgu",
+      "xowbpvmzbd",
+      "ysoqxdegud",
+      "zfcrfmorna",
+      "ztjckgmepu"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "tr87": {
+    "game_id": "tr87",
+    "attrs": {
+      "game_id": "tr87",
+      "level_index": 0,
+      "qvtymdcqear_index": 0,
+      "upmkivwyrxz": 128,
+      "vfpimnmtnta": 128,
+      "win_score": 6,
+      "yfetxjexviz": -1
+    },
+    "sprite_lists": {
+      "cifzvbcuwqe": {
+        "count": 6,
+        "type": "tuple"
+      },
+      "qvtymdcqear_parts": {
+        "count": 2,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            15,
+            48
+          ],
+          [
+            15,
+            59
+          ]
+        ],
+        "tags_sample": [
+          [],
+          []
+        ],
+        "names_sample": [
+          "qvtymdcqear1",
+          "qvtymdcqear1"
+        ],
+        "sizes_sample": [
+          [
+            5,
+            2
+          ],
+          [
+            5,
+            2
+          ]
+        ]
+      },
+      "zdwrfusvmx": {
+        "count": 22,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            13,
+            5
+          ],
+          [
+            23,
+            5
+          ],
+          [
+            36,
+            5
+          ],
+          [
+            46,
+            5
+          ],
+          [
+            13,
+            14
+          ]
+        ],
+        "tags_sample": [
+          [
+            "nxkictbbvzt"
+          ],
+          [
+            "nxkictbbvzt"
+          ],
+          [
+            "nxkictbbvzt"
+          ]
+        ],
+        "names_sample": [
+          "nxkictbbvztA3",
+          "nxkictbbvztB6",
+          "nxkictbbvztA5"
+        ],
+        "sizes_sample": [
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            5
+          ]
+        ]
+      },
+      "ztgmtnnufb": {
+        "count": 5,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            15,
+            52
+          ],
+          [
+            22,
+            52
+          ],
+          [
+            29,
+            52
+          ],
+          [
+            36,
+            52
+          ],
+          [
+            43,
+            52
+          ]
+        ],
+        "tags_sample": [
+          [
+            "nxkictbbvzt"
+          ],
+          [
+            "nxkictbbvzt"
+          ],
+          [
+            "nxkictbbvzt"
+          ]
+        ],
+        "names_sample": [
+          "nxkictbbvztB1",
+          "nxkictbbvztB7",
+          "nxkictbbvztB2"
+        ],
+        "sizes_sample": [
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            5
+          ]
+        ]
+      },
+      "zvojhrjxxm": {
+        "count": 5,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            15,
+            41
+          ],
+          [
+            22,
+            41
+          ],
+          [
+            29,
+            41
+          ],
+          [
+            36,
+            41
+          ],
+          [
+            43,
+            41
+          ]
+        ],
+        "tags_sample": [
+          [
+            "nxkictbbvzt"
+          ],
+          [
+            "nxkictbbvzt"
+          ],
+          [
+            "nxkictbbvzt"
+          ]
+        ],
+        "names_sample": [
+          "nxkictbbvztA4",
+          "nxkictbbvztA2",
+          "nxkictbbvztA3"
+        ],
+        "sizes_sample": [
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            5
+          ]
+        ]
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      1,
+      2,
+      3,
+      5,
+      7,
+      10
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "win_levels": 6,
+    "game_type": "Tr87",
+    "all_attrs": [
+      "action",
+      "bsqsshqpox",
+      "camera",
+      "cifzvbcuwqe",
+      "complete_action",
+      "crvjftupafy",
+      "current_level",
+      "debug",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "hgfgmiagdcc",
+      "is_action_complete",
+      "is_last_level",
+      "iwbhnvdaao",
+      "level_index",
+      "level_reset",
+      "lose",
+      "next_level",
+      "on_set_level",
+      "perform_action",
+      "pjqbnqnbsq",
+      "pvgetmhmhgk",
+      "qrkneeaawb",
+      "qvtymdcqear_index",
+      "qvtymdcqear_parts",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "upmkivwyrxz",
+      "vfpimnmtnta",
+      "win",
+      "win_score",
+      "wpbnovjwkv",
+      "yfetxjexviz",
+      "zdwrfusvmx",
+      "ztgmtnnufb",
+      "zvojhrjxxm"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "tu93": {
+    "game_id": "tu93",
+    "attrs": {
+      "game_id": "tu93",
+      "kdkehgjrzq": 0,
+      "level_index": 0,
+      "win_score": 9,
+      "ylmdnwbdyy": "dict(0 keys: [])"
+    },
+    "sprite_lists": {},
+    "single_sprites": {
+      "camera": {
+        "type": "helhhqxnwe",
+        "x": 0,
+        "y": 0,
+        "size": [
+          39,
+          39
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      2,
+      4,
+      5,
+      6,
+      9,
+      14
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4
+    ],
+    "win_levels": 9,
+    "game_type": "Tu93",
+    "all_attrs": [
+      "action",
+      "bwlnieccpx",
+      "camera",
+      "complete_action",
+      "current_level",
+      "ddmvoavzus",
+      "debug",
+      "dsabqdmfyq",
+      "eavvrzhize",
+      "erkaicaqdh",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "gmwsemdsae",
+      "handle_reset",
+      "is_action_complete",
+      "is_last_level",
+      "itwvxwpzyb",
+      "ixnhjkzwic",
+      "jxclhrfhnn",
+      "kdkehgjrzq",
+      "ksulgrfyqx",
+      "level_index",
+      "level_reset",
+      "lose",
+      "lvzrmdesux",
+      "lxwbdlqxvq",
+      "next_level",
+      "ogedgxpgdy",
+      "on_set_level",
+      "onfzuzfvcl",
+      "perform_action",
+      "qlzvpfwmqv",
+      "rgwzxyjuqc",
+      "rxdvicwstj",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "tnwgpjxbwe",
+      "try_move",
+      "try_move_sprite",
+      "uneirnujpq",
+      "upxtibxaya",
+      "wcmxxknbpe",
+      "win",
+      "win_score",
+      "wlhbetxehh",
+      "ylmdnwbdyy",
+      "yzidymzqhc"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "bp35": {
+    "game_id": "bp35",
+    "attrs": {
+      "game_id": "bp35",
+      "hbqwwgceeqp": 0,
+      "heywwwvrogx": false,
+      "krqzxbshzqn": false,
+      "level_index": 0,
+      "win_score": 9
+    },
+    "sprite_lists": {
+      "available_actions": {
+        "count": 4,
+        "type": "int"
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          8,
+          8
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      3,
+      5,
+      9,
+      10,
+      11,
+      14
+    ],
+    "actions": [
+      3,
+      4,
+      6,
+      7
+    ],
+    "win_levels": 9,
+    "game_type": "Bp35",
+    "all_attrs": [
+      "action",
+      "available_actions",
+      "camera",
+      "complete_action",
+      "current_level",
+      "debug",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "hbqwwgceeqp",
+      "heywwwvrogx",
+      "is_action_complete",
+      "is_last_level",
+      "krqzxbshzqn",
+      "level_index",
+      "level_reset",
+      "lose",
+      "next_level",
+      "on_set_level",
+      "oztjzzyqoek",
+      "pending_frames",
+      "perform_action",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "tehvqeiqsdu",
+      "try_move",
+      "try_move_sprite",
+      "urzvqcxbsz",
+      "win",
+      "win_score",
+      "xpyxviqlfj"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "dc22": {
+    "game_id": "dc22",
+    "attrs": {
+      "ancwrndvh": 0,
+      "bbobkhxob": 0,
+      "divlqsjra": false,
+      "fadccmsnb": false,
+      "fjiyimenq": false,
+      "ftqgypkyz": "dict(0 keys: [])",
+      "fvwekbbhj": "",
+      "game_id": "dc22",
+      "gfalivzzh": 64,
+      "guspipewt": false,
+      "khgksxfzv": 0,
+      "level_index": 0,
+      "ltnwoxuhf": 0,
+      "ozarnpwde": 0,
+      "pckkgvqwk": "",
+      "qnlqkldrl": false,
+      "sachklrxui": "dict(7 keys: ['sprites', 'crzsjq_x', 'crzsjq_y', 'crzsjq_attached_kind', 'attached_brixto_prefix'])",
+      "scshqquvb": -1,
+      "sjixewahg": 0,
+      "svfovexaz": "dict(0 keys: [])",
+      "svxnnbpjl": "none",
+      "usmccgsno": "dict(2 keys: ['refgps-plelvb', 'tovemc-plelvb'])",
+      "uxtzlxsiq": 0,
+      "vgrdxwayb": 44,
+      "wcogbyfun": 0,
+      "win_score": 6
+    },
+    "sprite_lists": {
+      "deajuohco": {
+        "count": 2,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            41,
+            6
+          ],
+          [
+            41,
+            23
+          ]
+        ],
+        "tags_sample": [
+          [
+            "aybe"
+          ],
+          [
+            "aybe"
+          ]
+        ],
+        "names_sample": [
+          "sprite-12",
+          "sprite-12"
+        ],
+        "sizes_sample": [
+          [
+            15,
+            7
+          ],
+          [
+            15,
+            7
+          ]
+        ]
+      },
+      "jrxnntmty": {
+        "count": 3,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            12,
+            14
+          ],
+          [
+            8,
+            24
+          ],
+          [
+            18,
+            10
+          ]
+        ],
+        "tags_sample": [
+          [
+            "a",
+            "omvz",
+            "orderefgps",
+            "tovemc"
+          ],
+          [
+            "b",
+            "orderefgps",
+            "tovemc"
+          ],
+          [
+            "b",
+            "omvz",
+            "orderefgps",
+            "tovemc"
+          ]
+        ],
+        "names_sample": [
+          "refgps-plelvb1",
+          "tovemc-plelvb1",
+          "tovemc-plelvb2"
+        ],
+        "sizes_sample": [
+          [
+            10,
+            10
+          ],
+          [
+            4,
+            4
+          ],
+          [
+            4,
+            4
+          ]
+        ]
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          44
+        ]
+      },
+      "hfuqkxulm": {
+        "type": "Sprite",
+        "x": 24,
+        "y": 10,
+        "tags": [
+          "goknoi"
+        ],
+        "name": "goknoi",
+        "size": [
+          2,
+          2
+        ]
+      },
+      "qnnpcoyzd": {
+        "type": "Sprite",
+        "x": 10,
+        "y": 30,
+        "tags": [
+          "jfva"
+        ],
+        "name": "plflho1",
+        "size": [
+          2,
+          2
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      2,
+      3,
+      4,
+      5,
+      8,
+      9,
+      11,
+      13,
+      14
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      6
+    ],
+    "win_levels": 6,
+    "game_type": "Dc22",
+    "all_attrs": [
+      "action",
+      "alugfbupso",
+      "ancwrndvh",
+      "axjxbolgwv",
+      "bbobkhxob",
+      "camera",
+      "coihvniexy",
+      "collides_with",
+      "complete_action",
+      "current_level",
+      "dcaolewdzz",
+      "deajuohco",
+      "debug",
+      "divlqsjra",
+      "epywhrcwy",
+      "fadccmsnb",
+      "fjiyimenq",
+      "ftqgypkyz",
+      "full_reset",
+      "fvwekbbhj",
+      "fydslgnbt",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "gfalivzzh",
+      "gollavnbll",
+      "guspipewt",
+      "handle_reset",
+      "hfuqkxulm",
+      "htjxhnseij",
+      "ilvrmetiiv",
+      "is_action_complete",
+      "is_last_level",
+      "jrxnntmty",
+      "jsdlxvyglh",
+      "jtktipjpzi",
+      "jtrjvpiyvp",
+      "kghadhkkby",
+      "khgksxfzv",
+      "kiwniaoeyu",
+      "lcdavdtabp",
+      "level_index",
+      "level_reset",
+      "lmacwotry",
+      "lose",
+      "ltnwoxuhf",
+      "mucpkewnyc",
+      "mzuiagpcmy",
+      "next_level",
+      "okianjtwqq",
+      "on_set_level",
+      "ozarnpwde",
+      "pckkgvqwk",
+      "perform_action",
+      "pmmrygpdgl",
+      "puajsfbscm",
+      "pxfvdjsard",
+      "qiwzdkqjja",
+      "qnlqkldrl",
+      "qnnpcoyzd",
+      "qrvjgseoyk",
+      "rcorpfmgqi",
+      "sachklrxui",
+      "scshqquvb",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "sjixewahg",
+      "smxyfelexa",
+      "step",
+      "sutqmbilwv",
+      "svfovexaz",
+      "svxnnbpjl",
+      "swmjqbirpa",
+      "swwqomvyrt",
+      "sxnzvaqltp",
+      "szwacahvg",
+      "tbegotpoxh",
+      "tmfgaiynfe",
+      "tnedtgkguq",
+      "try_move",
+      "try_move_sprite",
+      "tygdgvwklq",
+      "ueaaxoxiq",
+      "ujotjblwn",
+      "usmccgsno",
+      "uxtzlxsiq",
+      "vgrdxwayb",
+      "vqqdlnuxnr",
+      "wcogbyfun",
+      "win",
+      "win_score",
+      "xodizggcom",
+      "yfxrlzdyvi",
+      "yhthylsyvr",
+      "yuonzbouxb"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "s5i5": {
+    "game_id": "s5i5",
+    "attrs": {
+      "fewcuujhek": -1,
+      "game_id": "s5i5",
+      "level_index": 0,
+      "pigtralzpb": "dict(2 keys: [<arcengine.sprites.Sprite object at 0x000001838808CB50>, <arcengine.sprites.Sprite object at 0x000001838808CAA0>])",
+      "uricqfoplr": "dict(4 keys: [<arcengine.sprites.Sprite object at 0x000001838808C890>, <arcengine.sprites.Sprite object at 0x000001838808C7E0>, <arcengine.sprites.Sprite object at 0x000001838808C9F0>, <arcengine.sprites.Sprite object at 0x000001838808C730>])",
+      "whoonmfbnp": "dict(0 keys: [])",
+      "win_score": 8
+    },
+    "sprite_lists": {},
+    "single_sprites": {
+      "camera": {
+        "type": "gdivpwtbrb",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      2,
+      3,
+      4,
+      5,
+      11,
+      13,
+      14
+    ],
+    "actions": [
+      6
+    ],
+    "win_levels": 8,
+    "game_type": "S5i5",
+    "all_attrs": [
+      "action",
+      "bhgumdfgqr",
+      "camera",
+      "complete_action",
+      "current_level",
+      "debug",
+      "dxlryikffn",
+      "eeyirqljyp",
+      "fewcuujhek",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "gnpdxxlhrp",
+      "gwiuiwqizb",
+      "handle_reset",
+      "is_action_complete",
+      "is_last_level",
+      "level_index",
+      "level_reset",
+      "lose",
+      "neurwiqfry",
+      "next_level",
+      "nkkhgerxvq",
+      "on_set_level",
+      "perform_action",
+      "pigtralzpb",
+      "qownxibuiy",
+      "rkqyhehjqs",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "uiqzouvdxd",
+      "uricqfoplr",
+      "whoonmfbnp",
+      "win",
+      "win_score",
+      "zhrkjlkeib"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "sk48": {
+    "game_id": "sk48",
+    "attrs": {
+      "game_id": "sk48",
+      "jdojcthkf": "dict(1 keys: [<arcengine.sprites.Sprite object at 0x0000018388051DE0>])",
+      "level_index": 0,
+      "lgdrixfno": -1,
+      "mwfajkguqx": "dict(2 keys: [<arcengine.sprites.Sprite object at 0x0000018388051D30>, <arcengine.sprites.Sprite object at 0x0000018388051DE0>])",
+      "qiercdohl": 196,
+      "vhzjwcpmk": 196,
+      "vjfbwggsd": "dict(2 keys: [<arcengine.sprites.Sprite object at 0x0000018388051D30>, <arcengine.sprites.Sprite object at 0x0000018388051DE0>])",
+      "win_score": 8,
+      "xpmcmtbcv": "dict(1 keys: [<arcengine.sprites.Sprite object at 0x0000018388051D30>])",
+      "xsoixcero": false
+    },
+    "sprite_lists": {
+      "seghobzez": {
+        "count": 1,
+        "type": "list"
+      },
+      "vbelzuaian": {
+        "count": 6,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            41,
+            30
+          ],
+          [
+            41,
+            24
+          ],
+          [
+            41,
+            18
+          ],
+          [
+            26,
+            56
+          ],
+          [
+            32,
+            56
+          ]
+        ],
+        "tags_sample": [
+          [
+            "elmjchdqcn"
+          ],
+          [
+            "elmjchdqcn"
+          ],
+          [
+            "elmjchdqcn"
+          ]
+        ],
+        "names_sample": [
+          "elmjchdqcn",
+          "elmjchdqcn",
+          "elmjchdqcn"
+        ],
+        "sizes_sample": [
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            6
+          ]
+        ]
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      },
+      "lqwkgffeb": {
+        "type": "Sprite",
+        "x": 17,
+        "y": 12,
+        "tags": [
+          "jtteddgeyl"
+        ],
+        "name": "rtwdndlhdf",
+        "size": [
+          30,
+          30
+        ]
+      },
+      "vzvypfsnt": {
+        "type": "Sprite",
+        "x": 11,
+        "y": 36,
+        "tags": [
+          "epdquznwmq",
+          "sys_click"
+        ],
+        "name": "ejlpqgojjt",
+        "size": [
+          6,
+          6
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      8,
+      9,
+      14
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      6,
+      7
+    ],
+    "win_levels": 8,
+    "game_type": "Sk48",
+    "all_attrs": [
+      "action",
+      "bnrdrdiakd",
+      "camera",
+      "complete_action",
+      "crbbymputr",
+      "current_level",
+      "debug",
+      "ebribtrdgw",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "ghcqtpzzlq",
+      "gvtmoopqgy",
+      "hadfnehqh",
+      "handle_reset",
+      "hgivzuhjvj",
+      "is_action_complete",
+      "is_last_level",
+      "jdojcthkf",
+      "level_index",
+      "level_reset",
+      "lgdrixfno",
+      "ljprkjlji",
+      "lose",
+      "lqwkgffeb",
+      "mwfajkguqx",
+      "next_level",
+      "nixwuekdfm",
+      "on_set_level",
+      "perform_action",
+      "pptqisyill",
+      "pzzwlsmdt",
+      "qiercdohl",
+      "qzvlbxkjgk",
+      "rztawzist",
+      "seghobzez",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "uqclctlhyh",
+      "vbelzuaian",
+      "vhzjwcpmk",
+      "vjfbwggsd",
+      "vzvypfsnt",
+      "win",
+      "win_score",
+      "xpmcmtbcv",
+      "xqkpzztujs",
+      "xsoixcero",
+      "yzyidartf"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "tn36": {
+    "game_id": "tn36",
+    "attrs": {
+      "game_id": "tn36",
+      "level_index": 0,
+      "nyhaiggftp": false,
+      "pgualuszrs": false,
+      "win_score": 7
+    },
+    "sprite_lists": {},
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      },
+      "lmkazecqdh": {
+        "type": "ccfrgpdila",
+        "x": 1,
+        "y": 1,
+        "size": [
+          61,
+          1
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      1,
+      4,
+      5,
+      9,
+      11
+    ],
+    "actions": [
+      6
+    ],
+    "win_levels": 7,
+    "game_type": "Tn36",
+    "all_attrs": [
+      "action",
+      "camera",
+      "complete_action",
+      "current_level",
+      "debug",
+      "fdksqlmpki",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "is_action_complete",
+      "is_last_level",
+      "level_index",
+      "level_reset",
+      "lmkazecqdh",
+      "lose",
+      "next_level",
+      "nyhaiggftp",
+      "on_set_level",
+      "perform_action",
+      "pgualuszrs",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "slpqhjqczp",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "uihpdltbxp",
+      "win",
+      "win_score",
+      "xkvjwtvanm"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "ft09": {
+    "game_id": "ft09",
+    "attrs": {
+      "game_id": "ft09",
+      "level_index": 0,
+      "our": 0,
+      "pdw": 32,
+      "win_score": 6,
+      "zbh": 32
+    },
+    "sprite_lists": {
+      "fhc": {
+        "count": 8,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            18,
+            18
+          ],
+          [
+            22,
+            18
+          ],
+          [
+            26,
+            18
+          ],
+          [
+            18,
+            22
+          ],
+          [
+            26,
+            22
+          ]
+        ],
+        "tags_sample": [
+          [
+            "Hkx",
+            "gOi"
+          ],
+          [
+            "Hkx",
+            "gOi"
+          ],
+          [
+            "Hkx",
+            "gOi"
+          ]
+        ],
+        "names_sample": [
+          "Hkx",
+          "Hkx",
+          "Hkx"
+        ],
+        "sizes_sample": [
+          [
+            3,
+            3
+          ],
+          [
+            3,
+            3
+          ],
+          [
+            3,
+            3
+          ]
+        ]
+      },
+      "gig": {
+        "count": 1,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            22,
+            22
+          ]
+        ],
+        "tags_sample": [
+          [
+            "bsT"
+          ]
+        ],
+        "names_sample": [
+          "wmW"
+        ],
+        "sizes_sample": [
+          [
+            3,
+            3
+          ]
+        ]
+      },
+      "gqb": {
+        "count": 2,
+        "type": "int"
+      },
+      "irw": {
+        "count": 3,
+        "type": "list"
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          32,
+          32
+        ]
+      },
+      "zth": {
+        "type": "Sprite",
+        "x": 16,
+        "y": 16,
+        "tags": [
+          "Ycb"
+        ],
+        "name": "UEq",
+        "size": [
+          15,
+          15
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      2,
+      4,
+      5,
+      8,
+      9,
+      12
+    ],
+    "actions": [
+      6
+    ],
+    "win_levels": 6,
+    "game_type": "Ft09",
+    "all_attrs": [
+      "action",
+      "camera",
+      "cgj",
+      "complete_action",
+      "current_level",
+      "debug",
+      "fhc",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "gig",
+      "gqb",
+      "handle_reset",
+      "irw",
+      "is_action_complete",
+      "is_last_level",
+      "level_index",
+      "level_reset",
+      "lose",
+      "lpw",
+      "mou",
+      "next_level",
+      "olv",
+      "on_set_level",
+      "our",
+      "pdw",
+      "perform_action",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "win",
+      "win_score",
+      "zbh",
+      "zth"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "su15": {
+    "game_id": "su15",
+    "attrs": {
+      "dgpsayght": 4,
+      "fchredntr": 64,
+      "game_id": "su15",
+      "gdamdvokm": 4,
+      "gtmjjdjwl": 0,
+      "hirfdeznh": 16,
+      "ikskfqldi": 4,
+      "kacsjmxae": 8,
+      "kcuphgwar": "dict(0 keys: [])",
+      "kqyosprvc": 2.6666666666666665,
+      "kqywaxhmsb": "dict(1 keys: [<arcengine.sprites.Sprite object at 0x0000018386FC7C20>])",
+      "level_index": 0,
+      "lphwskxbh": "dict(0 keys: [])",
+      "lvpppoehd": "dict(0 keys: [])",
+      "oicctzexh": false,
+      "ojzsjmpic": 64,
+      "pbwlyyjqy": "dict(0 keys: [])",
+      "ppvvgaayv": "dict(0 keys: [])",
+      "qygchysnh": "none",
+      "rmziewkdi": 4,
+      "souzbwugw": 0,
+      "sqwdaqczb": false,
+      "tsepktxda": "dict(0 keys: [])",
+      "ttwugcsth": 10.0,
+      "vdgmwvrhd": "dict(0 keys: [])",
+      "vsfwpngmx": false,
+      "vxsrkfddz": 8.0,
+      "win_score": 9,
+      "wqkwfwgny": "dict(0 keys: [])",
+      "xwrhpebfn": 0,
+      "xydvujvak": "dict(0 keys: [])",
+      "yghzqxumz": "dict(0 keys: [])"
+    },
+    "sprite_lists": {
+      "actions": {
+        "count": 224,
+        "type": "ActionInput"
+      },
+      "dsqlbvwaj": {
+        "count": 2,
+        "type": "int"
+      },
+      "lkujttxgs": {
+        "count": 1,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            3,
+            58
+          ]
+        ],
+        "tags_sample": [
+          [
+            "2",
+            "zmlxwcvwb"
+          ]
+        ],
+        "names_sample": [
+          "2"
+        ],
+        "sizes_sample": [
+          [
+            3,
+            3
+          ]
+        ]
+      },
+      "nscnqkkvg": {
+        "count": 1,
+        "type": "list"
+      },
+      "powykypsm": {
+        "count": 1,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            44,
+            11
+          ]
+        ],
+        "tags_sample": [
+          [
+            "xkstxyqbs"
+          ]
+        ],
+        "names_sample": [
+          "0008hngjwqibfi"
+        ],
+        "sizes_sample": [
+          [
+            9,
+            9
+          ]
+        ]
+      },
+      "qbykqfzrj": {
+        "count": 1,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            30,
+            4
+          ]
+        ],
+        "tags_sample": [
+          [
+            "rgjznrcin"
+          ]
+        ],
+        "names_sample": [
+          "0016fnrcxwfvtx"
+        ],
+        "sizes_sample": [
+          [
+            3,
+            3
+          ]
+        ]
+      }
+    },
+    "single_sprites": {
+      "bicnaxoxq": {
+        "type": "Sprite",
+        "x": 8,
+        "y": 52,
+        "tags": [
+          "ooutlqdaq"
+        ],
+        "name": "0020qkplcbivxi",
+        "size": [
+          4,
+          4
+        ]
+      },
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      },
+      "vmgyqpnfu": {
+        "type": "Sprite",
+        "x": 0,
+        "y": 0,
+        "tags": [],
+        "name": "0029obpugmgzgr",
+        "size": [
+          64,
+          64
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      3,
+      4,
+      5,
+      9,
+      15
+    ],
+    "actions": [
+      6,
+      7
+    ],
+    "win_levels": 9,
+    "game_type": "Su15",
+    "all_attrs": [
+      "action",
+      "actions",
+      "awbfxdhccd",
+      "axaxyjxqoe",
+      "bicnaxoxq",
+      "btfgzectsd",
+      "caaczjajzu",
+      "camera",
+      "cbdhpcilgb",
+      "cmaswhinr",
+      "cnbyleshjj",
+      "complete_action",
+      "current_level",
+      "debug",
+      "dfqhmningy",
+      "dgpsayght",
+      "dsqlbvwaj",
+      "dvqlynnpid",
+      "eynzbmjgmr",
+      "fchredntr",
+      "fezhhzhih",
+      "full_reset",
+      "game_id",
+      "gdamdvokm",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "gtmjjdjwl",
+      "handle_reset",
+      "hirfdeznh",
+      "hlsimbcfgc",
+      "idbgnpolc",
+      "ikskfqldi",
+      "is_action_complete",
+      "is_last_level",
+      "izzmxojnvq",
+      "jdeyppambj",
+      "jdphqevryx",
+      "jnieciwfsv",
+      "jrorxxkwlk",
+      "kacsjmxae",
+      "kcqeohsztd",
+      "kcuphgwar",
+      "kdalkftcb",
+      "knkahdczsl",
+      "kqyosprvc",
+      "kqywaxhmsb",
+      "ksuxajatq",
+      "level_index",
+      "level_reset",
+      "lgrcinsiro",
+      "lkujttxgs",
+      "lose",
+      "lphwskxbh",
+      "luwexfjhwl",
+      "lvpppoehd",
+      "mdetahtgad",
+      "nbfpjkxrnp",
+      "next_level",
+      "nhtlfoopnx",
+      "nscnqkkvg",
+      "oicctzexh",
+      "ojzsjmpic",
+      "on_set_level",
+      "oxgxfichu",
+      "pbwlyyjqy",
+      "perform_action",
+      "pkrdtzfrth",
+      "powykypsm",
+      "ppvvgaayv",
+      "qbykqfzrj",
+      "qygchysnh",
+      "qzquneuehr",
+      "rgxlnsrafr",
+      "rhziiktjfu",
+      "rmziewkdi",
+      "sdrzkrjcp",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "sgmsqapcxe",
+      "souzbwugw",
+      "sqwdaqczb",
+      "step",
+      "step_counter_ui",
+      "tmfwtfcyv",
+      "try_move",
+      "try_move_sprite",
+      "tsepktxda",
+      "ttwugcsth",
+      "vczehveskr",
+      "vdgmwvrhd",
+      "vmgyqpnfu",
+      "vsfwpngmx",
+      "vxsrkfddz",
+      "win",
+      "win_score",
+      "wkwqpjaqpc",
+      "wqkwfwgny",
+      "wwvumwkgbn",
+      "xspiwkmfbs",
+      "xuiddmbsef",
+      "xwrhpebfn",
+      "xxkedcuzq",
+      "xydvujvak",
+      "yghzqxumz",
+      "yxpvimvli",
+      "zdoyfxons",
+      "zmcyxbptrw"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "lf52": {
+    "game_id": "lf52",
+    "attrs": {
+      "apiwkxksucg": 0,
+      "game_id": "lf52",
+      "level_index": 0,
+      "win_score": 10,
+      "xcjqviblhlt": false,
+      "yrhkoqwmazp": false
+    },
+    "sprite_lists": {
+      "available_actions": {
+        "count": 6,
+        "type": "int"
+      },
+      "foztuzaztfm": {
+        "count": 10,
+        "type": "ndarray"
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          8,
+          8
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      1,
+      5,
+      9,
+      10,
+      14
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      6,
+      7
+    ],
+    "win_levels": 10,
+    "game_type": "Lf52",
+    "all_attrs": [
+      "action",
+      "apiwkxksucg",
+      "aqxalxbnig",
+      "available_actions",
+      "btiyglcumku",
+      "camera",
+      "complete_action",
+      "current_level",
+      "debug",
+      "foztuzaztfm",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "ikhhdzfmarl",
+      "is_action_complete",
+      "is_last_level",
+      "jxyktkxwle",
+      "level_index",
+      "level_reset",
+      "lose",
+      "next_level",
+      "on_set_level",
+      "perform_action",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "stturekyxu",
+      "tcsfuefuuy",
+      "try_move",
+      "try_move_sprite",
+      "win",
+      "win_score",
+      "xcjqviblhlt",
+      "yrhkoqwmazp"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "sc25": {
+    "game_id": "sc25",
+    "attrs": {
+      "agzbtzaakna": "dict(4 keys: ['acyylh', 'frame', 'max_frames', 'fire_sprites'])",
+      "eycwbtepcvs": false,
+      "eyxbonasvgm": 50,
+      "game_id": "sc25",
+      "ggotuphkheh": "dict(4 keys: ['acyylh', 'frame', 'spell_name', 'slots_to_demo'])",
+      "ibmhvvyrikn": 0,
+      "ijhfdcamokt": "sieesc_chwjgc",
+      "jdmucabyqar": 1,
+      "jwlqyoqyagv": "dict(5 keys: ['acyylh', 'frame', 'max_frames', 'original_scale', 'target_scale'])",
+      "level_index": 0,
+      "mtfwxhxooqg": "dict(9 keys: [<arcengine.sprites.Sprite object at 0x0000018388229FF0>, <arcengine.sprites.Sprite object at 0x0000018388229F40>, <arcengine.sprites.Sprite object at 0x0000018388229E90>, <arcengine.sprites.Sprite object at 0x0000018388229DE0>, <arcengine.sprites.Sprite object at 0x0000018388229D30>])",
+      "obrrczymkxn": "dict(4 keys: ['acyylh', 'frame', 'max_frames', 'spell_to_cast'])",
+      "qytejzcythm": true,
+      "rccyypfoukr": "dict(4 keys: ['acyylh', 'frame', 'max_frames', 'player_original_pixels'])",
+      "rrinmfkkstu": 0,
+      "srqnsjmjukn": 0,
+      "ufpevlpokkj": 0,
+      "vbublqskwzw": "dict(4 keys: ['acyylh', 'frame', 'max_frames', 'original_colors'])",
+      "wihhwrkolym": 0,
+      "win_score": 6,
+      "wmnlnlscbpq": "dict(8 keys: ['acyylh', 'frame', 'max_frames', 'target_sprite', 'original_player_pixels'])",
+      "xelyxfeemol": 0,
+      "ydpaogvspcp": 0,
+      "zzpoabuniyn": "dict(3 keys: ['tevyeq', 'sieesc_chwjgc', 'fibcey'])"
+    },
+    "sprite_lists": {
+      "bcffdwcmlef": {
+        "count": 32,
+        "type": "tuple"
+      },
+      "bmmtkvkbcdd": {
+        "count": 9,
+        "type": "ActionInput"
+      },
+      "jlpticwjyvy": {
+        "count": 1,
+        "type": "str"
+      },
+      "lyhbotskgaq": {
+        "count": 26,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            62,
+            0
+          ],
+          [
+            22,
+            47
+          ],
+          [
+            33,
+            47
+          ],
+          [
+            22,
+            58
+          ],
+          [
+            33,
+            58
+          ]
+        ],
+        "tags_sample": [
+          [],
+          [
+            "clcbko"
+          ],
+          [
+            "clcbko"
+          ]
+        ],
+        "names_sample": [
+          "action-ui",
+          "clcbko-1",
+          "clcbko-1"
+        ],
+        "sizes_sample": [
+          [
+            2,
+            64
+          ],
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            6
+          ]
+        ]
+      },
+      "smeinfnvmvn": {
+        "count": 3,
+        "type": "list"
+      },
+      "xhhaqjfncnp": {
+        "count": 3,
+        "type": "list"
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      },
+      "plnqvukupu": {
+        "type": "Sprite",
+        "x": 39,
+        "y": 19,
+        "tags": [],
+        "name": "pluyoo",
+        "size": [
+          4,
+          4
+        ]
+      },
+      "qpgjapbquqq": {
+        "type": "Sprite",
+        "x": 62,
+        "y": 0,
+        "tags": [],
+        "name": "action-ui",
+        "size": [
+          2,
+          64
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      2,
+      3,
+      5,
+      9,
+      10,
+      14,
+      15
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      6
+    ],
+    "win_levels": 6,
+    "game_type": "Sc25",
+    "all_attrs": [
+      "abvgsmnbrj",
+      "action",
+      "agzbtzaakna",
+      "amyykmcqux",
+      "bcffdwcmlef",
+      "bmmtkvkbcdd",
+      "camera",
+      "cmagnysjqzl",
+      "complete_action",
+      "cpllfxzbpj",
+      "current_level",
+      "debug",
+      "deymuvatgy",
+      "dkwqdbhqspz",
+      "ettrdfsixg",
+      "eycwbtepcvs",
+      "eyxbonasvgm",
+      "fhkhyiarno",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "ggotuphkheh",
+      "gmznianfeg",
+      "handle_reset",
+      "hsrovbjzdx",
+      "ianfrutkqg",
+      "ibmhvvyrikn",
+      "ijhfdcamokt",
+      "is_action_complete",
+      "is_last_level",
+      "jdmucabyqar",
+      "jlpticwjyvy",
+      "jsdgfdkecx",
+      "jwlqyoqyagv",
+      "kcijddwgrz",
+      "kgnvknhfkw",
+      "khvdzgjfdz",
+      "level_index",
+      "level_reset",
+      "lose",
+      "lyhbotskgaq",
+      "mphhxnbsevp",
+      "mtfwxhxooqg",
+      "mutdsnbppd",
+      "next_level",
+      "njlgokmbvk",
+      "obrrczymkxn",
+      "ojwllujafss",
+      "okbritiujy",
+      "on_set_level",
+      "oupzphkuwu",
+      "ouqsfmdpjom",
+      "perform_action",
+      "plnqvukupu",
+      "qbdokwllfg",
+      "qlitmohzzr",
+      "qpgjapbquqq",
+      "qytejzcythm",
+      "rccyypfoukr",
+      "rqclbvxrbf",
+      "rrinmfkkstu",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "smeinfnvmvn",
+      "srqnsjmjukn",
+      "step",
+      "teunxrxzlp",
+      "tnqgbsvebp",
+      "try_move",
+      "try_move_sprite",
+      "txyqmqkitgl",
+      "tzsjpgohez",
+      "ufpevlpokkj",
+      "ulyyaxhljy",
+      "vbublqskwzw",
+      "vvsxyfdgok",
+      "wihhwrkolym",
+      "win",
+      "win_score",
+      "wmnlnlscbpq",
+      "wrlhavqltbu",
+      "wxohoxzlfh",
+      "xegibyrmks",
+      "xelyxfeemol",
+      "xexswixykp",
+      "xhhaqjfncnp",
+      "xvsktydkiu",
+      "ydpaogvspcp",
+      "zkbmyjwbdgk",
+      "zzpoabuniyn"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "m0r0": {
+    "game_id": "m0r0",
+    "attrs": {
+      "ddjekzihkbc": "dict(2 keys: ['pikgci-toljda-leklkn', 'pikgci-toljda-rivmdg'])",
+      "game_id": "m0r0",
+      "level_index": 0,
+      "pyhtlpzlmnr": true,
+      "ukempikfmtm": -1,
+      "win_score": 6
+    },
+    "sprite_lists": {
+      "yzihzkijgmp": {
+        "count": 2,
+        "type": "tuple"
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          11,
+          11
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      5,
+      10,
+      11,
+      12
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "win_levels": 6,
+    "game_type": "M0r0",
+    "all_attrs": [
+      "action",
+      "anfcrclwoac",
+      "camera",
+      "complete_action",
+      "current_level",
+      "ddjekzihkbc",
+      "debug",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "is_action_complete",
+      "is_last_level",
+      "jnyxgyktgcv",
+      "jpwxcqabja",
+      "level_index",
+      "level_reset",
+      "lose",
+      "next_level",
+      "okpvcjupabr",
+      "on_set_level",
+      "perform_action",
+      "pyhtlpzlmnr",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "ukempikfmtm",
+      "vtivsqjblkm",
+      "win",
+      "win_score",
+      "xjtmzsltgjl",
+      "xxlavvheeu",
+      "yzihzkijgmp"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "re86": {
+    "game_id": "re86",
+    "attrs": {
+      "game_id": "re86",
+      "level_index": 0,
+      "win_score": 8
+    },
+    "sprite_lists": {},
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      4,
+      5,
+      9,
+      11,
+      15
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "win_levels": 8,
+    "game_type": "Re86",
+    "all_attrs": [
+      "action",
+      "camera",
+      "complete_action",
+      "cptlsijjli",
+      "current_level",
+      "debug",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "gxncswszaq",
+      "handle_reset",
+      "ifcilzredn",
+      "is_action_complete",
+      "is_last_level",
+      "jeiavrvavi",
+      "level_index",
+      "level_reset",
+      "lose",
+      "mefarupnmn",
+      "next_level",
+      "on_set_level",
+      "perform_action",
+      "rtivumgcjd",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "ucpbzrcoui",
+      "win",
+      "win_score",
+      "xikvflgqgp",
+      "ylzrmgmdyh"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "r11l": {
+    "game_id": "r11l",
+    "attrs": {
+      "bulmhgivatv": "dict(0 keys: [])",
+      "flgdcqnkdomzf": 0,
+      "flgzyjcqcspeg": false,
+      "fljpbsiftilwa": 0,
+      "game_id": "r11l",
+      "havofgepjpl": 1,
+      "holbcmkehyf": 0,
+      "jttetcghmsb": false,
+      "kacotwgjcyq": "dict(1 keys: ['pumlzd'])",
+      "level_index": 0,
+      "npvvaucvsot": false,
+      "qvnmfoxseus": 0,
+      "scigwwvsztl": "dict(1 keys: ['pumlzd'])",
+      "uyawyyswbya": false,
+      "win_score": 6,
+      "xaalmogcsnh": "dict(1 keys: ['pumlzd'])",
+      "yfbjozweime": false,
+      "yledlprvvkb": 0
+    },
+    "sprite_lists": {
+      "bbijaigbknc": {
+        "count": 2,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            5,
+            34
+          ],
+          [
+            25,
+            57
+          ]
+        ],
+        "tags_sample": [
+          [
+            "sys_click"
+          ],
+          [
+            "sys_click"
+          ]
+        ],
+        "names_sample": [
+          "roefwulewcui-pumlzd",
+          "roefwulewcui-pumlzd"
+        ],
+        "sizes_sample": [
+          [
+            5,
+            5
+          ],
+          [
+            5,
+            5
+          ]
+        ]
+      },
+      "jtqexauuzid": {
+        "count": 256,
+        "type": "ActionInput"
+      },
+      "tdriqoljcbs": {
+        "count": 1,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            -5,
+            -6
+          ]
+        ],
+        "tags_sample": [
+          []
+        ],
+        "names_sample": [
+          "wakneh-Level1"
+        ],
+        "sizes_sample": [
+          [
+            73,
+            78
+          ]
+        ]
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      },
+      "wiayqaumjug": {
+        "type": "Sprite",
+        "x": 5,
+        "y": 34,
+        "tags": [
+          "sys_click"
+        ],
+        "name": "roefwulewcui-pumlzd",
+        "size": [
+          5,
+          5
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      1,
+      2,
+      3,
+      5,
+      6,
+      15
+    ],
+    "actions": [
+      6
+    ],
+    "win_levels": 6,
+    "game_type": "R11l",
+    "all_attrs": [
+      "action",
+      "bbijaigbknc",
+      "bulmhgivatv",
+      "camera",
+      "complete_action",
+      "current_level",
+      "debug",
+      "ecernfbexd",
+      "enzibizxql",
+      "flgdcqnkdomzf",
+      "flgzyjcqcspeg",
+      "fljpbsiftilwa",
+      "full_reset",
+      "gabrtablhx",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "havofgepjpl",
+      "hcpsunmfnx",
+      "holbcmkehyf",
+      "hznupmuxgqv",
+      "ihieafichl",
+      "is_action_complete",
+      "is_last_level",
+      "jtqexauuzid",
+      "jttetcghmsb",
+      "jtuysbdbdhk",
+      "kacotwgjcyq",
+      "ldzvchvkvp",
+      "level_index",
+      "level_reset",
+      "lose",
+      "ltkvhywjqa",
+      "mhucvxpgpcq",
+      "next_level",
+      "npvvaucvsot",
+      "nqbqaxbtdej",
+      "on_set_level",
+      "owuypsqbino",
+      "perform_action",
+      "pmmdvjqzco",
+      "qvnmfoxseus",
+      "rvkbignsyr",
+      "scigwwvsztl",
+      "scyubqqntl",
+      "sehxptcyvq",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "sgdntmcrxpq",
+      "step",
+      "tdriqoljcbs",
+      "try_move",
+      "try_move_sprite",
+      "uyawyyswbya",
+      "wiayqaumjug",
+      "win",
+      "win_score",
+      "xaalmogcsnh",
+      "yfbjozweime",
+      "yledlprvvkb",
+      "zefcxjwlud",
+      "zlkgwqnxrp"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "cn04": {
+    "game_id": "cn04",
+    "attrs": {
+      "dxcfrrcpp": false,
+      "game_id": "cn04",
+      "hlxyvcmpk": "dict(2 keys: ['0000pusfglvcns', '0001gqwehbicqu'])",
+      "iahpylgry": "dict(0 keys: [])",
+      "level_index": 0,
+      "ojcsxidcz": 75,
+      "rqolqpqwo": false,
+      "spcewphwy": false,
+      "uysylxuqw": "dict(2 keys: ['0000pusfglvcns', '0001gqwehbicqu'])",
+      "vausolnec": "dict(2 keys: [<arcengine.sprites.Sprite object at 0x0000018386FC4730>, <arcengine.sprites.Sprite object at 0x0000018386FC4680>])",
+      "win_score": 6,
+      "ydfurpdwv": "dict(0 keys: [])",
+      "ztpxqonhr": true
+    },
+    "sprite_lists": {},
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          20,
+          20
+        ]
+      },
+      "xseexqzst": {
+        "type": "Sprite",
+        "x": 3,
+        "y": 3,
+        "tags": [
+          "sys_click"
+        ],
+        "name": "0000pusfglvcns",
+        "size": [
+          5,
+          6
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      4,
+      8,
+      10,
+      14
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "win_levels": 6,
+    "game_type": "Cn04",
+    "all_attrs": [
+      "action",
+      "aqrmljjiyi",
+      "bewtoqvzlr",
+      "camera",
+      "complete_action",
+      "current_level",
+      "debug",
+      "dxcfrrcpp",
+      "eliexourzp",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "hlxyvcmpk",
+      "iahpylgry",
+      "is_action_complete",
+      "is_last_level",
+      "ixutchviko",
+      "kpgnbcoir",
+      "level_index",
+      "level_reset",
+      "lose",
+      "next_level",
+      "ojcsxidcz",
+      "on_set_level",
+      "perform_action",
+      "rnwsvakqem",
+      "rqolqpqwo",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "sjwqloivve",
+      "spcewphwy",
+      "step",
+      "swfljqaiqu",
+      "try_move",
+      "try_move_sprite",
+      "uqlndqojuf",
+      "uysylxuqw",
+      "vausolnec",
+      "win",
+      "win_score",
+      "xseexqzst",
+      "ydfurpdwv",
+      "ztpxqonhr"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "lp85": {
+    "game_id": "lp85",
+    "attrs": {
+      "game_id": "lp85",
+      "kshrbnrfkopq": 32,
+      "level_index": 0,
+      "papamfmeoa": 19,
+      "ucybisahh": "kdrsqrvpwb",
+      "uopmnplcnv": "dict(11 keys: ['kdrsqrvpwb', 'cecdsipmha', 'qibynbipmw', 'asymmetry', 'vvnbesozdj'])",
+      "win_score": 8
+    },
+    "sprite_lists": {
+      "afhycvvjg": {
+        "count": 2,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            1,
+            8
+          ],
+          [
+            28,
+            8
+          ]
+        ],
+        "tags_sample": [
+          [
+            "button_A_L",
+            "sys_click"
+          ],
+          [
+            "button_A_R",
+            "sys_click"
+          ]
+        ],
+        "names_sample": [
+          "ahdesifykt",
+          "zpxgvxwdex"
+        ],
+        "sizes_sample": [
+          [
+            3,
+            4
+          ],
+          [
+            3,
+            4
+          ]
+        ]
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          32,
+          19
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      8,
+      9,
+      10,
+      11,
+      14,
+      15
+    ],
+    "actions": [
+      6
+    ],
+    "win_levels": 8,
+    "game_type": "Lp85",
+    "all_attrs": [
+      "action",
+      "afhycvvjg",
+      "camera",
+      "complete_action",
+      "current_level",
+      "debug",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "is_action_complete",
+      "is_last_level",
+      "izmredwten",
+      "khartslnwa",
+      "kshrbnrfkopq",
+      "level_index",
+      "level_reset",
+      "lose",
+      "next_level",
+      "on_set_level",
+      "papamfmeoa",
+      "perform_action",
+      "pubeyzotzr",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "toxpunyqe",
+      "try_move",
+      "try_move_sprite",
+      "ttawusezqc",
+      "ucybisahh",
+      "uopmnplcnv",
+      "win",
+      "win_score"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ],
+    "level_tags": {
+      "goal": 1
+    }
+  },
+  "cd82": {
+    "game_id": "cd82",
+    "attrs": {
+      "aalpkuosy": false,
+      "edjesyzxk": false,
+      "errfuhupi": 0,
+      "fbdgdkqzm": 0,
+      "fbnqejrbl": "dict(8 keys: [(0, 1), (0, 2), (1, 2), (2, 2), (2, 1)])",
+      "fgtugjktu": false,
+      "game_id": "cd82",
+      "hcmkqabzb": 1,
+      "iewrsdwok": 100,
+      "iieoxmyyd": 0,
+      "knqmgavuh": 15,
+      "level_index": 0,
+      "lqrdkjrsl": 1,
+      "mqivutapf": 1,
+      "nfhykrqjp": "dict(8 keys: [0, 1, 2, 3, 4])",
+      "qnjvedxjm": false,
+      "wbcnpqkvw": 0,
+      "win_score": 6,
+      "xwmfgtlso": 0,
+      "yfobpcuef": false,
+      "yxjfgsdkm": false
+    },
+    "sprite_lists": {
+      "nicoqsvlg": {
+        "count": 8,
+        "type": "tuple"
+      }
+    },
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      2,
+      3,
+      4,
+      5,
+      15
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "win_levels": 6,
+    "game_type": "Cd82",
+    "all_attrs": [
+      "aalpkuosy",
+      "action",
+      "azhynfjdiz",
+      "bjgtofqhv",
+      "bmwcxxvjum",
+      "camera",
+      "complete_action",
+      "coublenfir",
+      "current_level",
+      "debug",
+      "eanmnpxtyi",
+      "edjesyzxk",
+      "elltphoitr",
+      "errfuhupi",
+      "fbdgdkqzm",
+      "fbnqejrbl",
+      "fgtugjktu",
+      "frnnxdfwb",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "gfjfyvajah",
+      "gpfahgizbk",
+      "handle_reset",
+      "hcmkqabzb",
+      "hhjooisvrs",
+      "iewrsdwok",
+      "iieoxmyyd",
+      "is_action_complete",
+      "is_last_level",
+      "iswxsbrge",
+      "jgclfnjrnk",
+      "knqmgavuh",
+      "level_index",
+      "level_reset",
+      "lose",
+      "lqrdkjrsl",
+      "mqivutapf",
+      "next_level",
+      "nfhykrqjp",
+      "nicoqsvlg",
+      "nlvliaznao",
+      "nqhfiooufi",
+      "oaouwdxbxc",
+      "on_set_level",
+      "perform_action",
+      "qbiojckwxl",
+      "qnjvedxjm",
+      "qsiruivbj",
+      "qzgkhffci",
+      "rtjwayrycq",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "wbcnpqkvw",
+      "win",
+      "win_score",
+      "wvrremwltt",
+      "xwmfgtlso",
+      "yfobpcuef",
+      "yrfgxhebei",
+      "yxjfgsdkm"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "g50t": {
+    "game_id": "g50t",
+    "attrs": {
+      "game_id": "g50t",
+      "hctlyapjnq": false,
+      "level_index": 0,
+      "qgzorkgosv": false,
+      "ucorwtereb": 0,
+      "win_score": 7
+    },
+    "sprite_lists": {},
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      },
+      "twyixucrqi": {
+        "type": "Sprite",
+        "x": 0,
+        "y": 63,
+        "tags": [
+          "ppfvilwwnk"
+        ],
+        "name": "ppfvilwwnk",
+        "size": [
+          64,
+          1
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      1,
+      5,
+      8,
+      9
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "win_levels": 7,
+    "game_type": "G50t",
+    "all_attrs": [
+      "abjneovbvx",
+      "action",
+      "camera",
+      "complete_action",
+      "current_level",
+      "debug",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "hctlyapjnq",
+      "is_action_complete",
+      "is_last_level",
+      "jugzqlxpby",
+      "level_index",
+      "level_reset",
+      "lose",
+      "mrzduxdbbk",
+      "next_level",
+      "on_set_level",
+      "perform_action",
+      "ptayayjhqx",
+      "qgzorkgosv",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "tmwgfkaqxj",
+      "try_move",
+      "try_move_sprite",
+      "twyixucrqi",
+      "ucorwtereb",
+      "vgwycxsxjz",
+      "win",
+      "win_score"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "sp80": {
+    "game_id": "sp80",
+    "attrs": {
+      "avangppqui": true,
+      "dkvpswzsjg": "change",
+      "fahhoimkk": 0,
+      "game_id": "sp80",
+      "kfdcqkodyy": false,
+      "level_index": 0,
+      "lybfalkrdl": false,
+      "lyremoheq": 0,
+      "mfkgvxzkbj": "dict(3 keys: [1, 2, 3])",
+      "othselxnik": "dict(3 keys: [1, 2, 3])",
+      "trhynadhiz": 0,
+      "win_score": 6,
+      "yqejjfwwh": false,
+      "zlhbnhpcq": 30
+    },
+    "sprite_lists": {},
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          16,
+          16
+        ]
+      },
+      "vsoxmtrhqt": {
+        "type": "Sprite",
+        "x": 3,
+        "y": 4,
+        "tags": [
+          "plzwjbfyfli",
+          "sys_click"
+        ],
+        "name": "plzwjbfyfli-5",
+        "size": [
+          5,
+          1
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      1,
+      4,
+      6,
+      9,
+      11,
+      12,
+      14
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6
+    ],
+    "win_levels": 6,
+    "game_type": "Sp80",
+    "all_attrs": [
+      "action",
+      "avangppqui",
+      "camera",
+      "cevwbinfgl",
+      "complete_action",
+      "current_level",
+      "debug",
+      "dkvpswzsjg",
+      "fahhoimkk",
+      "fbrwmvzsym",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "gsvsxaspkc",
+      "handle_reset",
+      "hmxltcipkc",
+      "husluhmboo",
+      "is_action_complete",
+      "is_last_level",
+      "jinpztikz",
+      "kfdcqkodyy",
+      "krehtwyvlu",
+      "level_index",
+      "level_reset",
+      "lijmqzmgnw",
+      "lose",
+      "lpqbikobah",
+      "lybfalkrdl",
+      "lyremoheq",
+      "mfkgvxzkbj",
+      "mmzrajuxwp",
+      "mxdlffpzkc",
+      "next_level",
+      "ntuflwihof",
+      "oioatzlrlu",
+      "ojydygjkdb",
+      "on_set_level",
+      "onoqwewztl",
+      "othselxnik",
+      "perform_action",
+      "qbsoyazkhk",
+      "rqlmciubuz",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "trhynadhiz",
+      "try_move",
+      "try_move_sprite",
+      "vdwhttyyfq",
+      "vgpoqzieha",
+      "vsoxmtrhqt",
+      "win",
+      "win_score",
+      "xpcxocsmmq",
+      "yqejjfwwh",
+      "ytqycovhld",
+      "zlhbnhpcq"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "ka59": {
+    "game_id": "ka59",
+    "attrs": {
+      "game_id": "ka59",
+      "level_index": 0,
+      "ooneovlmbq": "dict(0 keys: [])",
+      "win_score": 7,
+      "xrxdckwsth": 0
+    },
+    "sprite_lists": {},
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          45,
+          45
+        ]
+      },
+      "prkgpeyexo": {
+        "type": "Sprite",
+        "x": 9,
+        "y": 21,
+        "tags": [
+          "0022vrxelxosfy",
+          "sys_click"
+        ],
+        "name": "0021xplppqqmfb",
+        "size": [
+          3,
+          3
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      1,
+      2,
+      4,
+      5,
+      14,
+      15
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      6
+    ],
+    "win_levels": 7,
+    "game_type": "Ka59",
+    "all_attrs": [
+      "action",
+      "camera",
+      "complete_action",
+      "current_level",
+      "dbmlcqbquh",
+      "debug",
+      "dgjbrykwhi",
+      "dxnwjisewh",
+      "euoegkbmov",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "hrknegnjkg",
+      "ifoelczjjh",
+      "is_action_complete",
+      "is_last_level",
+      "level_index",
+      "level_reset",
+      "lflcissmce",
+      "lose",
+      "loydmqkgjw",
+      "lphmmaeepj",
+      "next_level",
+      "omeizjufss",
+      "on_set_level",
+      "ooneovlmbq",
+      "perform_action",
+      "prkgpeyexo",
+      "pxqdkrdaye",
+      "qfachkyqvv",
+      "qfbbmqfhwa",
+      "rxrqvtanrj",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "urgssjskot",
+      "win",
+      "win_score",
+      "xrxdckwsth"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "ar25": {
+    "game_id": "ar25",
+    "attrs": {
+      "dqwpuqcubca": 21,
+      "game_id": "ar25",
+      "height": 21,
+      "hsiusrsrdkswnt": 0,
+      "hujpxmlafgh": false,
+      "level_index": 0,
+      "ovoizfolxfq": "dict(0 keys: [])",
+      "qehjebksqcm": false,
+      "win_score": 8,
+      "xjwpeqpcxav": false,
+      "xukxeewuexo": 0
+    },
+    "sprite_lists": {
+      "ayyvxqrhnzw": {
+        "count": 1,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            6,
+            5
+          ]
+        ],
+        "tags_sample": [
+          [
+            "0006lxjtqggkmi",
+            "sys_click"
+          ]
+        ],
+        "names_sample": [
+          "0007arvfmhagbj"
+        ],
+        "sizes_sample": [
+          [
+            3,
+            3
+          ]
+        ]
+      },
+      "fswikrcrdmx": {
+        "count": 5,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            19,
+            15
+          ],
+          [
+            17,
+            17
+          ],
+          [
+            17,
+            16
+          ],
+          [
+            17,
+            15
+          ],
+          [
+            18,
+            15
+          ]
+        ],
+        "tags_sample": [
+          [
+            "0001sruqbuvukh"
+          ],
+          [
+            "0001sruqbuvukh"
+          ],
+          [
+            "0001sruqbuvukh"
+          ]
+        ],
+        "names_sample": [
+          "0001sruqbuvukh",
+          "0001sruqbuvukh",
+          "0001sruqbuvukh"
+        ],
+        "sizes_sample": [
+          [
+            1,
+            1
+          ],
+          [
+            1,
+            1
+          ],
+          [
+            1,
+            1
+          ]
+        ]
+      },
+      "jtkyjqznbnp": {
+        "count": 1,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            10,
+            0
+          ]
+        ],
+        "tags_sample": [
+          [
+            "0003uqrdzdofso",
+            "0056icpryeujyf",
+            "0054kgxrvfihgm"
+          ]
+        ],
+        "names_sample": [
+          "0055nwhypaamix"
+        ],
+        "sizes_sample": [
+          [
+            1,
+            41
+          ]
+        ]
+      },
+      "ouurgkpbbjj": {
+        "count": 1,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            6,
+            5
+          ]
+        ],
+        "tags_sample": [
+          [
+            "0006lxjtqggkmi",
+            "sys_click"
+          ]
+        ],
+        "names_sample": [
+          "0007arvfmhagbj"
+        ],
+        "sizes_sample": [
+          [
+            3,
+            3
+          ]
+        ]
+      }
+    },
+    "single_sprites": {
+      "bljygmvbtcf": {
+        "type": "Sprite",
+        "x": 500,
+        "y": 0,
+        "tags": [],
+        "name": "0004afwyadxelg",
+        "size": [
+          5,
+          4
+        ]
+      },
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          21,
+          21
+        ]
+      },
+      "iabnfcqotmd": {
+        "type": "Sprite",
+        "x": 10,
+        "y": 0,
+        "tags": [
+          "0003uqrdzdofso",
+          "0056icpryeujyf",
+          "0054kgxrvfihgm"
+        ],
+        "name": "0055nwhypaamix",
+        "size": [
+          1,
+          41
+        ]
+      },
+      "mckxlruvlbp": {
+        "type": "Sprite",
+        "x": 0,
+        "y": 0,
+        "tags": [
+          "0000gezzfvumef"
+        ],
+        "name": "0000gezzfvumef",
+        "size": [
+          21,
+          21
+        ]
+      },
+      "ptetvenobsi": {
+        "type": "Sprite",
+        "x": 0,
+        "y": 0,
+        "tags": [
+          "0000gezzfvumef"
+        ],
+        "name": "0000gezzfvumef",
+        "size": [
+          21,
+          21
+        ]
+      },
+      "yvifanjrcyu": {
+        "type": "Sprite",
+        "x": 6,
+        "y": 5,
+        "tags": [
+          "0006lxjtqggkmi",
+          "sys_click"
+        ],
+        "name": "0007arvfmhagbj",
+        "size": [
+          3,
+          3
+        ]
+      },
+      "zrytnxishmb": {
+        "type": "Sprite",
+        "x": 0,
+        "y": 0,
+        "tags": [
+          "0000gezzfvumef"
+        ],
+        "name": "0000gezzfvumef",
+        "size": [
+          21,
+          21
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      4,
+      5,
+      9,
+      10,
+      11
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7
+    ],
+    "win_levels": 8,
+    "game_type": "Ar25",
+    "all_attrs": [
+      "action",
+      "aeaxsuhcxw",
+      "ayyvxqrhnzw",
+      "bljygmvbtcf",
+      "camera",
+      "complete_action",
+      "current_level",
+      "debug",
+      "dqwpuqcubca",
+      "dspftbzaav",
+      "flqblmrxsla",
+      "fswikrcrdmx",
+      "full_reset",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "height",
+      "hsiusrsrdkswnt",
+      "hujpxmlafgh",
+      "iabnfcqotmd",
+      "is_action_complete",
+      "is_last_level",
+      "jtkyjqznbnp",
+      "lakiokfgmlc",
+      "lelsvjlwneo",
+      "level_index",
+      "level_reset",
+      "lose",
+      "mckxlruvlbp",
+      "naxbskjmlg",
+      "neimtgmbvs",
+      "next_level",
+      "nloqvbouxu",
+      "omqcgseeyo",
+      "on_set_level",
+      "ouurgkpbbjj",
+      "ovoizfolxfq",
+      "perform_action",
+      "ptetvenobsi",
+      "qehjebksqcm",
+      "rhgjrwmsjf",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "siizypdewv",
+      "skqtojxvbv",
+      "step",
+      "tbwawidlvf",
+      "try_move",
+      "try_move_sprite",
+      "tvqhikkvjs",
+      "uksxuqpkcl",
+      "vplrhaovhr",
+      "vrkougbfel",
+      "vuobbxcpia",
+      "win",
+      "win_score",
+      "wtcvufzwtg",
+      "xjwpeqpcxav",
+      "xukxeewuexo",
+      "xxwyofspas",
+      "yjuszzjksae",
+      "yvifanjrcyu",
+      "zrytnxishmb"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "wa30": {
+    "game_id": "wa30",
+    "attrs": {
+      "game_id": "wa30",
+      "level_index": 0,
+      "nsevyuople": "dict(0 keys: [])",
+      "win_score": 9,
+      "zmqreragji": "dict(0 keys: [])"
+    },
+    "sprite_lists": {},
+    "single_sprites": {
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      1,
+      2,
+      4,
+      7,
+      9,
+      14
+    ],
+    "actions": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "win_levels": 9,
+    "game_type": "Wa30",
+    "all_attrs": [
+      "action",
+      "ahzqkfjpsc",
+      "aoeyzovteg",
+      "camera",
+      "complete_action",
+      "current_level",
+      "cyjrduhzmz",
+      "czrprbohhe",
+      "debug",
+      "dhrikuybfo",
+      "egqayvffim",
+      "full_reset",
+      "fuykgiiwit",
+      "game_id",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "is_action_complete",
+      "is_last_level",
+      "jrrltylxpp",
+      "kblzhbvysd",
+      "kqrtstlzkg",
+      "kuncbnslnm",
+      "level_index",
+      "level_reset",
+      "lgirylubbp",
+      "lkvghqfwan",
+      "lose",
+      "lqctaojiby",
+      "next_level",
+      "nsevyuople",
+      "on_set_level",
+      "perform_action",
+      "pkbufziase",
+      "qnmfimgpwc",
+      "qthdiggudy",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "shbxbhnhjc",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "uuorgjazmj",
+      "vyltpasvhc",
+      "win",
+      "win_score",
+      "wqwsvmhhzj",
+      "wyzquhjerd",
+      "xcuqvqnmiu",
+      "xpcvspllwr",
+      "ymzfopzgbq",
+      "ynmgxjqkgh",
+      "yygfcvqoyx",
+      "zauouvdhta",
+      "zmqreragji",
+      "zzppkjnqgk"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  },
+  "sb26": {
+    "game_id": "sb26",
+    "attrs": {
+      "artsfnufc": -1,
+      "bbiavyren": -1,
+      "ftyhvmeft": -1,
+      "game_id": "sb26",
+      "incrguxqwfjtial_energy": 64,
+      "japgbruyb": -1,
+      "jlcrtmkes": -1,
+      "kevpkxlhi": 6,
+      "level_index": 0,
+      "lmvwmlqtw": -1,
+      "modqnpqfi": 0,
+      "pmygakdvy": 0,
+      "ppsxsxiod": false,
+      "rzbeqaiky": "dict(0 keys: [])",
+      "sjcuorclg": 64,
+      "win_score": 8,
+      "xjxrqgaqw": -1,
+      "xshdlymmy": "dict(0 keys: [])"
+    },
+    "sprite_lists": {
+      "dewwplfix": {
+        "count": 8,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            20,
+            27
+          ],
+          [
+            26,
+            27
+          ],
+          [
+            32,
+            27
+          ],
+          [
+            38,
+            27
+          ],
+          [
+            17,
+            56
+          ]
+        ],
+        "tags_sample": [
+          [
+            "susublrply",
+            "sys_click"
+          ],
+          [
+            "susublrply",
+            "sys_click"
+          ],
+          [
+            "susublrply",
+            "sys_click"
+          ]
+        ],
+        "names_sample": [
+          "susublrply",
+          "susublrply",
+          "susublrply"
+        ],
+        "sizes_sample": [
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            6
+          ]
+        ]
+      },
+      "dkouqqads": {
+        "count": 4,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            17,
+            56
+          ],
+          [
+            25,
+            56
+          ],
+          [
+            33,
+            56
+          ],
+          [
+            41,
+            56
+          ]
+        ],
+        "tags_sample": [
+          [
+            "lngftsryyw",
+            "sys_click"
+          ],
+          [
+            "lngftsryyw",
+            "sys_click"
+          ],
+          [
+            "lngftsryyw",
+            "sys_click"
+          ]
+        ],
+        "names_sample": [
+          "lngftsryyw",
+          "lngftsryyw",
+          "lngftsryyw"
+        ],
+        "sizes_sample": [
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            6
+          ]
+        ]
+      },
+      "gcyvqwdwk": {
+        "count": 4,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            17,
+            0
+          ],
+          [
+            24,
+            0
+          ],
+          [
+            31,
+            0
+          ],
+          [
+            38,
+            0
+          ]
+        ],
+        "tags_sample": [
+          [],
+          [],
+          []
+        ],
+        "names_sample": [
+          "uzxwqmkrmk",
+          "uzxwqmkrmk",
+          "uzxwqmkrmk"
+        ],
+        "sizes_sample": [
+          [
+            8,
+            8
+          ],
+          [
+            8,
+            8
+          ],
+          [
+            8,
+            8
+          ]
+        ]
+      },
+      "mrokwhyjs": {
+        "count": 2,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            -10,
+            -10
+          ],
+          [
+            -10,
+            -10
+          ]
+        ],
+        "tags_sample": [
+          [],
+          []
+        ],
+        "names_sample": [
+          "wrqpmmfhup",
+          "wrqpmmfhup"
+        ],
+        "sizes_sample": [
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            6
+          ]
+        ]
+      },
+      "qaagahahj": {
+        "count": 1,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            18,
+            25
+          ]
+        ],
+        "tags_sample": [
+          [
+            "pkpgflvjel"
+          ]
+        ],
+        "names_sample": [
+          "qdmvvkvhaz4"
+        ],
+        "sizes_sample": [
+          [
+            28,
+            10
+          ]
+        ]
+      },
+      "uvawsoycr": {
+        "count": 1,
+        "type": "list"
+      },
+      "wcfyiodrx": {
+        "count": 4,
+        "type": "Sprite",
+        "positions_sample": [
+          [
+            18,
+            1
+          ],
+          [
+            25,
+            1
+          ],
+          [
+            32,
+            1
+          ],
+          [
+            39,
+            1
+          ]
+        ],
+        "tags_sample": [
+          [],
+          [],
+          []
+        ],
+        "names_sample": [
+          "quhhhthrri",
+          "quhhhthrri",
+          "quhhhthrri"
+        ],
+        "sizes_sample": [
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            6
+          ],
+          [
+            6,
+            6
+          ]
+        ]
+      }
+    },
+    "single_sprites": {
+      "ayaigjtxp": {
+        "type": "Sprite",
+        "x": 0,
+        "y": 0,
+        "tags": [],
+        "name": "wrqpmmfhup",
+        "size": [
+          6,
+          6
+        ]
+      },
+      "camera": {
+        "type": "Camera",
+        "x": 0,
+        "y": 0,
+        "size": [
+          64,
+          64
+        ]
+      },
+      "lvctpsmff": {
+        "type": "Sprite",
+        "x": 0,
+        "y": 0,
+        "tags": [],
+        "name": "fe462474-4935-42db-8665-f0364af826d4",
+        "size": [
+          64,
+          64
+        ]
+      },
+      "mjeqtdqvm": {
+        "type": "Sprite",
+        "x": 17,
+        "y": 24,
+        "tags": [],
+        "name": "lnzhvcagos",
+        "size": [
+          48,
+          12
+        ]
+      },
+      "ohvavdnio": {
+        "type": "Sprite",
+        "x": -100,
+        "y": -100,
+        "tags": [],
+        "name": "jkxncpvknr",
+        "size": [
+          8,
+          8
+        ]
+      },
+      "oyvbxwyug": {
+        "type": "Sprite",
+        "x": 0,
+        "y": 0,
+        "tags": [],
+        "name": "oflgslmuku",
+        "size": [
+          64,
+          8
+        ]
+      }
+    },
+    "grid_shape": [
+      64,
+      64
+    ],
+    "colors": [
+      0,
+      2,
+      4,
+      5,
+      8,
+      9,
+      11,
+      14,
+      15
+    ],
+    "actions": [
+      5,
+      6,
+      7
+    ],
+    "win_levels": 8,
+    "game_type": "Sb26",
+    "all_attrs": [
+      "action",
+      "artsfnufc",
+      "ayaigjtxp",
+      "bbiavyren",
+      "buvfjfmpp",
+      "bzqipkewbn",
+      "camera",
+      "complete_action",
+      "current_level",
+      "dagvovvbpp",
+      "dbfxrigdqx",
+      "debug",
+      "dewwplfix",
+      "dkouqqads",
+      "fkyoqwmrzb",
+      "ftyhvmeft",
+      "full_reset",
+      "game_id",
+      "gcyvqwdwk",
+      "get_pixels",
+      "get_pixels_at_sprite",
+      "handle_reset",
+      "hjewbkcejq",
+      "incrguxqwfjtial_energy",
+      "is_action_complete",
+      "is_last_level",
+      "japgbruyb",
+      "jlcrtmkes",
+      "jyuoktbrc",
+      "kevpkxlhi",
+      "kxrrueustb",
+      "level_index",
+      "level_reset",
+      "lmvwmlqtw",
+      "lose",
+      "lqcskynzr",
+      "lvctpsmff",
+      "mjeqtdqvm",
+      "modqnpqfi",
+      "mrokwhyjs",
+      "next_level",
+      "ohvavdnio",
+      "on_set_level",
+      "oyvbxwyug",
+      "perform_action",
+      "pmygakdvy",
+      "ppsxsxiod",
+      "qaagahahj",
+      "rfdjlhefnd",
+      "rhhcxovxow",
+      "rqtmgdegai",
+      "rvqtlczxga",
+      "rzbeqaiky",
+      "set_level",
+      "set_level_by_name",
+      "set_placeable_sprite",
+      "sibihgzarf",
+      "sjcuorclg",
+      "step",
+      "try_move",
+      "try_move_sprite",
+      "ulzvbcvzs",
+      "uvawsoycr",
+      "vjvsrcbftu",
+      "wcfyiodrx",
+      "win",
+      "win_score",
+      "xjxrqgaqw",
+      "xshdlymmy",
+      "zmpjslrhs",
+      "zzppwcvyza"
+    ],
+    "current_level_attrs": [
+      "add_sprite",
+      "clone",
+      "collides_with",
+      "get_all_tags",
+      "get_data",
+      "get_sprite_at",
+      "get_sprites",
+      "get_sprites_by_any_tag",
+      "get_sprites_by_name",
+      "get_sprites_by_tag",
+      "get_sprites_by_tags",
+      "grid_size",
+      "name",
+      "placeable_areas",
+      "remove_all_sprites",
+      "remove_sprite"
+    ]
+  }
+}

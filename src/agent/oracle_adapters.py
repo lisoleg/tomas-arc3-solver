@@ -530,12 +530,16 @@ def auto_detect_adapter(game: Any) -> Optional[OracleAdapter]:
         1. LS20: has 'gudziatsk' attribute
         2. TR87: has 'zdwrfusvmx' and 'qvtymdcqear_parts' attributes
         3. FT09: has 'zth' and 'fhc' attributes
+        4. Universal: fallback for any game with env._game access.
+           Uses UniversalOracleAdapter to auto-discover entities.
 
     Args:
         game: The env._game object.
 
     Returns:
-        OracleAdapter instance, or None if no match found.
+        OracleAdapter instance (never None if UniversalOracleAdapter
+        is available), or None if the universal adapter cannot be
+        imported.
     """
     # Check LS20
     if hasattr(game, 'gudziatsk'):
@@ -549,4 +553,48 @@ def auto_detect_adapter(game: Any) -> Optional[OracleAdapter]:
     if hasattr(game, 'zth') and hasattr(game, 'fhc'):
         return FT09Adapter(game)
 
+    # Fallback: Universal adapter for any game with env._game access.
+    # The UniversalOracleAdapter auto-discovers entities by scanning
+    # game attributes, enabling Oracle mode for all 25 games.
+    try:
+        from .universal_oracle_adapter import UniversalOracleAdapter
+        return UniversalOracleAdapter(game)
+    except ImportError:
+        pass
+
     return None
+
+
+def get_universal_adapter(
+    game: Any,
+    step: int = 5,
+) -> Optional[OracleAdapter]:
+    """Get a UniversalOracleAdapter for any game.
+
+    The UniversalOracleAdapter auto-discovers game entities by scanning
+    env._game attributes, enabling Oracle mode for all 25 games without
+    requiring game-specific adapters.
+
+    Args:
+        game: The env._game object.
+        step: Grid step size for block alignment.
+
+    Returns:
+        UniversalOracleAdapter instance, or None if the universal
+        adapter module cannot be imported.
+    """
+    try:
+        from .universal_oracle_adapter import UniversalOracleAdapter
+        return UniversalOracleAdapter(game, step)
+    except ImportError:
+        return None
+
+
+# Update ADAPTER_REGISTRY with UniversalOracleAdapter (lazy import to
+# avoid circular dependency: universal_oracle_adapter imports from
+# this module at the top level).
+try:
+    from .universal_oracle_adapter import UniversalOracleAdapter as _UniversalAdapter
+    ADAPTER_REGISTRY['universal'] = _UniversalAdapter
+except ImportError:
+    pass

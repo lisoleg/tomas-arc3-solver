@@ -1771,9 +1771,11 @@ class PlannerAgent:
         # Seen state hashes for stagnation tracking
         self._seen_state_hashes: set[str] = set()
 
-        # Auto-detect oracle availability if requested
-        if use_oracle is not None:
-            self.use_oracle = use_oracle
+        # Store oracle preference; actual adapter creation happens in
+        # _check_oracle_availability() on first choose_action() call.
+        # Only mark as checked for explicit grid mode (no adapter needed).
+        if use_oracle is False:
+            self.use_oracle = False
             self._oracle_checked = True
 
     def _check_oracle_availability(self) -> bool:
