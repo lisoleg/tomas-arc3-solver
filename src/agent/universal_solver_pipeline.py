@@ -1465,10 +1465,11 @@ class UniversalSolverPipeline:
         max_nodes: int = 300000,
         max_time: float = 30.0,
     ) -> list[tuple] | None:
-        """Solve using simulation BFS with heuristic scoring.
+        """Solve using simulation BFS with Phase A/B dual-stage search.
 
-        Uses replay-based optimization for click games to reduce memory
-        pressure. For keyboard games, uses standard deepcopy approach.
+        Phase A: Only try actions classified as 'state_change' by probe.
+        Phase B: Try all actions except game_over, with reduced budget.
+        Uses replay-based optimization for click games.
 
         Returns:
             List of (action_id, data) tuples, or None.
@@ -1480,38 +1481,56 @@ class UniversalSolverPipeline:
             pristine = copy.deepcopy(self.game)
 
         game_copy = copy.deepcopy(self.game)
-        action_classes = self._probe_actions(game_copy)
+        probe_result = self._probe_actions(game_copy)
 
-        state_change_ids: set[int] = set()
+        # Extract state_change / game_over keys from probe
+        state_change_keys: set[tuple[int, ...]] = set()
+        game_over_keys: set[tuple[int, ...]] = set()
         game_over_ids: set[int] = set()
-        for aid, cls in action_classes.items():
+        for key, cls in probe_result.items():
             if cls == 'state_change':
-                state_change_ids.add(aid)
+                state_change_keys.add(key)
             elif cls == 'game_over':
-                game_over_ids.add(aid)
+                game_over_keys.add(key)
+                game_over_ids.add(key[0])
 
-        pruned_actions: set[int] = set()
-        for aid in {1, 2, 3, 4}:
-            if aid in state_change_ids:
-                pruned_actions.add(aid)
-        for aid in state_change_ids:
-            if aid not in {1, 2, 3, 4, 6}:
-                pruned_actions.add(aid)
+        # Build pruned keyboard IDs (state_change keyboard actions)
+        pruned_keyboard_ids: set[int] = set()
+        for key in state_change_keys:
+            aid = key[0]
+            if len(key) == 1 and aid not in {1, 2, 3, 4, 6}:
+                pruned_keyboard_ids.add(aid)
+            if aid in {1, 2, 3, 4}:
+                pruned_keyboard_ids.add(aid)
 
-        click_actions: list[tuple[int, dict]] = []
+        # Build probe-based click actions from state_change clicks
+        probe_click_actions: list[tuple[int, dict]] = []
+        for key in state_change_keys:
+            if len(key) == 3:
+                aid, x, y = key
+                probe_click_actions.append((aid, {"x": x, "y": y}))
+
+        # Sprite-based click fallback (if probe didn't find clicks)
+        sprite_click_actions: list[tuple[int, dict]] = []
         if self.is_click_game or 6 in self.available_actions:
-            click_targets = self._collect_click_targets(include_edges=True, max_targets=10)
+            click_targets = self._collect_click_targets(include_edges=True, max_targets=15)
             for click_pos in click_targets:
-                click_actions.append((6, {"x": click_pos[0], "y": click_pos[1]}))
-            if 6 in state_change_ids:
-                pruned_actions.add(6)
+                sprite_click_actions.append((6, {"x": click_pos[0], "y": click_pos[1]}))
 
-        if not pruned_actions and not click_actions:
+        # Merge: probe clicks preferred, sprite clicks as fallback
+        if probe_click_actions:
+            click_actions = probe_click_actions
+        else:
+            click_actions = sprite_click_actions
+
+        # If nothing at all is state-changing, use all-valid minus game_over
+        if not pruned_keyboard_ids and not click_actions:
             all_valid = _get_valid_action_inputs(self.game)
             for ai in all_valid:
-                aid = int(ai.id) if hasattr(ai.id, '__int__') else ai.id
+                aid = ai.id.value if hasattr(ai.id, 'value') and not isinstance(ai.id, bool) else ai.id
+                aid = int(aid)
                 if aid not in game_over_ids:
-                    pruned_actions.add(aid)
+                    pruned_keyboard_ids.add(aid)
 
         # For click-only games, use replay-based approach
         if self.is_click_game and click_actions:
@@ -1520,7 +1539,70 @@ class UniversalSolverPipeline:
                 original_level, max_depth, max_nodes, max_time, t0,
             )
 
-        # For keyboard/hybrid games, use standard deepcopy approach
+        # For keyboard/hybrid games, use replay-based BFS (no deepcopy per node)
+        # Phase A: Pruned BFS (only state_change actions)
+        result = self._simulation_bfs_replay(
+            use_pruned=True,
+            pruned_keyboard_ids=pruned_keyboard_ids,
+            state_change_keys=state_change_keys,
+            game_over_ids=game_over_ids,
+            click_actions=click_actions,
+            pristine=pristine,
+            original_level=original_level,
+            max_depth=max_depth,
+            max_nodes=max_nodes,
+            max_time=max_time,
+            t0=t0,
+        )
+        if result is not None:
+            return result
+
+        # Phase B: Full BFS (all actions except game_over), reduced budget
+        elapsed = time.time() - t0
+        remaining_time = max_time - elapsed
+        if remaining_time > 2.0:
+            result = self._simulation_bfs_replay(
+                use_pruned=False,
+                pruned_keyboard_ids=pruned_keyboard_ids,
+                state_change_keys=state_change_keys,
+                game_over_ids=game_over_ids,
+                click_actions=click_actions,
+                pristine=pristine,
+                original_level=original_level,
+                max_depth=max_depth,
+                max_nodes=max_nodes // 2,
+                max_time=remaining_time,
+                t0=t0,
+            )
+            if result is not None:
+                return result
+
+        return None
+
+    def _simulation_bfs_phase(
+        self,
+        use_pruned: bool,
+        pruned_keyboard_ids: set[int],
+        state_change_keys: set[tuple[int, ...]],
+        game_over_ids: set[int],
+        click_actions: list[tuple[int, dict]],
+        probe_result: dict[tuple[int, ...], str],
+        max_depth: int,
+        max_nodes: int,
+        max_time: float,
+        t0: float,
+        original_level: int,
+    ) -> list[tuple] | None:
+        """Run one phase of simulation BFS.
+
+        Phase A (use_pruned=True): Only try actions in pruned_keyboard_ids
+        and click_actions whose (aid, x, y) is in state_change_keys.
+        Movement (1-4) always allowed.
+
+        Phase B (use_pruned=False): Try all actions except game_over_ids.
+        """
+        phase_name = "A(pruned)" if use_pruned else "B(full)"
+
         initial_hash = _game_state_hash(self.game)
         initial_score = self._score_game_state(self.game)
 
@@ -1544,15 +1626,34 @@ class UniversalSolverPipeline:
                 continue
 
             for ai in all_actions:
-                aid = int(ai.id) if hasattr(ai.id, '__int__') else ai.id
-                if aid in game_over_ids:
+                aid = ai.id.value if hasattr(ai.id, 'value') and not isinstance(ai.id, bool) else ai.id
+                aid = int(aid)
+
+                if aid in game_over_ids and aid != 6:
                     continue
 
-                should_try = aid in pruned_actions
-                if aid == 6 and click_actions:
+                # Determine should_try based on phase
+                if use_pruned:
+                    # Phase A: strict pruning
+                    should_try = False
+                    if aid in {1, 2, 3, 4}:  # Movement always allowed
+                        should_try = True
+                    elif aid in pruned_keyboard_ids:
+                        should_try = True
+                    elif aid == 6:
+                        data = ai.data if ai.data else {}
+                        x, y = int(data.get('x', 0)), int(data.get('y', 0))
+                        click_key = (aid, x, y)
+                        if click_key in state_change_keys:
+                            should_try = True
+                        elif click_actions:
+                            # Fallback: any sprite-based click target
+                            should_try = True
+                else:
+                    # Phase B: try everything except game_over
                     should_try = True
-                if aid in {1, 2, 3, 4} and not should_try:
-                    should_try = True
+                    if aid in game_over_ids:
+                        should_try = False
 
                 if not should_try:
                     continue
@@ -1561,7 +1662,9 @@ class UniversalSolverPipeline:
                 if not _perform_action_safe(g_copy, ai):
                     continue
 
-                step_tuple = (ai.id, dict(ai.data) if ai.data else {})
+                step_aid = ai.id.value if hasattr(ai.id, 'value') and not isinstance(ai.id, bool) else ai.id
+                step_aid = int(step_aid)
+                step_tuple = (step_aid, dict(ai.data) if ai.data else {})
 
                 if _is_level_solved(g_copy, original_level):
                     return path + [step_tuple]
@@ -1576,11 +1679,134 @@ class UniversalSolverPipeline:
                     counter += 1
                     heapq.heappush(pq, (new_score, counter, g_copy, path + [step_tuple], state_h))
 
-        if click_actions and self.is_click_game:
-            plan: list[tuple] = []
-            for aid, data in click_actions:
-                plan.append((aid, data))
-            return plan
+        return None
+
+    def _simulation_bfs_replay(
+        self,
+        use_pruned: bool,
+        pruned_keyboard_ids: set[int],
+        state_change_keys: set[tuple[int, ...]],
+        game_over_ids: set[int],
+        click_actions: list[tuple[int, dict]],
+        pristine: Any,
+        original_level: int,
+        max_depth: int,
+        max_nodes: int,
+        max_time: float,
+        t0: float,
+    ) -> list[tuple] | None:
+        """Replay-based simulation BFS for keyboard/hybrid games.
+
+        Stores action sequences (paths) in the priority queue instead of
+        game deepcopies. Replays from pristine game when expanding nodes.
+        This eliminates the memory bloat of storing game objects in the
+        queue and enables exploring more nodes within the time budget.
+
+        Phase A (use_pruned=True): Only try actions in pruned_keyboard_ids
+        and click_actions whose (aid, x, y) is in state_change_keys.
+        Movement (1-4) always allowed.
+        Phase B (use_pruned=False): Try all actions except game_over_ids.
+
+        Args:
+            use_pruned: Whether to use pruned actions (Phase A) or all (Phase B).
+            pruned_keyboard_ids: Keyboard action IDs classified as state_change.
+            state_change_keys: Set of (aid,) or (aid, x, y) tuples for state_change actions.
+            game_over_ids: Action IDs that cause game over.
+            click_actions: List of (action_id, data) for click targets.
+            pristine: Pristine game deepcopy for replay.
+            original_level: Level index to check for solution.
+            max_depth: Maximum BFS depth.
+            max_nodes: Maximum nodes to explore.
+            max_time: Maximum time in seconds.
+            t0: Start time.
+
+        Returns:
+            List of (action_id, data) tuples, or None.
+        """
+        phase_name = "A(pruned)" if use_pruned else "B(full)"
+
+        initial_hash = _game_state_hash(self.game)
+        initial_score = self._score_game_state(self.game)
+
+        counter = 0
+        pq: list[tuple[int, int, list[tuple], str]] = []
+        heapq.heappush(pq, (initial_score, counter, [], initial_hash))
+        visited: set[str] = {initial_hash}
+        total_nodes = 0
+
+        while pq:
+            if time.time() - t0 > max_time:
+                break
+            if total_nodes > max_nodes:
+                break
+
+            _score, _cnt, path, _ = heapq.heappop(pq)
+            total_nodes += 1
+
+            # Replay path to reach current state
+            sim = _replay_to_state(pristine, path)
+            if sim is None:
+                continue
+
+            # Get all valid actions from current state
+            all_actions = _get_valid_action_inputs(sim)
+            if not all_actions:
+                continue
+
+            for ai in all_actions:
+                aid = ai.id.value if hasattr(ai.id, 'value') and not isinstance(ai.id, bool) else ai.id
+                aid = int(aid)
+
+                # Determine should_try based on phase
+                if use_pruned:
+                    # Phase A: strict pruning
+                    should_try = False
+                    if aid in {1, 2, 3, 4}:  # Movement always allowed
+                        should_try = True
+                    elif aid in pruned_keyboard_ids:
+                        should_try = True
+                    elif aid == 6:
+                        data = ai.data if ai.data else {}
+                        x, y = int(data.get('x', 0)), int(data.get('y', 0))
+                        click_key = (aid, x, y)
+                        if click_key in state_change_keys:
+                            should_try = True
+                        elif click_actions:
+                            # Fallback: any sprite-based click target
+                            should_try = True
+                else:
+                    # Phase B: try everything except game_over
+                    should_try = True
+                    if aid in game_over_ids and aid != 6:
+                        should_try = False
+
+                if not should_try:
+                    continue
+
+                # Build step tuple for this action
+                step_tuple = (aid, dict(ai.data) if ai.data else {})
+                new_path = path + [step_tuple]
+
+                # Replay to resulting state
+                sim2 = _replay_to_state(pristine, new_path)
+                if sim2 is None:
+                    continue
+
+                # Check if solved
+                if _is_level_solved(sim2, original_level):
+                    return new_path
+
+                # State dedup
+                state_h = _game_state_hash(sim2)
+                if state_h in visited:
+                    continue
+                visited.add(state_h)
+
+                # Enqueue if within depth limit
+                if len(new_path) < max_depth:
+                    new_score = len(new_path) + self._score_game_state(sim2)
+                    counter += 1
+                    heapq.heappush(pq, (new_score, counter, new_path, state_h))
 
         return None
 
@@ -1696,34 +1922,68 @@ class UniversalSolverPipeline:
 
         return score
 
-    def _probe_actions(self, game_copy: Any) -> dict[int, str]:
-        """Try each action once to classify it.
+    def _probe_actions(self, game_copy: Any) -> dict[tuple[int, ...], str]:
+        """Try each action once to classify it at click-position granularity.
+
+        For click actions (aid=6), each (x,y) position is classified independently.
+        For keyboard actions, the aid alone is used as key.
 
         Returns:
-            Dict mapping action_id (int) to 'state_change'|'no_change'|'game_over'.
+            Dict mapping (aid,) or (aid, x, y) to
+            'state_change'|'no_change'|'game_over'.
         """
         base_hash = _game_state_hash(game_copy)
-        action_classes: dict[int, str] = {}
+        action_classes: dict[tuple[int, ...], str] = {}
 
         actions = _get_valid_action_inputs(game_copy)
         if not actions:
             return action_classes
 
         for ai in actions:
-            aid = int(ai.id) if hasattr(ai.id, '__int__') else ai.id
+            aid = ai.id.value if hasattr(ai.id, 'value') and not isinstance(ai.id, bool) else ai.id
+            aid = int(aid)
+            data = ai.data if ai.data else {}
+            # Click actions: per-position key
+            if aid == 6 and data:
+                key = (aid, int(data.get('x', 0)), int(data.get('y', 0)))
+            else:
+                key = (aid,)
+
             sim = copy.deepcopy(game_copy)
             result = _perform_action_safe(sim, ai)
 
             if not result:
-                action_classes[aid] = 'game_over'
+                action_classes[key] = 'game_over'
             else:
                 new_hash = _game_state_hash(sim)
                 if new_hash == base_hash:
-                    action_classes[aid] = 'no_change'
+                    action_classes[key] = 'no_change'
                 else:
-                    action_classes[aid] = 'state_change'
+                    action_classes[key] = 'state_change'
 
         return action_classes
+
+    def _get_pruned_action_list(
+        self, probe_result: dict[tuple[int, ...], str]
+    ) -> list[tuple[int, dict]]:
+        """Extract state-changing actions from probe result.
+
+        Returns:
+            List of (action_id, data_dict) for actions classified as 'state_change'.
+            Click actions include x,y coordinates; keyboard actions have empty dict.
+        """
+        pruned: list[tuple[int, dict]] = []
+        for key, cls in probe_result.items():
+            if cls != 'state_change':
+                continue
+            aid = key[0]
+            if len(key) == 3:
+                # Click action with (aid, x, y)
+                pruned.append((aid, {"x": key[1], "y": key[2]}))
+            else:
+                # Keyboard action with (aid,)
+                pruned.append((aid, {}))
+        return pruned
 
     # ------------------------------------------------------------------
     # Strategy 4: DFS fallback
