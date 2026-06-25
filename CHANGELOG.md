@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.2.1-dev] — 2026-06-25
+
+### Fixed — NARGridEncoder Critical Bug Fixes
+
+Three critical bugs discovered during RHAE regression testing that caused signal collapse in the NAR-Conv octonion encoder:
+
+1. **e₀ Signal Collapse** (`nar_conv.py` `_COLOR_PHASE_MAP`): All non-zero ARC colors had e₀(real component)=0.0, causing `F.conv2d(x_real, w_real)` input to be all-zero → real_out=0 → all octonion channels collapse after normalization. **Fix**: Set e₀=1.0 for colors 1-9 as "magnitude/presence" signal, enabling Conv2d real channel to carry information.
+
+2. **BatchNorm2d Collapse at B=1** (`nar_conv.py` `NARConvBlock`): `nn.BatchNorm2d` with batch_size=1 computes batch_var=0, causing `(x-mean)/sqrt(0+eps)≈0`. **Fix**: Replace with `nn.InstanceNorm2d(out_channels, affine=True)` which normalizes per-sample independent of batch size.
+
+3. **Fingerprint Discrimination Failure** (`nar_conv.py` `compute_tomas_fingerprint`): Using only first 8 feature components produced identical fingerprints for different grids (AdaptiveAvgPool reduced discrimination). **Fix**: Use full 256-dim feature vector + topo_map mean/std for SHA-256 hash, achieving distinct fingerprints (feat_diff=30.28, topo_diff=0.71).
+
+### Verified
+
+- TOMASLearner full cycle: record_episode → sleep_step → psi_audit → consolidate → library.json persistence ✅
+- Asym Index η=0.9748 for test grids (η>0 confirms physical AI distinction) ✅
+- Different grids produce distinct TOMAS fingerprints after fix ✅
+- LS20 RHAE regression: 6/7 levels, avg RHAE=89.4 (L0-L5 all 115.0, L6 failed at 392 steps)
+
+### Known Issues
+
+- LS20 Level 6: Oracle fallback → Q-learning mode, 392 steps, RHAE=0.0
+- FT09/TR87 regression tests: `ModuleNotFoundError: No module named 'agent'` in `_solve_click_puzzle` import path
+- `.gitignore` `_*.py` pattern fixed to `_debug*.py`, `_diag*.py`, `_test*.py` (was blocking `__init__.py`)
+
+---
+
 ## [3.2.0-dev] — 2026-06-25
 
 ### Added — Generic DFS Solver Infrastructure

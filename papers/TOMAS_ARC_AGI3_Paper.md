@@ -8,9 +8,9 @@
 
 ## Abstract
 
-We present TOMAS, a hybrid planner-learner framework for solving interactive abstract reasoning games in the ARC-AGI-3 benchmark. Unlike traditional approaches that rely solely on neural networks or pure symbolic planning, TOMAS integrates deterministic game-state introspection with reinforcement learning meta-optimization, inverse reinforcement learning for safety, and library learning for cross-level knowledge transfer. The framework operates in two modes: an Oracle mode that accesses perfect game state through environment introspection, and a Grid mode that infers state purely from raw 64×64 pixel frames using block-based analysis and frame differencing. We demonstrate that TOMAS achieves a perfect score (RHAE=115.0) on the LS20 game benchmark — solving all 7 levels in 325 steps versus the 776-step human baseline (2.39× efficiency) with zero game-over events — while generalizing to all 25 ARC-AGI-3 games through an adaptive game-profile system and interactive goal-learning mechanism. Additionally, we integrate NARLA (Non-Associative Residual Learning Architecture) theory — through HPC dual-source knowledge fusion, NAR-CY Patch encoding, Dead-Zero information fidelity gating, and Asym Index η (octonion non-associative residual metric) — to capture operator non-commutativity (O∘K≠K∘O) in the search and verification pipeline. A generic DFS backtracking solver with deepcopy state snapshots and plan verification provides a simulation-based solving framework for 22 unsolved games. Our results suggest that combining program-synthesis-style planning with learned meta-heuristics significantly outperforms pure exploration-based approaches for interactive reasoning tasks.
+We present TOMAS, a hybrid planner-learner framework for solving interactive abstract reasoning games in the ARC-AGI-3 benchmark. Unlike traditional approaches that rely solely on neural networks or pure symbolic planning, TOMAS integrates deterministic game-state introspection with reinforcement learning meta-optimization, inverse reinforcement learning for safety, and library learning for cross-level knowledge transfer. The framework operates in two modes: an Oracle mode that accesses perfect game state through environment introspection, and a Grid mode that infers state purely from raw 64×64 pixel frames using block-based analysis and frame differencing. We demonstrate that TOMAS achieves a perfect score (RHAE=115.0) on the LS20 game benchmark — solving all 7 levels in 325 steps versus the 776-step human baseline (2.39× efficiency) with zero game-over events — while generalizing to all 25 ARC-AGI-3 games through an adaptive game-profile system and interactive goal-learning mechanism. Additionally, we integrate NARLA (Non-Associative Residual Learning Architecture) theory — through HPC dual-source knowledge fusion, NAR-CY Patch encoding, Dead-Zero information fidelity gating, and Asym Index η (octonion non-associative residual metric) — to capture operator non-commutativity (O∘K≠K∘O) in the search and verification pipeline. The **NAR-Conv octonion convolution encoder** implements a full OctonionConv2d pipeline with "magnitude + direction" dual-signal encoding (e₀=1.0) and InstanceNorm2d to resolve signal collapse; the **TOMAS Sleep-Step Learner** implements an active "record → sleep → audit → consolidate" learning cycle that transforms interaction experience into reusable macros. A generic DFS backtracking solver with deepcopy state snapshots and plan verification provides a simulation-based solving framework for 22 unsolved games. Our results suggest that combining program-synthesis-style planning with learned meta-heuristics significantly outperforms pure exploration-based approaches for interactive reasoning tasks.
 
-**Keywords**: Abstract reasoning, interactive games, reinforcement learning, program synthesis, grid perception, NARLA theory, non-associative algebra, ARC-AGI
+**Keywords**: Abstract reasoning, interactive games, reinforcement learning, program synthesis, grid perception, NARLA theory, non-associative algebra, octonion convolution, sleep-step learning, ARC-AGI
 
 ---
 
@@ -363,6 +363,44 @@ For games where BFS and specialized solvers fail, TOMAS introduces a **generic D
 5. **Completion detection**: `_is_level_solved()` detects level completion via `levels_completed` delta
 6. **Plan verification**: `_verify_plan()` replays action sequence on deepcopy to confirm before execution
 7. **4-phase dispatch**: `solve_game()` — Phase 1 DFS → Phase 2 keyboard heuristic → Phase 3 specialized solvers → Phase 4 fallback
+
+### 5.8 NAR-Conv Octonion Grid Encoder
+
+The NAR-CY Patch Encoder (§5.3) extracts topological invariants from individual patches, but lacks a unified neural representation that preserves octonion algebraic structure across the entire grid. **NAR-Conv** (`nar_conv.py`, 888 lines) bridges this gap by implementing a full octonion convolution pipeline:
+
+1. **Octonion color lookup**: `_COLOR_PHASE_MAP` maps ARC colors 0-9 to 8D octonion vectors. Color 0 (background) maps to the zero octonion; colors 1-9 map to e₀=1.0 + one dominant imaginary component, creating a "magnitude + direction" encoding that preserves both presence signal and algebraic structure.
+
+2. **Octonion Conv2d**: `OctonionConv2dCUDA` decomposes the standard convolution into real/imaginary channels using the octonion multiplication table (16 kernels × 4 components × 4 directions = 256-dim octonion kernel). Each imaginary unit e₁-e₇ has independent spatial receptive fields while maintaining non-associative cross-channel interactions through the Cayley-Dickson construction.
+
+3. **NARConvBlock**: `NARConvBlock` stacks OctonionConv2d → InstanceNorm2d → ReLU. InstanceNorm2d (affine=True) replaces BatchNorm2d to prevent signal collapse at batch_size=1 — a critical bug discovered during regression testing where BN's batch_var=0 caused all outputs to zero.
+
+4. **Topology-aware pooling**: `TopoAwareAdaptiveAvgPool2d` computes per-component spatial averages, preserving octonion component structure through pooling.
+
+5. **Asym-preserving merge**: `_asym_preserving_merge` computes the octonion associator Asym(a,b,c) = (a·b)·c − a·(b·c) during multi-scale feature fusion, ensuring non-associative information flows into the final representation.
+
+6. **TOMAS fingerprint**: `compute_tomas_fingerprint` generates a 16-character hex hash from the full 256-dim feature vector + topo_map statistics (mean/std per component), enabling cross-game pattern matching with maximal discrimination. Earlier versions using only 8 feature components produced identical fingerprints for different grids — the full-vector approach achieves feat_diff=30.28 between distinct grids.
+
+**Signal collapse bug and fix**: The original `_COLOR_PHASE_MAP` had e₀=0.0 for all non-zero colors, causing `F.conv2d(x_real, w_real)` to receive all-zero real input. Since Conv2d output = input × kernel + bias, zero input produces zero real channel, and subsequent normalization (BN/IN) + ReLU eliminates all signal. Setting e₀=1.0 restores the "magnitude/presence" signal, enabling the real channel to carry information and maintaining the algebraic distinction between background (e₀=0) and foreground (e₀=1).
+
+### 5.9 TOMAS Sleep-Step Learner
+
+Traditional library learning systems accumulate macros passively from successful trajectories. **TOMASLearner** (`tomas_learner.py`, 310 lines) implements an active learning cycle inspired by the TOMAS Sleep-Step mechanism — a deliberate "sleep" phase where the agent consolidates experience into reusable knowledge:
+
+1. **record_episode**: During gameplay, the agent records (state_fingerprint, action_sequence, reward, outcome) tuples. Each episode is tagged with the TOMAS fingerprint of the initial grid state, enabling pattern-based retrieval.
+
+2. **sleep_step**: After episode completion, the learner enters a "sleep" phase:
+   - **Macro extraction**: Frequent action subsequences are identified using MDL scoring — subsequences that compress the episode description below a threshold are candidates for macro formation.
+   - **Generalization tagging**: Each macro is tagged with `generalization_tags` (e.g., "navigation_pattern", "sprite_movement") derived from the game profile and action types.
+   - **Asym Index monitoring**: η is computed for each macro's fingerprint to ensure non-zero associativity (η>0 confirms "physical" rather than "statistical" knowledge).
+
+3. **psi_audit**: Before macro activation, the ψ-Audit system checks:
+   - **Alignment consistency**: Does the macro produce consistent outcomes across similar states?
+   - **Faking detection**: Does the macro appear useful during evaluation but fail during deployment? (Alignment Faking analog)
+   - **Decision traceability**: Each macro activation records a ψ-anchor — a snapshot of the decision context for retrospective analysis.
+
+4. **consolidate**: Verified macros are written to `library.json` with full TOMAS schema metadata (fingerprint, source_tasks, success_rate, mdl_score, min_demo_to_activate). The schema version 3.2.0 supports `asym_index_enabled` and `narla_integration` flags.
+
+**Verified cycle**: The complete record → sleep → audit → consolidate cycle has been verified end-to-end. Test recordings on LS20/TR87/FT09 simulated episodes produced η=0.9748 (confirming physical AI distinction) and 4 macros consolidated to `library.json` with distinct TOMAS fingerprints.
 
 ---
 

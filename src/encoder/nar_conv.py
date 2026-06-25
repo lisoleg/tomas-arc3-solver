@@ -139,24 +139,18 @@ def build_octonion_multiplication_tensors(
 _COLOR_PHASE_MAP: Dict[int, Tuple[float, ...]] = {
     # Color 0: background/black → zero octonion (no signal)
     0: (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-    # Color 1: blue → e₁ dominant (spatial dimension)
-    1: (0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-    # Color 2: red → e₂ dominant
-    2: (0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0),
-    # Color 3: green → e₃ dominant
-    3: (0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0),
-    # Color 4: yellow → e₁+e₂ (composite)
-    4: (0.0, 0.707, 0.707, 0.0, 0.0, 0.0, 0.0, 0.0),
-    # Color 5: gray → e₄ dominant (causal dimension)
-    5: (0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),
-    # Color 6: magenta → e₅ dominant
-    6: (0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0),
-    # Color 7: orange → e₁+e₃ (composite spatial-causal)
-    7: (0.0, 0.707, 0.0, 0.707, 0.0, 0.0, 0.0, 0.0),
-    # Color 8: cyan → e₆ dominant
-    8: (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0),
-    # Color 9: brown → e₇ dominant
-    9: (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),
+    # Colors 1-9: e₀=1.0 (magnitude/presence signal) + imaginary dominant component
+    # The real component e₀ MUST be nonzero for Conv2d real_out channel to carry signal.
+    # Without e₀, F.conv2d on all-zero real input produces zero, making BN collapse.
+    1: (1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0),   # blue → e₁ dominant
+    2: (1.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0),   # red → e₂ dominant
+    3: (1.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0),   # green → e₃ dominant
+    4: (1.0, 0.707, 0.707, 0.0, 0.0, 0.0, 0.0, 0.0), # yellow → e₁+e₂
+    5: (1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0),   # gray → e₄ (causal)
+    6: (1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0),   # magenta → e₅
+    7: (1.0, 0.707, 0.0, 0.707, 0.0, 0.0, 0.0, 0.0), # orange → e₁+e₃
+    8: (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0),   # cyan → e₆
+    9: (1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0),   # brown → e₇
 }
 
 
@@ -527,9 +521,10 @@ class NARConvBlock(nn.Module):
             padding=padding,
         )
 
-        # Per-component batch normalization
-        # Apply BN independently to each octonion component
-        self.bn = nn.BatchNorm2d(out_channels)
+        # Per-component normalization: use InstanceNorm2d instead of BatchNorm2d
+        # BatchNorm fails with B=1 (var=0 → all outputs zero).
+        # InstanceNorm operates per-sample, independent of batch size.
+        self.bn = nn.InstanceNorm2d(out_channels, affine=True)
 
         self.activation = nn.ReLU(inplace=True)
 
@@ -799,13 +794,17 @@ class NARGridEncoder(nn.Module):
 
         features, topo_map = self.forward(grid)
 
-        # Phase hash from feature vector
-        # Use first 8 components as octonion phase
-        phase = features[0, :8]
-        # Convert to hex via deterministic hashing
-        phase_bytes = phase.detach().cpu().numpy().astype(np.float32).tobytes()
+        # Phase hash from full feature vector + topo_map statistics
+        # Use all 256 feature components + topo_map mean/std for maximal discrimination
+        feat_bytes = features[0].detach().cpu().numpy().astype(np.float32).tobytes()
+        # Also include topo_map statistics for structural discrimination
+        topo_stats = torch.cat([
+            topo_map[0].mean(dim=(0, 1)),   # mean per octonion component
+            topo_map[0].std(dim=(0, 1)),     # std per octonion component
+        ])
+        topo_bytes = topo_stats.detach().cpu().numpy().astype(np.float32).tobytes()
         import hashlib
-        fingerprint = hashlib.sha256(phase_bytes).hexdigest()[:16]
+        fingerprint = hashlib.sha256(feat_bytes + topo_bytes).hexdigest()[:16]
 
         return fingerprint
 
