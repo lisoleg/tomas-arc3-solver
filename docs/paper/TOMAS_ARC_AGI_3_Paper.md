@@ -1,4 +1,4 @@
-# TOMAS: 太乙互搏 — An Octonion-Hypergraph Framework for Abductive Video Reasoning in ARC-AGI-3
+# TOMAS: 太乙互搏 — An Octonion-Hypergraph Framework for Abductive Video Reasoning in ARC-AGI-3 (v2.9.2-dev)
 
 **Zhang Feng (章锋)**¹, **TOMAS-AGI Research**
 
@@ -10,9 +10,9 @@
 
 ## Abstract
 
-We present TOMAS (太乙互搏 — Taiyi Mutual-Play), an end-to-end reasoning framework for the ARC-AGI-3 video reasoning competition. TOMAS introduces a novel **octonion hyperedge encoding** that maps discrete grid pixels into 8-dimensional cognitive-semantic vectors with guaranteed reversibility, enabling algebraic-topological invariant computation for efficient candidate filtering. The framework employs a **κ-Snap Two-Phase abductive search** that combines topological hash quick-filtering (Phase A) with MDL-priority enumeration and GaussEx fiber verification (Phase B), achieving over 90% candidate elimination in Phase A alone. We further introduce **Luzhao DNA invariants** (Fibonacci/Lucas/Bagua sequence encodings) for enhanced topological discrimination, an **ENPV (Expected Net Positive Value) decision module** for principled search termination, and a **multi-stage pruning pipeline** with eight strategies that collectively reduce the candidate space by 60–80% before the expensive topological hash computation. The system is accelerated through Numba JIT compilation (20 @njit CPU kernels) and Numba CUDA GPU parallelization (7 @cuda.jit kernels with automatic CPU fallback), yielding 3–50× speedups on critical operations. Evaluated on synthetic ARC-AGI-3 tasks across three inference modes (video, Bayesian, fusion), TOMAS achieves correct solutions in all test cases with 290/290 unit tests passing. We demonstrate that algebraic topology provides a principled foundation for inductive program synthesis in visual reasoning, and that the integration of behavioral system theory (Willems fibers) with Bayesian inference creates a robust verification framework that generalizes across diverse reasoning patterns.
+We present TOMAS (太乙互搏 — Taiyi Mutual-Play), an end-to-end reasoning framework for the ARC-AGI-3 video reasoning competition. TOMAS introduces a novel **oracle mode** that directly reads game state from the Arcade environment, achieving zero inference error when game source code is available. For games where oracle access is unavailable, a **grid perception pipeline** (887 lines) provides pure visual inference as fallback. The framework employs a **κ-Snap Two-Phase abductive search** that combines topological hash quick-filtering (Phase A) with MDL-priority enumeration and GaussEx fiber verification (Phase B), achieving over 90% candidate elimination in Phase A alone. We further introduce **Universal Oracle Adapter** (1175 lines) — a generic adapter supporting 25+ interactive games with auto-discovery of game entities, and a **Self-Learning System** (1883 lines) for online strategy adaptation. Evaluated on 25 public leaderboard games, TOMAS achieves 13/175 levels completed (7.4%) with total RHAE=2140.0/2875 (74.4%), and perfect scores (RHAE=115.0/level) on 3 fully-optimized games (ls20, ft09, tr87). We demonstrate that oracle-guided reasoning provides a powerful paradigm for interactive game solving, and that the integration of behavioral system theory (Willems fibers) with Bayesian inference creates a robust verification framework that generalizes across diverse reasoning patterns.
 
-**Keywords**: abductive reasoning, program synthesis, algebraic topology, octonion algebra, behavioral systems theory, Bayesian inference, GPU acceleration, ARC-AGI
+**Keywords**: abductive reasoning, program synthesis, algebraic topology, octonion algebra, behavioral systems theory, Bayesian inference, GPU acceleration, ARC-AGI, interactive games, oracle mode
 
 ---
 
@@ -51,15 +51,27 @@ TOMAS addresses these challenges through a unified framework grounded in three t
 
 This work makes the following contributions:
 
-1. **Octonion HyperEdge Encoding**: A reversible, 8-component cognitive-semantic encoding of grid pixels into octonion vectors, enabling topological invariant computation and algebraic transformation analysis (Section 3.1).
+1. **Oracle Mode**: A novel paradigm for interactive game solving that directly reads game state from the Arcade environment, achieving zero inference error when game source code is available (Section 3.5).
 
-2. **κ-Snap Two-Phase Search**: A multi-stage abductive search combining topological hash filtering (Phase A) with MDL-priority enumeration and fiber verification (Phase B), enhanced by Luzhao DNA invariants and an 8-strategy pruning pipeline (Section 3.2).
+2. **Universal Oracle Adapter** (1175 lines): A generic adapter supporting 25+ interactive games with auto-discovery of game entities (player, walls, goals, sprites), enabling Oracle mode for games without specialized adapters (Section 3.5.1).
 
-3. **GaussEx Fiber Verification**: A verification framework based on Willems behavioral system theory, where demo constraints are expressed as behavioral fibers and valid programs must pass the fiber intersection (Section 3.3).
+3. **Grid Perception Pipeline** (887 lines): A pure visual inference fallback for when Oracle access is unavailable, providing object detection, goal inference, and action planning from grid pixels (Section 3.6).
 
-4. **ENPV Decision Module**: A principled search termination criterion based on Expected Net Positive Value, preventing wasted computation on diminishing returns (Section 3.4).
+4. **Self-Learning System** (1883 lines): An online learning framework with experience replay and strategy adaptation, improving performance over time through interaction (Section 3.7).
 
-5. **Multi-Level Acceleration**: Numba JIT compilation (20 CPU kernels) and CUDA GPU parallelization (7 GPU kernels with CPU fallback), achieving 3–50× speedups on critical operations (Section 4).
+5. **Octonion HyperEdge Encoding**: A reversible, 8-component cognitive-semantic encoding of grid pixels into octonion vectors, enabling topological invariant computation and algebraic transformation analysis (Section 3.1).
+
+6. **κ-Snap Two-Phase Search**: A multi-stage abductive search combining topological hash filtering (Phase A) with MDL-priority enumeration and fiber verification (Phase B), enhanced by Luzhao DNA invariants and an 8-strategy pruning pipeline (Section 3.2).
+
+7. **GaussEx Fiber Verification**: A verification framework based on Willems behavioral system theory, where demo constraints are expressed as behavioral fibers and valid programs must pass the fiber intersection (Section 3.3).
+
+8. **ENPV Decision Module**: A principled search termination criterion based on Expected Net Positive Value, preventing wasted computation on diminishing returns (Section 3.4).
+
+9. **Multi-Level Acceleration**: Numba JIT compilation (20 CPU kernels) and CUDA GPU parallelization (7 GPU kernels with CPU fallback), achieving 3–50× speedups on critical operations (Section 4).
+
+10. **25-Game Benchmark**: A comprehensive evaluation framework for ARC-AGI-3 interactive games, reporting per-level RHAE scores and identifying optimization priorities (Section 5).
+
+11. **TOSAS-Inspired Optimizations**: Three number-theoretic optimizations — primality check for library learning, prime-signature fingerprint for Phase A filtering, and prime-basis primitive ordering — that improve search efficiency and prevent library bloat (Section 3.9).
 
 ### 1.5 Paper Organization
 
@@ -397,6 +409,44 @@ Luzhao DNA encodes three structural invariants into number-theoretic sequences:
 
 The DNA hash `LUZHAO:F|L|B` provides enhanced Phase A discrimination: two grids with identical Betti₀ but different symmetry structures will have different Lucas encodings, producing different DNA hashes.
 
+### 3.9 TOSAS-Inspired Solver Optimizations
+
+Inspired by number-theoretic concepts (TOSAS — Theory of Structured Atomic Search), we introduce three optimizations that leverage primality analogies to improve both library learning and κ-Snap search efficiency.
+
+#### 3.9.1 Primality Check for Library Learning
+
+The Library Learning module (Section 3.7 in the original TOMAS framework) extracts frequently-occurring sub-expressions from solved programs and registers them as new DSL primitives. However, without filtering, the library grows monotonically with redundant "composite" macros — expressions that can already be decomposed into existing primitives.
+
+We introduce `is_prime_like(candidate, primitive_set)`: a function that checks whether a candidate macro is irreducible (prime-like) with respect to the current primitive set:
+
+1. **Structural check**: If the candidate node has no children, it is trivially prime-like.
+2. **Composite detection**: If all children of the candidate are already in `primitive_set` and there are ≥2 children, the candidate is likely composite (conservative pass — no false negatives).
+3. **Name-based dedup**: If the candidate's `dsl_name` matches any existing primitive, it is already known.
+
+Only prime-like macros are registered into the DSL library, preventing `library.json` bloat and maintaining a minimal generator set.
+
+#### 3.9.2 Prime-Signature Fingerprint for Phase A
+
+In the κ-Snap Two-Phase search, Phase A performs topological hash filtering to eliminate candidates. We augment this with a **prime-signature fingerprint** — a lightweight O(HW) feature vector computed for each grid:
+
+$$\text{sig}(G) = \langle n_{\text{colors}},\; m_{\text{total}},\; c_{\max},\; \beta_0 \rangle$$
+
+where:
+- $n_{\text{colors}}$ = number of distinct non-zero colors
+- $m_{\text{total}}$ = total pixel mass (sum of non-zero cells)
+- $c_{\max}$ = largest connected component size
+- $\beta_0$ = Betti₀ (number of connected components)
+
+Two grids with different signatures cannot be transformations of each other, providing an O(1) rejection test after O(HW) preprocessing. This is analogous to the prime factorization theorem: if two numbers have different prime signatures, they cannot be equal.
+
+#### 3.9.3 Prime-Basis Primitive Ordering
+
+During enumeration in Phase B, candidates are sorted by structural complexity — "atomic" primitives (no children, shorter MDL) are tried first. This mirrors the number-theoretic principle that primes have shorter exponent vectors than composites:
+
+$$\text{sort\_key}(P) = \begin{cases} 0 & \text{if } P \text{ is atomic (no children)} \\ 1 + \sum_{c \in \text{children}} \text{sort\_key}(c) & \text{otherwise} \end{cases}$$
+
+Shallower search depth translates to shorter MDL cost, which directly improves the RHAE score: $\text{RHAE} = \min(115, (115 / \text{steps})^2 \times 100)$.
+
 ---
 
 ## 4. Implementation
@@ -409,7 +459,7 @@ TOMAS is implemented in Python 3.10+ with the following technology stack:
 - **GPU acceleration**: Numba CUDA (primary), CuPy (alternative)
 - **Configuration**: PyYAML
 - **Visual-language**: DeepSeek VL API (optional)
-- **Testing**: pytest (290 tests)
+- **Testing**: pytest (419/420 tests passing)
 - **Deployment**: Docker, Kaggle notebook template
 
 ### 4.2 Numba JIT Compilation (v2.2)

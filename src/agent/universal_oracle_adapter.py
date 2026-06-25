@@ -135,12 +135,15 @@ class UniversalOracleAdapter(OracleAdapter):
         'sys_click', 'click', 'tap', 'press', 'button',
     }
 
-    def __init__(self, game: Any, step: int = 5) -> None:
+    def __init__(self, game: Any, step: int = 5, game_id: Optional[str] = None) -> None:
         """Initialize the universal adapter.
 
         Args:
             game: The env._game object.
             step: Grid step size for block alignment.
+            game_id: Optional game identifier for config-based entity detection.
+                When provided, uses game_configs.py to identify player/goal/wall
+                tags instead of heuristic classification.
         """
         super().__init__(game, step)
 
@@ -164,12 +167,183 @@ class UniversalOracleAdapter(OracleAdapter):
         self._frame_initialized: bool = False
         self._player_found_via_tracking: bool = False
 
+        # Config-based entity detection
+        self._game_id = game_id
+        self._game_config = None
+        self._config_loaded: bool = False
+        if game_id is not None:
+            self._load_game_config(game_id)
+
         # Game type detection
         self._is_click_game: bool = False
         self._grid_size_value: int = 64
 
         # All discovered tags (for supplementary wall detection)
         self._all_tags: set[str] = set()
+
+    def _load_game_config(self, game_id: str) -> None:
+        """Load game configuration from game_configs.py.
+
+        Sets up config-based tag mappings for entity detection,
+        bypassing heuristic classification when config is available.
+
+        Args:
+            game_id: Game identifier (e.g. "tu93", "vc33").
+        """
+        try:
+            from .game_configs import GAME_CONFIGS, GameConfig
+            cfg = GAME_CONFIGS.get(game_id)
+            if cfg is not None:
+                self._game_config = cfg
+                self._grid_size_value = cfg.grid_size
+                self._is_click_game = cfg.game_type in ("click", "keyboard+click")
+        except ImportError:
+            pass
+        self._config_loaded = True
+
+    def _get_sprites_by_tag(self, tag: str) -> list:
+        """Get sprites from current_level by tag name.
+
+        Args:
+            tag: Sprite tag name.
+
+        Returns:
+            List of sprite objects, empty if not found.
+        """
+        try:
+            cl = getattr(self.game, 'current_level', None)
+            if cl is not None and hasattr(cl, 'get_sprites_by_tag'):
+                return cl.get_sprites_by_tag(tag) or []
+        except Exception:
+            pass
+        return []
+
+    def _read_player_from_config(self) -> Optional[GameEntity]:
+        """Read player using config-based tag detection.
+
+        Returns:
+            GameEntity for the player, or None if not found.
+        """
+        if self._game_config is None or self._game_config.player_tag is None:
+            return None
+
+        tag = self._game_config.player_tag
+        sprites = self._get_sprites_by_tag(tag)
+
+        # Also try game attribute (some games store player as attribute)
+        if not sprites:
+            try:
+                attr_val = getattr(self.game, tag, None)
+                if attr_val is not None:
+                    if isinstance(attr_val, list) and len(attr_val) > 0:
+                        sprites = [attr_val[0]]
+                    else:
+                        sprites = [attr_val]
+            except Exception:
+                pass
+
+        if sprites:
+            return self._to_entity_safe(sprites[0])
+        return None
+
+    def _read_goals_from_config(self) -> list[GameEntity]:
+        """Read goals using config-based tag detection.
+
+        Returns:
+            List of goal GameEntity objects.
+        """
+        if self._game_config is None or self._game_config.goal_tag is None:
+            return []
+
+        tag = self._game_config.goal_tag
+        sprites = self._get_sprites_by_tag(tag)
+
+        goals: list[GameEntity] = []
+        seen: set[tuple[int, int]] = set()
+
+        # Get player position for filtering
+        player_pos: Optional[tuple[int, int]] = None
+        try:
+            p = self._read_player_from_config()
+            if p is not None:
+                player_pos = (p.x, p.y)
+        except Exception:
+            pass
+
+        for sprite in sprites:
+            entity = self._to_entity_safe(sprite)
+            if entity is None:
+                continue
+            pos = (entity.x, entity.y)
+            if pos in seen:
+                continue
+            if pos[0] == 0 and pos[1] == 0:
+                continue
+            if player_pos is not None and pos == player_pos:
+                continue
+            seen.add(pos)
+            goals.append(entity)
+
+        return goals
+
+    def _read_walls_from_config(self) -> list[GameEntity]:
+        """Read walls using config-based tag detection.
+
+        Returns:
+            List of wall GameEntity objects.
+        """
+        if self._game_config is None:
+            return []
+
+        walls: list[GameEntity] = []
+        seen: set[tuple[int, int]] = set()
+
+        # Primary wall tag
+        if self._game_config.wall_tag is not None:
+            sprites = self._get_sprites_by_tag(self._game_config.wall_tag)
+            for sprite in sprites:
+                entity = self._to_entity_safe(sprite)
+                if entity is not None:
+                    pos = (entity.x, entity.y)
+                    if pos not in seen:
+                        seen.add(pos)
+                        walls.append(entity)
+
+        # Map tag (for map-based collision games like tu93)
+        if self._game_config.map_tag is not None:
+            sprites = self._get_sprites_by_tag(self._game_config.map_tag)
+            for sprite in sprites:
+                entity = self._to_entity_safe(sprite)
+                if entity is not None:
+                    pos = (entity.x, entity.y)
+                    if pos not in seen:
+                        seen.add(pos)
+                        walls.append(entity)
+
+        return walls
+
+    def _read_switchers_from_config(self) -> list[GameEntity]:
+        """Read switchers using config-based tag detection.
+
+        Returns:
+            List of switcher GameEntity objects.
+        """
+        if self._game_config is None or self._game_config.switcher_tag is None:
+            return []
+
+        sprites = self._get_sprites_by_tag(self._game_config.switcher_tag)
+        switchers: list[GameEntity] = []
+        seen: set[tuple[int, int]] = set()
+
+        for sprite in sprites:
+            entity = self._to_entity_safe(sprite)
+            if entity is not None:
+                pos = (entity.x, entity.y)
+                if pos not in seen:
+                    seen.add(pos)
+                    switchers.append(entity)
+
+        return switchers
 
     # ------------------------------------------------------------------
     # Discovery: scan game attributes for sprite lists and single sprites
@@ -179,16 +353,267 @@ class UniversalOracleAdapter(OracleAdapter):
         """Run entity discovery if not yet done.
 
         Scans the game object's attributes to find sprite lists and
-        single sprites. Results are cached for subsequent calls.
+        single sprites. Always also checks current_level._sprites as
+        a supplementary source. If the initial scan finds very little,
+        also checks nested objects and dicts. Results are cached.
         """
         if self._discovered:
             return
+        # Phase 1: scan direct game attributes
         self._discover_sprite_lists()
         self._discover_single_sprites()
+
+        # Phase 2: always check current_level._sprites (supplementary)
+        # This catches sprites not exposed as direct game attributes
+        self._discover_from_current_level()
+
+        # Phase 3: if still very few sprites, try nested objects
+        total_found = len(self._sprite_lists) + len(self._single_sprites)
+        if total_found < 3:
+            self._discover_from_nested_objects()
+
+        # Phase 4: if still very few, try dict values
+        total_found = len(self._sprite_lists) + len(self._single_sprites)
+        if total_found < 3:
+            self._discover_from_dicts()
+
         self._collect_all_tags()
         self._detect_grid_size()
         self._detect_game_type()
         self._discovered = True
+
+    # ------------------------------------------------------------------
+    # Fallback discovery: current_level, nested objects, dicts
+    # ------------------------------------------------------------------
+
+    def _discover_from_current_level(self) -> None:
+        """Discover sprites from current_level._sprites.
+
+        Many games (tu93, vc33, bp35, lf52, m0r0, etc.) store all
+        sprites inside current_level._sprites rather than as direct
+        game attributes. This method extracts that flat sprite list
+        and splits it by tags into separate groups for classification.
+
+        Sprites already discovered via game-level attributes are
+        skipped (by object identity) to avoid duplicates.
+        """
+        try:
+            current_level = getattr(self.game, 'current_level', None)
+            if current_level is None:
+                return
+
+            # Build set of already-discovered sprite object IDs
+            known_ids: set[int] = set()
+            for sl in self._sprite_lists:
+                for s in sl.sprites:
+                    known_ids.add(id(s))
+            for ss in self._single_sprites:
+                known_ids.add(id(ss.sprite))
+
+            # Try _sprites first, then _sorted_sprites
+            for attr in ('_sprites', '_sorted_sprites', 'sprites'):
+                sprites = getattr(current_level, attr, None)
+                if sprites and isinstance(sprites, list) and len(sprites) > 0:
+                    if self._list_has_xy(sprites):
+                        # Filter out already-discovered sprites
+                        new_sprites = [s for s in sprites if id(s) not in known_ids]
+                        if not new_sprites:
+                            break  # All sprites already known
+
+                        # Split sprites by their tags into groups
+                        tag_groups: dict[str, list] = {}
+                        no_tag_sprites: list = []
+
+                        for s in new_sprites:
+                            tags_str = ""
+                            try:
+                                if hasattr(s, 'tags'):
+                                    raw = s.tags
+                                    if isinstance(raw, (list, set, tuple)):
+                                        tags_str = "|".join(sorted(str(t) for t in raw))
+                            except Exception:
+                                pass
+
+                            if tags_str:
+                                if tags_str not in tag_groups:
+                                    tag_groups[tags_str] = []
+                                tag_groups[tags_str].append(s)
+                            else:
+                                no_tag_sprites.append(s)
+
+                        # Add each tag group as a separate sprite list
+                        for tags_key, group_sprites in tag_groups.items():
+                            sample_tags = tags_key.split("|") if tags_key else []
+                            self._sprite_lists.append(DiscoveredSpriteList(
+                                attr_name=f"current_level.{attr}[{tags_key[:20]}]",
+                                sprites=group_sprites,
+                                count=len(group_sprites),
+                                sample_tags=sample_tags,
+                            ))
+
+                        # Add no-tag sprites as a separate group
+                        if no_tag_sprites:
+                            self._sprite_lists.append(DiscoveredSpriteList(
+                                attr_name=f"current_level.{attr}[no_tag]",
+                                sprites=no_tag_sprites,
+                                count=len(no_tag_sprites),
+                                sample_tags=[],
+                            ))
+
+                        break  # Found sprites, stop searching
+        except Exception:
+            pass
+
+    def _discover_from_nested_objects(self) -> None:
+        """Discover sprites from nested complex objects on the game.
+
+        Some games (bp35, lf52) store sprites inside nested objects
+        like game.oztjzzyqoek or game.ikhhdzfmarl. This method
+        scans one level deeper into non-trivial objects.
+        """
+        try:
+            attr_names = dir(self.game)
+        except Exception:
+            return
+
+        for attr_name in attr_names:
+            if attr_name.startswith('__'):
+                continue
+            # Skip already-found attrs
+            if any(sl.attr_name == attr_name for sl in self._sprite_lists):
+                continue
+            if any(ss.attr_name == attr_name for ss in self._single_sprites):
+                continue
+
+            try:
+                value = getattr(self.game, attr_name)
+            except Exception:
+                continue
+
+            # Skip basic types
+            if isinstance(value, (list, dict, set, tuple, str, int, float, bool, type(None))):
+                continue
+            if isinstance(value, np.ndarray):
+                continue
+            if callable(value):
+                continue
+            # Skip if it has x/y (would have been found as single sprite)
+            if self._has_xy(value) and not self._is_camera(attr_name, value):
+                continue
+
+            # Scan this object's attributes for sprite lists/singles
+            try:
+                child_attrs = dir(value)
+            except Exception:
+                continue
+
+            for child_name in child_attrs:
+                if child_name.startswith('__'):
+                    continue
+                try:
+                    child_val = getattr(value, child_name)
+                except Exception:
+                    continue
+                if callable(child_val):
+                    continue
+
+                # Check for sprite list
+                if isinstance(child_val, list) and len(child_val) > 0:
+                    if self._list_has_xy(child_val):
+                        # Avoid duplicates
+                        full_name = f"{attr_name}.{child_name}"
+                        if not any(sl.attr_name == full_name for sl in self._sprite_lists):
+                            sample_tags: list[str] = []
+                            try:
+                                first = child_val[0]
+                                if hasattr(first, 'tags'):
+                                    raw = first.tags
+                                    if isinstance(raw, (list, set, tuple)):
+                                        sample_tags = [str(t) for t in raw]
+                            except Exception:
+                                pass
+
+                            self._sprite_lists.append(DiscoveredSpriteList(
+                                attr_name=full_name,
+                                sprites=child_val,
+                                count=len(child_val),
+                                sample_tags=sample_tags,
+                            ))
+
+                # Check for single sprite
+                elif not isinstance(child_val, (list, dict, set, tuple, str, int, float, bool, type(None), np.ndarray)):
+                    if self._has_xy(child_val) and not self._is_camera(child_name, child_val):
+                        full_name = f"{attr_name}.{child_name}"
+                        if not any(ss.attr_name == full_name for ss in self._single_sprites):
+                            tags: list[str] = []
+                            try:
+                                if hasattr(child_val, 'tags'):
+                                    raw = child_val.tags
+                                    if isinstance(raw, (list, set, tuple)):
+                                        tags = [str(t) for t in raw]
+                            except Exception:
+                                pass
+
+                            x_val, y_val = 0, 0
+                            try:
+                                x_val = int(child_val.x)
+                                y_val = int(child_val.y)
+                            except (TypeError, ValueError, AttributeError):
+                                pass
+
+                            self._single_sprites.append(DiscoveredSprite(
+                                attr_name=full_name,
+                                sprite=child_val,
+                                tags=tags,
+                                x=x_val,
+                                y=y_val,
+                            ))
+
+    def _discover_from_dicts(self) -> None:
+        """Discover sprites from dict values on the game object.
+
+        Some games (vc33) store sprites inside dicts. This method
+        checks dict values for sprite-like objects.
+        """
+        try:
+            attr_names = dir(self.game)
+        except Exception:
+            return
+
+        for attr_name in attr_names:
+            if attr_name.startswith('__'):
+                continue
+            try:
+                value = getattr(self.game, attr_name)
+            except Exception:
+                continue
+
+            if not isinstance(value, dict) or len(value) == 0:
+                continue
+
+            # Collect sprites from dict values
+            sprites: list = []
+            for v in value.values():
+                if self._has_xy(v) and not self._is_camera(attr_name, v):
+                    sprites.append(v)
+
+            if sprites:
+                sample_tags: list[str] = []
+                try:
+                    first = sprites[0]
+                    if hasattr(first, 'tags'):
+                        raw = first.tags
+                        if isinstance(raw, (list, set, tuple)):
+                            sample_tags = [str(t) for t in raw]
+                except Exception:
+                    pass
+
+                self._sprite_lists.append(DiscoveredSpriteList(
+                    attr_name=attr_name,
+                    sprites=sprites,
+                    count=len(sprites),
+                    sample_tags=sample_tags,
+                ))
 
     def _discover_sprite_lists(self) -> None:
         """Scan game object attributes to find sprite lists.
@@ -859,19 +1284,24 @@ class UniversalOracleAdapter(OracleAdapter):
     def player(self) -> Optional[GameEntity]:
         """Get the player entity.
 
-        Reads the current player position from the game object using
-        the cached player attribute. If no player has been identified
-        yet, attempts frame tracking.
+        When a game config is available, uses config-based tag detection
+        first. Falls back to heuristic classification and frame tracking.
 
         Returns:
             GameEntity for the player, or None if not found.
         """
+        # Config-based detection (priority)
+        if self._game_config is not None:
+            entity = self._read_player_from_config()
+            if entity is not None:
+                return entity
+
+        # Heuristic fallback
         self._discover()
         if not self._classified:
             self._classify_entities()
 
         if self._player_attr is None:
-            # Try frame tracking if no player found via heuristics
             if not self._player_found_via_tracking:
                 self._track_frame_changes()
             if self._player_attr is None:
@@ -883,13 +1313,19 @@ class UniversalOracleAdapter(OracleAdapter):
     def walls(self) -> list[GameEntity]:
         """Get wall entities.
 
-        Reads current wall positions from the game object using cached
-        wall attributes. Also retrieves walls via
-        current_level.get_sprites_by_tag if available.
+        When a game config is available, uses config-based tag detection
+        first. Falls back to heuristic classification.
 
         Returns:
             List of wall GameEntity objects.
         """
+        # Config-based detection (priority)
+        if self._game_config is not None:
+            walls = self._read_walls_from_config()
+            if walls:
+                return walls
+
+        # Heuristic fallback
         self._discover()
         if not self._classified:
             self._classify_entities()
@@ -899,12 +1335,19 @@ class UniversalOracleAdapter(OracleAdapter):
     def goals(self) -> list[GameEntity]:
         """Get goal entities.
 
-        Reads current goal positions from the game object using cached
-        goal attributes.
+        When a game config is available, uses config-based tag detection
+        first. Falls back to heuristic classification.
 
         Returns:
             List of goal GameEntity objects.
         """
+        # Config-based detection (priority)
+        if self._game_config is not None:
+            goals = self._read_goals_from_config()
+            if goals:
+                return goals
+
+        # Heuristic fallback
         self._discover()
         if not self._classified:
             self._classify_entities()
@@ -914,12 +1357,19 @@ class UniversalOracleAdapter(OracleAdapter):
     def switchers(self) -> list[GameEntity]:
         """Get switcher entities.
 
-        Reads current switcher positions from the game object using
-        cached switcher attributes.
+        When a game config is available, uses config-based tag detection
+        first. Falls back to heuristic classification.
 
         Returns:
             List of switcher GameEntity objects.
         """
+        # Config-based detection (priority)
+        if self._game_config is not None:
+            switchers = self._read_switchers_from_config()
+            if switchers:
+                return switchers
+
+        # Heuristic fallback
         self._discover()
         if not self._classified:
             self._classify_entities()
@@ -929,9 +1379,14 @@ class UniversalOracleAdapter(OracleAdapter):
     def grid_size(self) -> int:
         """Get the detected grid size.
 
+        When a game config is available, returns the config's grid_size.
+        Otherwise, uses heuristic discovery.
+
         Returns:
             Grid dimension (typically 32, 64, 128, or 256).
         """
+        if self._game_config is not None:
+            return self._game_config.grid_size
         self._discover()
         return self._grid_size_value
 
@@ -945,15 +1400,125 @@ class UniversalOracleAdapter(OracleAdapter):
         self._discover()
         return self._is_click_game
 
+    def get_all_sprites(self) -> list[Any]:
+        """Get all discovered sprites from the game.
+
+        This method returns all sprites discovered by the adapter,
+        including both sprite lists and single sprites.
+
+        Returns:
+            List of all sprite objects.
+        """
+        self._discover()
+
+        all_sprites: list[Any] = []
+
+        # Add sprites from sprite lists
+        for sprite_list in self._sprite_lists:
+            all_sprites.extend(sprite_list.sprites)
+
+        # Add single sprites
+        for discovered_sprite in self._single_sprites:
+            all_sprites.append(discovered_sprite.sprite)
+
+        return all_sprites
+
     # ------------------------------------------------------------------
     # Internal readers: read fresh positions from game object
     # ------------------------------------------------------------------
+
+    def _resolve_attr(self, attr_name: str) -> Any:
+        """Resolve a (possibly virtual) attribute name to its value.
+
+        Handles three cases:
+        1. Simple name: getattr(self.game, name)
+        2. Dotted path: Navigate through dot-separated attributes
+           (e.g., 'oztjzzyqoek.uzkgdtbjsr' -> game.oztjzzyqoek.uzkgdtbjsr)
+        3. Virtual current_level path with tag filter:
+           'current_level._sprites[tag]' -> filter current_level._sprites
+           by tag, returning a list of matching sprites.
+
+        Args:
+            attr_name: The attribute name to resolve.
+
+        Returns:
+            The resolved value (sprite, list of sprites, or None).
+        """
+        # Case 3: Virtual current_level path with tag filter
+        if attr_name.startswith('current_level.') and '[' in attr_name:
+            try:
+                # Parse: current_level._sprites[tag] or current_level._sorted_sprites[tag]
+                base, tag_part = attr_name.split('[', 1)
+                tag = tag_part.rstrip(']')
+
+                # Navigate to the base (e.g., current_level._sprites)
+                parts = base.split('.')
+                obj = self.game
+                for part in parts:
+                    obj = getattr(obj, part, None)
+                    if obj is None:
+                        return None
+
+                if not isinstance(obj, list):
+                    return None
+
+                # Filter by tag
+                if tag == 'no_tag':
+                    # Return sprites with no tags
+                    result = []
+                    for s in obj:
+                        try:
+                            raw_tags = getattr(s, 'tags', None)
+                            if raw_tags is None or (
+                                isinstance(raw_tags, (list, set, tuple)) and len(raw_tags) == 0
+                            ):
+                                result.append(s)
+                        except Exception:
+                            result.append(s)
+                    return result
+                elif tag:
+                    # Return sprites whose tags match
+                    result = []
+                    for s in obj:
+                        try:
+                            raw_tags = getattr(s, 'tags', None)
+                            if raw_tags and isinstance(raw_tags, (list, set, tuple)):
+                                tag_set = set(str(t) for t in raw_tags)
+                                if tag in tag_set:
+                                    result.append(s)
+                        except Exception:
+                            pass
+                    return result
+                else:
+                    return obj
+            except Exception:
+                return None
+
+        # Case 2: Dotted path (nested object)
+        if '.' in attr_name:
+            try:
+                parts = attr_name.split('.')
+                obj = self.game
+                for part in parts:
+                    obj = getattr(obj, part, None)
+                    if obj is None:
+                        return None
+                return obj
+            except Exception:
+                return None
+
+        # Case 1: Simple name
+        try:
+            return getattr(self.game, attr_name, None)
+        except Exception:
+            return None
 
     def _read_player(self) -> Optional[GameEntity]:
         """Read current player position from the game object.
 
         Uses the cached player attribute to access the sprite and
-        convert it to a GameEntity.
+        convert it to a GameEntity. Supports virtual attribute names
+        from current_level._sprites fallback discovery.
 
         Returns:
             GameEntity for the player, or None if not accessible.
@@ -963,12 +1528,12 @@ class UniversalOracleAdapter(OracleAdapter):
 
         try:
             if self._player_is_list:
-                lst = getattr(self.game, self._player_attr, None)
+                lst = self._resolve_attr(self._player_attr)
                 if isinstance(lst, list) and len(lst) > self._player_list_idx:
                     sprite = lst[self._player_list_idx]
                     return self._to_entity_safe(sprite)
             else:
-                sprite = getattr(self.game, self._player_attr, None)
+                sprite = self._resolve_attr(self._player_attr)
                 if sprite is not None:
                     return self._to_entity_safe(sprite)
         except Exception:
@@ -979,7 +1544,7 @@ class UniversalOracleAdapter(OracleAdapter):
         """Read current wall positions from the game object.
 
         Combines walls from:
-        1. Sprite lists classified as walls
+        1. Sprite lists classified as walls (via _resolve_attr)
         2. current_level.get_sprites_by_tag results
 
         Returns:
@@ -991,7 +1556,7 @@ class UniversalOracleAdapter(OracleAdapter):
         # 1. Wall sprite lists
         for attr_name in self._wall_attrs:
             try:
-                sprites = getattr(self.game, attr_name, None)
+                sprites = self._resolve_attr(attr_name)
                 if isinstance(sprites, list):
                     for sprite in sprites:
                         entity = self._to_entity_safe(sprite)
@@ -1000,6 +1565,13 @@ class UniversalOracleAdapter(OracleAdapter):
                             if pos not in seen_positions:
                                 seen_positions.add(pos)
                                 walls.append(entity)
+                elif sprites is not None and self._has_xy(sprites):
+                    entity = self._to_entity_safe(sprites)
+                    if entity is not None:
+                        pos = (entity.x, entity.y)
+                        if pos not in seen_positions:
+                            seen_positions.add(pos)
+                            walls.append(entity)
             except Exception:
                 pass
 
@@ -1029,8 +1601,16 @@ class UniversalOracleAdapter(OracleAdapter):
     def _read_goals(self) -> list[GameEntity]:
         """Read current goal positions from the game object.
 
-        Uses cached goal attributes to access sprites. Handles both
-        sprite lists and single sprites.
+        Uses cached goal attributes to access sprites via _resolve_attr.
+        Handles both sprite lists and single sprites, including
+        virtual attribute names from current_level._sprites.
+
+        Filtering rules:
+        - Exclude goals at (0, 0) — typically level/screen origin.
+        - Exclude goals at the player's exact position — avoids
+          misclassifying the player or player-adjacent sprites as goals.
+        - Exclude goals with very large pixel arrays (>100 pixels per
+          side) — these are usually background/terrain, not goals.
 
         Returns:
             List of goal GameEntity objects.
@@ -1038,24 +1618,53 @@ class UniversalOracleAdapter(OracleAdapter):
         goals: list[GameEntity] = []
         seen_positions: set[tuple[int, int]] = set()
 
+        # Get player position for filtering
+        player_pos: Optional[tuple[int, int]] = None
+        try:
+            p = self._read_player()
+            if p is not None:
+                player_pos = (p.x, p.y)
+        except Exception:
+            pass
+
         for attr_name in self._goal_attrs:
             try:
-                value = getattr(self.game, attr_name, None)
+                value = self._resolve_attr(attr_name)
                 if isinstance(value, list):
-                    for sprite in value:
-                        entity = self._to_entity_safe(sprite)
-                        if entity is not None:
-                            pos = (entity.x, entity.y)
-                            if pos not in seen_positions:
-                                seen_positions.add(pos)
-                                goals.append(entity)
+                    sprites = value
                 elif value is not None and self._has_xy(value):
-                    entity = self._to_entity_safe(value)
-                    if entity is not None:
-                        pos = (entity.x, entity.y)
-                        if pos not in seen_positions:
-                            seen_positions.add(pos)
-                            goals.append(entity)
+                    sprites = [value]
+                else:
+                    continue
+
+                for sprite in sprites:
+                    entity = self._to_entity_safe(sprite)
+                    if entity is None:
+                        continue
+                    pos = (entity.x, entity.y)
+                    if pos in seen_positions:
+                        continue
+
+                    # Filter: exclude (0, 0) — usually level origin
+                    if pos[0] == 0 and pos[1] == 0:
+                        continue
+
+                    # Filter: exclude player position
+                    if player_pos is not None and pos == player_pos:
+                        continue
+
+                    # Filter: exclude very large sprites (background/terrain)
+                    try:
+                        px = getattr(sprite, 'pixels', None)
+                        if px is not None:
+                            px_arr = np.asarray(px)
+                            if px_arr.ndim >= 2 and max(px_arr.shape) > 100:
+                                continue
+                    except Exception:
+                        pass
+
+                    seen_positions.add(pos)
+                    goals.append(entity)
             except Exception:
                 pass
 
@@ -1064,8 +1673,8 @@ class UniversalOracleAdapter(OracleAdapter):
     def _read_switchers(self) -> list[GameEntity]:
         """Read current switcher positions from the game object.
 
-        Uses cached switcher attributes to access sprites. Handles both
-        sprite lists and single sprites.
+        Uses cached switcher attributes to access sprites via
+        _resolve_attr. Handles both sprite lists and single sprites.
 
         Returns:
             List of switcher GameEntity objects.
@@ -1075,7 +1684,7 @@ class UniversalOracleAdapter(OracleAdapter):
 
         for attr_name in self._switcher_attrs:
             try:
-                value = getattr(self.game, attr_name, None)
+                value = self._resolve_attr(attr_name)
                 if isinstance(value, list):
                     for sprite in value:
                         entity = self._to_entity_safe(sprite)

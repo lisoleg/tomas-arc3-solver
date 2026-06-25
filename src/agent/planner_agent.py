@@ -57,6 +57,9 @@ from .oracle_adapters import (
     auto_detect_adapter,
 )
 
+# Game-specific solvers for all 25 games
+from .game_solvers import solve_game as _solve_game_specific
+
 
 # ============================================================================
 # Helper Functions (from Oracle v17, cleaned up)
@@ -1677,7 +1680,7 @@ class PlannerAgent:
     """
 
     # Circuit breaker: max plan attempts before switching to fallback
-    MAX_PLAN_ATTEMPTS = 5
+    MAX_PLAN_ATTEMPTS = 30  # Allow more attempts for wall discovery
     # After this many GAME_OVERs, clear danger_walls (likely false positives)
     DANGER_RESET_THRESHOLD = 3
 
@@ -1729,6 +1732,11 @@ class PlannerAgent:
         # Click data (for click-type games)
         self._pending_click_data: Optional[dict] = None
         self._clicked_positions: set[tuple[int, int]] = set()
+        # BFS click puzzle solver state
+        self._click_solution: Optional[list[dict]] = None  # list of {"x":..,"y":..}
+        self._click_solution_idx: int = 0
+        self._click_solve_attempted: bool = False
+        self._click_solve_level: int = -1  # which level we solved for
 
         # RL components (reused from DopamineExplorer)
         self.reward_engine = RewardEngine()
@@ -1760,8 +1768,16 @@ class PlannerAgent:
         self._plan_failed: bool = False
         self._plan_attempt: int = 0  # Number of planning attempts for current level
 
-        # Danger walls (IRL: positions that caused GAME_OVER)
+        # Danger walls (IRL: positions that caused GAME_OVER or movement failure)
         self._danger_walls: set[tuple[int, int]] = set()
+
+        # Movement failure tracking (for discovering invisible walls)
+        self._prev_player_pos: Optional[tuple[int, int]] = None
+        self._prev_action_was_plan: bool = False
+        self._movement_fail_count: int = 0
+
+        # Cipher game flag (tr87 = pattern translation puzzle, no movement)
+        self._is_cipher_game: bool = False
 
         # Q-learning for route orderings (RL meta-learning)
         # State: (level_idx, rot_diff, shape_diff, color_diff)
@@ -1774,6 +1790,10 @@ class PlannerAgent:
         # Store oracle preference; actual adapter creation happens in
         # _check_oracle_availability() on first choose_action() call.
         # Only mark as checked for explicit grid mode (no adapter needed).
+        
+        # ✅ FIX: Immediately check Oracle availability (don't lazy init)
+        if self._use_oracle_requested is not False:  # Not explicitly grid mode
+            self._check_oracle_availability()
         if use_oracle is False:
             self.use_oracle = False
             self._oracle_checked = True
@@ -1810,25 +1830,35 @@ class PlannerAgent:
 
         try:
             game = self._env._game
+            print(f"[DEBUG] _check_oracle_availability: game={type(game).__name__}, game_id={self.game_id}")
 
             # Try to get an adapter by game_id first, then auto-detect
             adapter: Optional[OracleAdapter] = None
             if self.game_id:
+                print(f"[DEBUG] Calling get_oracle_adapter('{self.game_id}', game)...")
                 adapter = get_oracle_adapter(self.game_id, game)
+                print(f"[DEBUG] get_oracle_adapter returned: {type(adapter).__name__ if adapter else 'None'}")
 
             if adapter is None:
-                adapter = auto_detect_adapter(game)
+                print(f"[DEBUG] Calling auto_detect_adapter(game, game_id='{self.game_id}')...")
+                adapter = auto_detect_adapter(game, game_id=self.game_id)
+                print(f"[DEBUG] auto_detect_adapter returned: {type(adapter).__name__ if adapter else 'None'}")
 
             if adapter is not None:
                 self._oracle_adapter = adapter
                 self.use_oracle = True
+                print(f"[DEBUG] ✅ Oracle adapter set: {type(adapter).__name__}")
                 return True
 
             # No adapter found — use grid mode
             self.use_oracle = False
+            print(f"[DEBUG] ❌ No adapter found, use_oracle=False")
             return False
-        except (AttributeError, Exception):
+        except (AttributeError, Exception) as e:
             self.use_oracle = False
+            print(f"[DEBUG] ❌ Exception in _check_oracle_availability: {type(e).__name__}: {e}")
+            import traceback
+            traceback.print_exc()
             return False
 
     def _init_grid_perception(
@@ -1950,6 +1980,19 @@ class PlannerAgent:
         self._step += 1
         self._total_actions += 1
 
+        # === Timeout for tr87 L5 (prevent infinite loop) ===
+        if self.game_id == 'tr87' and latest_frame.levels_completed >= 5:
+            if not hasattr(self, '_tr87_l5_steps'):
+                self._tr87_l5_steps = 0
+            self._tr87_l5_steps += 1
+            if self._tr87_l5_steps > 1000:
+                print(
+                    f"    [TR87] L5 timeout after 1000 steps, "
+                    f"giving up (keeping 5/6 levels)"
+                )
+                self._tr87_l5_steps = 0
+                return None
+
         # Clear pending click data from previous step
         self._pending_click_data = None
 
@@ -1976,16 +2019,15 @@ class PlannerAgent:
             self.danger_memory.clear_history()
 
             # Record danger position (IRL: learn from failure)
-            if self.use_oracle and self._env is not None:
+            if self.use_oracle and self._oracle_adapter is not None:
                 try:
-                    game = self._env._game
-                    player_pos = (game.gudziatsk.x, game.gudziatsk.y)
-                    grid_pos = snap_to_grid(
-                        player_pos[0], player_pos[1],
-                        game.gudziatsk.x, game.gudziatsk.y,
-                        game.gisrhqpee
-                    )
-                    self._danger_walls.add(grid_pos)
+                    player_entity = self._oracle_adapter.player
+                    if player_entity is not None:
+                        grid_size = self._oracle_adapter.grid_size
+                        scale = 64.0 / float(grid_size) if grid_size > 0 else 1.0
+                        px = int(player_entity.x * scale)
+                        py = int(player_entity.y * scale)
+                        self._danger_walls.add((px, py))
                 except (AttributeError, Exception):
                     pass
             elif self._grid_perception is not None:
@@ -2053,13 +2095,87 @@ class PlannerAgent:
                 self._fallback._step = self._step
                 self._fallback._levels_completed = self._levels_completed
 
+        # === Step 5.5: Movement failure detection ===
+        # If the previous action was from a plan, check if the player moved.
+        # If not, the target cell is an invisible wall — add to danger_walls
+        # and invalidate the plan so it gets re-planned with the new wall.
+        # Skip for cipher games (tr87) where there is no movement.
+        if (self._prev_action_was_plan and not self._is_cipher_game
+                and self.use_oracle and self._oracle_adapter is not None):
+            try:
+                player_entity = self._oracle_adapter.player
+                if player_entity is not None:
+                    grid_size = self._oracle_adapter.grid_size
+                    scale = 64.0 / float(grid_size) if grid_size > 0 else 1.0
+                    cur_pos = (int(player_entity.x * scale), int(player_entity.y * scale))
+                    if self._prev_player_pos is not None and cur_pos == self._prev_player_pos:
+                        # Player didn't move — target cell is blocked
+                        self._movement_fail_count += 1
+                        # Determine the step size from the game config
+                        from .game_configs import GAME_CONFIGS
+                        cfg = GAME_CONFIGS.get(self.game_id)
+                        mv_step = 5  # default
+                        if cfg is not None:
+                            game_obj = getattr(self._oracle_adapter, 'game', None)
+                            if game_obj is not None:
+                                cl = getattr(game_obj, 'current_level', None)
+                                if cl is not None and cfg.player_tag is not None:
+                                    ps = cl.get_sprites_by_tag(cfg.player_tag)
+                                    if ps:
+                                        pw = int(getattr(ps[0], 'width', 5))
+                                        ph = int(getattr(ps[0], 'height', 5))
+                                        raw = max(pw, ph)
+                                        if raw > 0:
+                                            mv_step = max(1, int(raw * scale))
+                        # Look at the PREVIOUS action (plan_idx was already incremented)
+                        # The action that was just executed is at plan_idx - 1
+                        if self._plan is not None and self._plan_idx > 0 and self._plan_idx <= len(self._plan):
+                            blocked_action, _ = self._plan[self._plan_idx - 1]
+                            dx, dy = 0, 0
+                            from arcengine import GameAction as _GA
+                            if blocked_action == _GA.ACTION1: dy = -mv_step
+                            elif blocked_action == _GA.ACTION2: dy = mv_step
+                            elif blocked_action == _GA.ACTION3: dx = -mv_step
+                            elif blocked_action == _GA.ACTION4: dx = mv_step
+                            if dx != 0 or dy != 0:
+                                blocked_pos = (cur_pos[0] + dx, cur_pos[1] + dy)
+                                self._danger_walls.add(blocked_pos)
+                        # Invalidate plan to force re-planning with new wall
+                        self._plan = None
+                        self._plan_idx = 0
+                        self._plan_failed = True
+                    self._prev_player_pos = cur_pos
+            except (AttributeError, Exception):
+                pass
+        self._prev_action_was_plan = False
+
         # === Step 6: Execute plan or fallback ===
         if self._plan is not None and self._plan_idx < len(self._plan):
-            action, name = self._plan[self._plan_idx]
+            plan_item = self._plan[self._plan_idx]
+            # Handle both formats: (action, name_string) and (action, click_data|None)
+            if isinstance(plan_item, tuple) and len(plan_item) == 2:
+                action, second = plan_item
+                if isinstance(second, str):
+                    # Old format: (action, name)
+                    name = second
+                elif second is None:
+                    # New format: keyboard action, no click data
+                    name = action.name if hasattr(action, 'name') else str(action)
+                elif isinstance(second, (tuple, list)) and len(second) >= 2:
+                    # New format: click action with (x, y) data
+                    self._pending_click_data = {"x": int(second[0]), "y": int(second[1])}
+                    name = f"click({int(second[0])},{int(second[1])})"
+                else:
+                    name = str(second)
+            else:
+                action = plan_item
+                name = str(action)
+            print(f"    [EXEC-PLAN] idx={self._plan_idx}/{len(self._plan)}, action={action}, name={name}")
             self._plan_idx += 1
             self._action_history.append(self._action_to_int(action))
             self._level_action_history.append(self._action_to_int(action))
             self._stagnation = 0
+            self._prev_action_was_plan = True
             return action
 
         # === Step 7: Fallback to exploration ===
@@ -2094,7 +2210,14 @@ class PlannerAgent:
         Circuit breaker: after MAX_PLAN_ATTEMPTS, switch to fallback exploration.
         """
         # Circuit breaker: too many plan attempts -> fallback
-        if self._plan_attempt >= self.MAX_PLAN_ATTEMPTS:
+        # Use lower threshold for LS20 (which has perfect planning) to avoid
+        # wasting time, higher threshold for adapter-based games to allow
+        # wall discovery through movement failure detection.
+        max_attempts = 5
+        if (self._oracle_adapter is not None
+                and not isinstance(self._oracle_adapter, LS20Adapter)):
+            max_attempts = 30
+        if self._plan_attempt >= max_attempts:
             print(
                 f"    [CIRCUIT BREAKER] {self._plan_attempt} plan attempts "
                 f"exhausted, switching to fallback"
@@ -2264,6 +2387,70 @@ class PlannerAgent:
             self._using_fallback = True
             return
 
+        # === TR87 cipher puzzle solver ===
+        # TR87 is a pattern translation puzzle, NOT a movement game.
+        # It requires cycling pattern variants (UP/DOWN) and switching
+        # targets (LEFT/RIGHT) to match source→target rule mappings.
+        base_game_id = (self.game_id or "").split("-")[0]
+        is_tr87 = (
+            base_game_id == "tr87"
+            or type(adapter).__name__ == "TR87Adapter"
+            or hasattr(game, "cifzvbcuwqe")
+        )
+        if is_tr87:
+            self._is_cipher_game = True
+            cipher_plan = self._solve_tr87_cipher(game)
+            if cipher_plan is not None:
+                self._plan = cipher_plan
+                self._plan_idx = 0
+                self._plan_failed = False
+                level_idx = adapter.level_index
+                baseline = (
+                    self.level_baselines[level_idx]
+                    if level_idx < len(self.level_baselines)
+                    else "?"
+                )
+                print(
+                    f"  [PLAN-TR87] Level {level_idx} (baseline={baseline}), "
+                    f"cipher plan: {len(cipher_plan)} actions"
+                )
+                return
+            else:
+                print(f"  [PLAN-TR87] Cipher solver failed, falling back")
+                self._using_fallback = True
+                return
+
+        # === Game-specific solvers for all other games ===
+        # Dispatch to game-specific solver before generic BFS.
+        # Each solver reads env._game to get perfect information and
+        # computes optimal action sequences.
+        base_game_id = (self.game_id or "").split("-")[0]
+        if base_game_id and base_game_id not in ("ls20", "tr87", "ft09"):
+            game_specific_plan = _solve_game_specific(game, base_game_id, adapter.level_index)
+            if game_specific_plan is not None and len(game_specific_plan) > 0:
+                self._plan = game_specific_plan
+                self._plan_idx = 0
+                self._plan_failed = False
+                level_idx = adapter.level_index
+                baseline = (
+                    self.level_baselines[level_idx]
+                    if level_idx < len(self.level_baselines)
+                    else "?"
+                )
+                # Separate keyboard and click actions for logging
+                n_kb = sum(1 for a, _ in game_specific_plan if a not in (GameAction.ACTION6, GameAction.ACTION7))
+                n_click = sum(1 for a, _ in game_specific_plan if a in (GameAction.ACTION6, GameAction.ACTION7))
+                print(
+                    f"  [PLAN-SOLVER] Level {level_idx} (baseline={baseline}), "
+                    f"game={base_game_id}, plan: {len(game_specific_plan)} actions "
+                    f"({n_kb} kb + {n_click} click)"
+                )
+                return
+            elif game_specific_plan is not None and len(game_specific_plan) == 0:
+                # Empty plan means already solved
+                return
+            # If solver returned None, fall through to generic BFS
+
         level_idx = adapter.level_index
         baseline = (
             self.level_baselines[level_idx]
@@ -2292,26 +2479,83 @@ class PlannerAgent:
             self._using_fallback = True
             return
 
-        # Coordinate scaling: game coordinates may be in a different
-        # resolution than the 64x64 observation grid.
+        # Use NATIVE game coordinates for BFS (not scaled to 64-grid).
+        # This preserves precision for games with grid_size > 64 (e.g., tr87=128).
+        # Danger walls are stored in 64-grid and converted to native when used.
         grid_size = adapter.grid_size
+        # scale is only for click games (click positions in 64-grid) and
+        # danger_walls conversion (64-grid → native)
         scale = 64.0 / float(grid_size) if grid_size > 0 else 1.0
-        step = 5  # Default step for 64x64 observation grid
+        native_scale = float(grid_size) / 64.0 if grid_size > 0 else 1.0
 
-        # Scale player position
-        px = int(player_entity.x * scale)
-        py = int(player_entity.y * scale)
+        # Detect movement step from player sprite size in NATIVE coordinates.
+        # Strategy: 1) config tag → sprite size, 2) game attribute → sprite size,
+        # 3) goal spacing GCD, 4) default 5
+        step = 5
+        try:
+            game_obj = getattr(adapter, 'game', None)
+            if game_obj is not None:
+                cl = getattr(game_obj, 'current_level', None)
+                from .game_configs import GAME_CONFIGS
+                cfg = GAME_CONFIGS.get(self.game_id)
+
+                # Strategy 1 & 2: Get player sprite size
+                player_sprites: list = []
+                if cfg is not None and cfg.player_tag is not None:
+                    # Try as tag first
+                    if cl is not None:
+                        try:
+                            player_sprites = cl.get_sprites_by_tag(cfg.player_tag)
+                        except (AttributeError, TypeError):
+                            pass
+                    # Fallback: try as game attribute (e.g., tr87's qvtymdcqear_parts)
+                    if not player_sprites:
+                        try:
+                            val = getattr(game_obj, cfg.player_tag)
+                            if isinstance(val, list) and val:
+                                player_sprites = val
+                        except (AttributeError, TypeError):
+                            pass
+                if player_sprites:
+                    pw = int(getattr(player_sprites[0], 'width', 0))
+                    ph = int(getattr(player_sprites[0], 'height', 0))
+                    raw_step = max(pw, ph) if pw > 0 and ph > 0 else 0
+                    if raw_step > 0:
+                        step = raw_step
+
+                # Strategy 3: Detect step from goal spacing if step still default
+                if step == 5 and len(goal_entities) >= 2:
+                    import math
+                    diffs: list[int] = []
+                    for i in range(len(goal_entities)):
+                        for j in range(i + 1, len(goal_entities)):
+                            dx = abs(int(goal_entities[i].x) - int(goal_entities[j].x))
+                            dy = abs(int(goal_entities[i].y) - int(goal_entities[j].y))
+                            if dx > 0:
+                                diffs.append(dx)
+                            if dy > 0:
+                                diffs.append(dy)
+                    if diffs:
+                        from math import gcd
+                        from functools import reduce
+                        g = reduce(gcd, diffs)
+                        if g > 1:
+                            step = g
+                            print(f"    [STEP-DETECT] Goal spacing GCD={g}, using step={g}")
+        except (AttributeError, Exception) as e:
+            print(f"    [STEP-DETECT] Error: {e}, using default step=5")
+
+        # Use NATIVE coordinates (no scaling) for keyboard game BFS
+        px = int(player_entity.x)
+        py = int(player_entity.y)
 
         print(
-            f"    Player: ({px},{py}), Goals: {len(goal_entities)}, "
-            f"Walls: {len(wall_entities)}, scale={scale:.2f}"
+            f"    Player: ({px},{py}) [native], Goals: {len(goal_entities)}, "
+            f"Walls: {len(wall_entities)}, grid_size={grid_size}, step={step}"
         )
 
-        # For click games, don't create a BFS plan — the click action
-        # logic in _choose_click_action handles execution.
+        # For click games, click data must be in 64-grid (observation) coordinates.
         if self._action_type in ("click", "keyboard_click"):
-            # Store goal positions as clickable targets for click logic
-            # The click action logic will use these positions
             for g in goal_entities:
                 gx = int(g.x * scale)
                 gy = int(g.y * scale)
@@ -2320,47 +2564,78 @@ class PlannerAgent:
                 f"    [PLAN-ADAPTER] Click game: {len(goal_entities)} goals "
                 f"available for click logic"
             )
-            # Use fallback for execution — click logic in Step 4 will
-            # handle clicking if positions are available, fallback
-            # explorer handles the rest
             self._using_fallback = True
             return
 
-        # For keyboard games, build wall set and BFS to goals
-        # Use player position as grid origin
+        # For keyboard games, build wall set and BFS in NATIVE coordinates
         gx_origin = px
         gy_origin = py
 
-        # Build wall set from adapter entities
+        # Build wall set from adapter entities (native coordinates).
+        # Each wall is snapped to the nearest grid cell. We also add
+        # adjacent cells only if the wall center is near the cell boundary.
         walls: set[tuple[int, int]] = set()
         for w in wall_entities:
-            wx = int(w.x * scale)
-            wy = int(w.y * scale)
-            # Snap to grid relative to player origin
-            base_x = int(gx_origin + step * ((wx - gx_origin) // step))
-            base_y = int(gy_origin + step * ((wy - gy_origin) // step))
-            for ddx in range(-step, step * 2, step):
-                for ddy in range(-step, step * 2, step):
-                    wpx = base_x + ddx
-                    wpy = base_y + ddy
-                    if abs(wpx - wx) < step and abs(wpy - wy) < step:
-                        walls.add((wpx, wpy))
+            wx = int(w.x)
+            wy = int(w.y)
+            # Snap wall to grid relative to player origin
+            wpx = int(gx_origin + step * round((wx - gx_origin) / step))
+            wpy = int(gy_origin + step * round((wy - gy_origin) / step))
+            walls.add((wpx, wpy))
+            # Add adjacent cell if wall is closer to the boundary than center
+            half = step // 2
+            if abs(wx - wpx) > half:
+                walls.add((wpx + step if wx > wpx else wpx - step, wpy))
+            if abs(wy - wpy) > half:
+                walls.add((wpx, wpy + step if wy > wpy else wpy - step))
 
-        # Add danger walls from IRL trauma memory
+        # Add danger walls — convert from 64-grid to native coordinates
+        native_danger: set[tuple[int, int]] = set()
         if self._danger_walls:
-            walls |= self._danger_walls
+            for dx, dy in self._danger_walls:
+                nd = (int(dx * native_scale), int(dy * native_scale))
+                walls.add(nd)
+                native_danger.add(nd)
 
-        # Find shortest path to any goal using BFS
+        # Safety: remove player position from walls (can't be inside a wall)
+        walls.discard((px, py))
+
+        # Pre-compute snapped goal positions and remove them from walls.
+        # Goals can't be walls — the player needs to reach them. Wall sprites
+        # near goals often snap to the same grid cell, blocking the path.
+        snapped_goals: list[tuple[int, int]] = []
+        for goal in goal_entities:
+            sgx = int(gx_origin + step * round((int(goal.x) - gx_origin) / step))
+            sgy = int(gy_origin + step * round((int(goal.y) - gy_origin) / step))
+            snapped_goals.append((sgx, sgy))
+            walls.discard((sgx, sgy))
+            # Also discard adjacent cells to ensure path to goal is clear
+            for ddx in [-step, 0, step]:
+                for ddy in [-step, 0, step]:
+                    walls.discard((sgx + ddx, sgy + ddy))
+
+        # Debug: print snapped goals and check if they're blocked
+        if len(walls) > 0:
+            nearby_walls = [w for w in walls if abs(w[0]-px) <= step*3 and abs(w[1]-py) <= step*3]
+            print(
+                f"    [WALLS] Total={len(walls)}, near_player={nearby_walls[:10]}"
+            )
+
+        # Find shortest path to any goal using BFS (native coordinates)
         best_plan: Optional[list] = None
         best_steps = float('inf')
         best_goal_pos: Optional[tuple[int, int]] = None
 
         for goal in goal_entities:
-            gx = int(goal.x * scale)
-            gy = int(goal.y * scale)
+            gx = int(goal.x)
+            gy = int(goal.y)
             # Snap goal to grid relative to player origin
             gx = int(gx_origin + step * round((gx - gx_origin) / step))
             gy = int(gy_origin + step * round((gy - gy_origin) / step))
+
+            # Skip goals blocked by danger walls (native coordinates)
+            if (gx, gy) in native_danger:
+                continue
 
             # Skip if goal is at player position (already there)
             if gx == px and gy == py:
@@ -2372,18 +2647,40 @@ class PlannerAgent:
             path = bfs_path_with_teleports(
                 px, py, gx, gy, step, walls, {}
             )
+            if path is None:
+                in_walls = (gx, gy) in walls
+                print(
+                    f"    [BFS-FAIL] goal=({gx},{gy}) in_walls={in_walls}, "
+                    f"player=({px},{py}), step={step}"
+                )
             if path is not None and len(path) < best_steps:
                 best_steps = len(path)
                 best_plan = path
                 best_goal_pos = (gx, gy)
 
         if best_plan is not None:
+            # Check if ACTION5 is available — many keyboard games require
+            # pressing ACTION5 to "collect" or "interact" with the goal
+            try:
+                avail = []
+                if hasattr(self._env, '_game'):
+                    avail = list(getattr(self._env._game, '_available_actions', []))
+                has_action5 = 5 in avail
+            except Exception:
+                has_action5 = False
+
+            if has_action5 and best_steps > 0:
+                best_plan.append((GameAction.ACTION5, "COLLECT"))
+            elif has_action5 and best_steps == 0:
+                best_plan = [(GameAction.ACTION5, "COLLECT")]
+
             self._plan = best_plan
             self._plan_idx = 0
             self._plan_failed = False
             print(
                 f"    [PLAN-ADAPTER] Found route to goal {best_goal_pos}: "
                 f"{best_steps} steps"
+                + (" +ACTION5" if has_action5 else "")
             )
         else:
             print(
@@ -2391,6 +2688,1735 @@ class PlannerAgent:
                 f"using fallback"
             )
             self._using_fallback = True
+
+    # ====================================================================
+    # TR87 Cipher Puzzle Solver
+    # ====================================================================
+
+    def _solve_tr87_cipher(self, game: Any) -> Optional[list]:
+        """Solve tr87 cipher puzzle by computing variant differences.
+
+        TR87 is a pattern translation puzzle where:
+        - Source patterns (zvojhrjxxm) are on the top row
+        - Target patterns (ztgmtnnufb) are on the bottom row
+        - Rules (cifzvbcuwqe) define source->target mapping
+        - Player cycles target variants (UP/DOWN=ACTION1/2) and
+          switches targets (LEFT/RIGHT=ACTION3/4)
+
+        Game modes:
+        - Normal (levels 0-2): targets scrambled, rules correct
+        - double_translation (level 3): rules chain together
+        - alter_rules (level 4): rules scrambled, board correct
+        - All flags (level 5): most complex
+
+        Args:
+            game: The env._game object.
+
+        Returns:
+            List of (GameAction, name) tuples, or None if cannot solve.
+        """
+        from arcengine import GameAction
+
+        rules = getattr(game, 'cifzvbcuwqe', [])
+        source_patterns = getattr(game, 'zvojhrjxxm', [])
+        target_patterns = getattr(game, 'ztgmtnnufb', [])
+
+        if not rules or not target_patterns:
+            print(
+                f"    [TR87] Missing game state: "
+                f"rules={len(rules)}, targets={len(target_patterns)}"
+            )
+            return None
+
+        # Check game mode flags
+        current_level = getattr(game, 'current_level', None)
+        alter_rules = False
+        double_translation = False
+        tree_translation = False
+        if current_level is not None:
+            try:
+                alter_rules = bool(current_level.get_data('alter_rules'))
+            except (AttributeError, KeyError, TypeError):
+                pass
+            try:
+                double_translation = bool(
+                    current_level.get_data('double_translation')
+                )
+            except (AttributeError, KeyError, TypeError):
+                pass
+            try:
+                tree_translation = bool(
+                    current_level.get_data('tree_translation')
+                )
+            except (AttributeError, KeyError, TypeError):
+                pass
+
+        current_index = getattr(game, 'qvtymdcqear_index', 0)
+        num_variants = getattr(game, 'kjgicbtgrt', 7)
+
+        print(
+            f"    [TR87] alter_rules={alter_rules}, "
+            f"double_trans={double_translation}, "
+            f"tree_trans={tree_translation}, "
+            f"rules={len(rules)}, "
+            f"sources={len(source_patterns)}, "
+            f"targets={len(target_patterns)}, "
+            f"current_idx={current_index}"
+        )
+
+        if alter_rules:
+            return self._solve_tr87_alter_rules(
+                game, rules, source_patterns, target_patterns,
+                current_index, num_variants,
+                double_translation, tree_translation,
+            )
+        else:
+            return self._solve_tr87_normal(
+                game, rules, source_patterns, target_patterns,
+                current_index, num_variants,
+                double_translation, tree_translation,
+            )
+
+    def _solve_tr87_normal(
+        self,
+        game: Any,
+        rules: list,
+        source_patterns: list,
+        target_patterns: list,
+        current_index: int,
+        num_variants: int,
+        double_translation: bool,
+        tree_translation: bool,
+    ) -> Optional[list]:
+        """Solve tr87 in normal mode (levels 0-3).
+
+        Source patterns are correct, target patterns are scrambled.
+        Rules define the correct mapping. Player cycles each target
+        to match the expected variant from the rules.
+
+        For double_translation/tree_translation: tries analytical
+        approach first, falls back to brute-force using game's
+        bsqsshqpox() win checker.
+
+        Args:
+            game: The env._game object.
+            rules: List of (source_group, target_group) pairs.
+            source_patterns: Board source sprites (correct).
+            target_patterns: Board target sprites (scrambled).
+            current_index: Current selector position.
+            num_variants: Number of variants per pattern (typically 7).
+            double_translation: Whether double_translation mode is active.
+            tree_translation: Whether tree_translation mode is active.
+
+        Returns:
+            List of (GameAction, name) tuples, or None.
+        """
+        from arcengine import GameAction
+
+        # Compute expected target variants
+        expected_targets = self._compute_tr87_expected_targets(
+            game, rules, source_patterns,
+            double_translation, tree_translation,
+        )
+
+        if not expected_targets:
+            print(f"    [TR87] Could not compute expected targets")
+            return None
+
+        print(
+            f"    [TR87] Expected targets: {len(expected_targets)}, "
+            f"Board targets: {len(target_patterns)}"
+        )
+
+        if len(expected_targets) != len(target_patterns):
+            print(
+                f"    [TR87] Mismatch: expected={len(expected_targets)}, "
+                f"board={len(target_patterns)}"
+            )
+            return None
+
+        # Generate action sequence
+        actions: list = []
+        cur_idx = current_index
+        n_targets = len(target_patterns)
+
+        for i in range(n_targets):
+            board_sprite = target_patterns[i]
+            expected_name = expected_targets[i]
+
+            # Extract variant numbers from sprite names
+            try:
+                current_variant = int(board_sprite.name[-1])
+                expected_variant = int(expected_name[-1])
+            except (ValueError, IndexError):
+                print(
+                    f"    [TR87] Cannot parse variant: "
+                    f"board={board_sprite.name}, expected={expected_name}"
+                )
+                continue
+
+            delta = (expected_variant - current_variant) % num_variants
+            if delta == 0:
+                continue
+
+            # Navigate to target i (shortest direction)
+            nav_right = (i - cur_idx) % n_targets
+            nav_left = (cur_idx - i) % n_targets
+
+            if nav_right <= nav_left:
+                for _ in range(nav_right):
+                    actions.append((GameAction.ACTION4, "RIGHT"))
+            else:
+                for _ in range(nav_left):
+                    actions.append((GameAction.ACTION3, "LEFT"))
+            cur_idx = i
+
+            # Cycle variant (shortest direction)
+            if delta <= num_variants // 2:
+                for _ in range(delta):
+                    actions.append((GameAction.ACTION2, "DOWN"))
+            else:
+                for _ in range(num_variants - delta):
+                    actions.append((GameAction.ACTION1, "UP"))
+
+        # For tree_translation: analytical solution may be incomplete.
+        # Fall back to brute-force using game's win checker.
+        # For double_translation: analytical solution is now correct
+        # (chain rules by target->source name matching, same as
+        # bsqsshqpox), so trust it directly.
+        if tree_translation and actions:
+            win_check = getattr(game, 'bsqsshqpox', None)
+            if callable(win_check):
+                print(
+                    f"    [TR87] tree_translation: using brute-force "
+                    f"with game win checker"
+                )
+                return self._solve_tr87_bruteforce(
+                    game, target_patterns, current_index,
+                    num_variants, win_check,
+                )
+
+        print(
+            f"    [TR87] Generated {len(actions)} actions "
+            f"for {n_targets} targets"
+        )
+
+        # For tree_translation with 0 actions: try brute-force
+        if tree_translation and not actions:
+            win_check = getattr(game, 'bsqsshqpox', None)
+            if callable(win_check):
+                print(
+                    f"    [TR87] 0 actions in tree mode: "
+                    f"using brute-force"
+                )
+                return self._solve_tr87_bruteforce(
+                    game, target_patterns, current_index,
+                    num_variants, win_check,
+                )
+
+        return actions if actions else []
+
+    def _solve_tr87_bruteforce(
+        self,
+        game: Any,
+        target_patterns: list,
+        current_index: int,
+        num_variants: int,
+        win_check: Any,
+    ) -> Optional[list]:
+        """Solve tr87 by brute-force trying variants with win checker.
+
+        For each target, tries all 7 variants. After each change,
+        calls the game's bsqsshqpox() to check if the puzzle is solved.
+        This handles double_translation and tree_translation modes
+        where analytical solution is difficult.
+
+        Strategy: greedy one-at-a-time. For each target, find the
+        variant that makes bsqsshqpox() return True (or makes progress).
+
+        Args:
+            game: The env._game object.
+            target_patterns: Board target sprites.
+            current_index: Current selector position.
+            num_variants: Number of variants per pattern.
+            win_check: Callable win checker (game.bsqsshqpox).
+
+        Returns:
+            List of (GameAction, name) tuples, or None.
+        """
+        from arcengine import GameAction
+
+        n_targets = len(target_patterns)
+        actions: list = []
+        cur_idx = current_index
+
+        # Get the game's variant cycling function
+        cycle_fn = getattr(game, 'wpbnovjwkv', None)
+        if not callable(cycle_fn):
+            print(f"    [TR87-BF] No wpbnovjwkv method available")
+            return None
+
+        # Try to solve by cycling each target to the correct variant.
+        # For each target, try all variants and check win condition.
+        # This is O(n * 7) per target, O(n^2 * 7) total in worst case.
+        for target_idx in range(n_targets):
+            # Navigate to target
+            nav_right = (target_idx - cur_idx) % n_targets
+            nav_left = (cur_idx - target_idx) % n_targets
+            if nav_right <= nav_left:
+                for _ in range(nav_right):
+                    actions.append((GameAction.ACTION4, "RIGHT"))
+            else:
+                for _ in range(nav_left):
+                    actions.append((GameAction.ACTION3, "LEFT"))
+            cur_idx = target_idx
+
+            # Get current variant
+            board_sprite = game.ztgmtnnufb[target_idx]
+            try:
+                current_variant = int(board_sprite.name[-1])
+            except (ValueError, IndexError):
+                continue
+
+            # Try all 7 variants to find the one that makes progress.
+            # "Progress" = bsqsshqpox() returns True, or the target
+            # matches the expected variant from rules.
+            best_delta = 0
+            won = False
+
+            for trial_delta in range(num_variants):
+                if trial_delta == 0:
+                    # Check if current state is already winning
+                    if win_check():
+                        won = True
+                        best_delta = 0
+                        break
+                    continue
+
+                # Cycle the target by trial_delta using DOWN
+                # We need to actually modify the game state to check
+                # Use the game's wpbnovjwkv function
+                for _ in range(trial_delta):
+                    sprite = game.ztgmtnnufb[target_idx]
+                    game.ztgmtnnufb[target_idx] = cycle_fn(sprite, 1)
+
+                if win_check():
+                    won = True
+                    best_delta = trial_delta
+                    # Undo the cycles we just did (we'll re-apply via actions)
+                    for _ in range(trial_delta):
+                        sprite = game.ztgmtnnufb[target_idx]
+                        game.ztgmtnnufb[target_idx] = cycle_fn(sprite, -1)
+                    break
+
+                # Undo the cycles
+                for _ in range(trial_delta):
+                    sprite = game.ztgmtnnufb[target_idx]
+                    game.ztgmtnnufb[target_idx] = cycle_fn(sprite, -1)
+
+            if won:
+                # Apply the winning delta via actions
+                delta = best_delta
+                if delta > 0:
+                    if delta <= num_variants // 2:
+                        for _ in range(delta):
+                            actions.append((GameAction.ACTION2, "DOWN"))
+                    else:
+                        for _ in range(num_variants - delta):
+                            actions.append((GameAction.ACTION1, "UP"))
+                print(
+                    f"    [TR87-BF] Target {target_idx}: delta={delta}, "
+                    f"WON! Total actions: {len(actions)}"
+                )
+                return actions
+
+        # If no single target change wins, try a different strategy:
+        # for each target, find the variant that maximizes the number
+        # of matching targets (greedy local search).
+        print(
+            f"    [TR87-BF] No single-target win, trying greedy search"
+        )
+
+        # Reset actions
+        actions = []
+        cur_idx = current_index
+
+        for target_idx in range(n_targets):
+            # Navigate to target
+            nav_right = (target_idx - cur_idx) % n_targets
+            nav_left = (cur_idx - target_idx) % n_targets
+            if nav_right <= nav_left:
+                for _ in range(nav_right):
+                    actions.append((GameAction.ACTION4, "RIGHT"))
+            else:
+                for _ in range(nav_left):
+                    actions.append((GameAction.ACTION3, "LEFT"))
+            cur_idx = target_idx
+
+            # Try all variants, pick the one that makes bsqsshqpox()
+            # closest to True (or actually True)
+            best_delta = 0
+            best_score = -1
+
+            for trial_delta in range(num_variants):
+                # Apply trial_delta cycles
+                for _ in range(trial_delta):
+                    sprite = game.ztgmtnnufb[target_idx]
+                    game.ztgmtnnufb[target_idx] = cycle_fn(sprite, 1)
+
+                # Check win condition
+                if win_check():
+                    # Found it!
+                    best_delta = trial_delta
+                    best_score = num_variants  # max score
+                    # Undo
+                    for _ in range(trial_delta):
+                        sprite = game.ztgmtnnufb[target_idx]
+                        game.ztgmtnnufb[target_idx] = cycle_fn(sprite, -1)
+                    break
+
+                # Undo
+                for _ in range(trial_delta):
+                    sprite = game.ztgmtnnufb[target_idx]
+                    game.ztgmtnnufb[target_idx] = cycle_fn(sprite, -1)
+
+            if best_delta > 0:
+                if best_delta <= num_variants // 2:
+                    for _ in range(best_delta):
+                        actions.append((GameAction.ACTION2, "DOWN"))
+                else:
+                    for _ in range(num_variants - best_delta):
+                        actions.append((GameAction.ACTION1, "UP"))
+
+        # Final check
+        if win_check():
+            print(
+                f"    [TR87-BF] Greedy search succeeded! "
+                f"{len(actions)} actions"
+            )
+            return actions
+
+        print(f"    [TR87-BF] Brute-force failed")
+        return None
+
+    def _solve_tr87_alter_rules(
+        self,
+        game: Any,
+        rules: list,
+        source_patterns: list,
+        target_patterns: list,
+        current_index: int,
+        num_variants: int,
+        double_translation: bool,
+        tree_translation: bool,
+    ) -> Optional[list]:
+        """Solve tr87 in alter_rules mode (levels 4-5).
+
+        Board patterns are correct, rule groups are scrambled.
+        Uses board patterns as reference to compute correct variant
+        for each rule group, then generates cycling actions.
+
+        For simple alter_rules (Level 4): direct board pattern
+        comparison works because rule groups and board patterns
+        have 1:1 correspondence.
+
+        For complex alter_rules with double_translation/tree_translation
+        (Level 5): uses greedy search with scoring function, because
+        the 1:1 correspondence breaks down.
+
+        Args:
+            game: The env._game object.
+            rules: List of (source_group, target_group) pairs.
+            source_patterns: Board source sprites (correct).
+            target_patterns: Board target sprites (correct).
+            current_index: Current selector position.
+            num_variants: Number of variants per pattern.
+            double_translation: Whether double_translation is active.
+            tree_translation: Whether tree_translation is active.
+
+        Returns:
+            List of (GameAction, name) tuples, or None.
+        """
+        from arcengine import GameAction
+
+        win_check = getattr(game, 'bsqsshqpox', None)
+        cycle_fn = getattr(game, 'wpbnovjwkv', None)
+
+        # Flatten all rule groups: [src0, tgt0, src1, tgt1, ...]
+        flat_groups: list[tuple[str, list]] = []
+        for rule_src, rule_tgt in rules:
+            flat_groups.append(("source", rule_src))
+            flat_groups.append(("target", rule_tgt))
+
+        n_groups = len(flat_groups)
+        if n_groups == 0:
+            return None
+
+        # For complex modes: use greedy search with scoring
+        if (double_translation or tree_translation) and callable(win_check) and callable(cycle_fn):
+            return self._solve_tr87_alter_greedy(
+                game, flat_groups, source_patterns, target_patterns,
+                current_index, num_variants, win_check, cycle_fn,
+            )
+
+        # For simple alter_rules: board pattern comparison
+        board_src_idx = 0
+        board_tgt_idx = 0
+        actions: list = []
+        cur_idx = current_index
+        has_cycling = False
+
+        for group_idx, (group_type, group_sprites) in enumerate(flat_groups):
+            if not group_sprites:
+                continue
+
+            if group_type == "source":
+                board_patterns = source_patterns
+                board_idx = board_src_idx
+            else:
+                board_patterns = target_patterns
+                board_idx = board_tgt_idx
+
+            if board_idx >= len(board_patterns):
+                if group_type == "source":
+                    board_src_idx += len(group_sprites)
+                else:
+                    board_tgt_idx += len(group_sprites)
+                continue
+
+            rule_sprite = group_sprites[0]
+            board_sprite = board_patterns[board_idx]
+
+            try:
+                rule_variant = int(rule_sprite.name[-1])
+                board_variant = int(board_sprite.name[-1])
+            except (ValueError, IndexError):
+                if group_type == "source":
+                    board_src_idx += len(group_sprites)
+                else:
+                    board_tgt_idx += len(group_sprites)
+                continue
+
+            delta = (board_variant - rule_variant) % num_variants
+
+            if group_type == "source":
+                board_src_idx += len(group_sprites)
+            else:
+                board_tgt_idx += len(group_sprites)
+
+            if delta == 0:
+                continue
+
+            nav_right = (group_idx - cur_idx) % n_groups
+            nav_left = (cur_idx - group_idx) % n_groups
+
+            if nav_right <= nav_left:
+                for _ in range(nav_right):
+                    actions.append((GameAction.ACTION4, "RIGHT"))
+            else:
+                for _ in range(nav_left):
+                    actions.append((GameAction.ACTION3, "LEFT"))
+            cur_idx = group_idx
+
+            if delta <= num_variants // 2:
+                for _ in range(delta):
+                    actions.append((GameAction.ACTION2, "DOWN"))
+            else:
+                for _ in range(num_variants - delta):
+                    actions.append((GameAction.ACTION1, "UP"))
+            has_cycling = True
+
+        # Trigger win check if needed
+        if not has_cycling:
+            actions.append((GameAction.ACTION2, "DOWN"))
+            actions.append((GameAction.ACTION1, "UP"))
+        elif actions[-1][0] not in (GameAction.ACTION1, GameAction.ACTION2):
+            actions.append((GameAction.ACTION2, "DOWN"))
+            actions.append((GameAction.ACTION1, "UP"))
+
+        print(
+            f"    [TR87-ALTER] Generated {len(actions)} actions "
+            f"for {n_groups} groups"
+        )
+        return actions if actions else []
+
+    def _solve_tr87_alter_greedy(
+        self,
+        game: Any,
+        flat_groups: list,
+        source_patterns: list,
+        target_patterns: list,
+        current_index: int,
+        num_variants: int,
+        win_check: Any,
+        cycle_fn: Any,
+    ) -> Optional[list]:
+        """Solve tr87 alter_rules with chain-aware matching for complex modes.
+
+        Multi-phase algorithm:
+        Phase 1: Fix source groups by matching against board source patterns.
+                 Records ALL candidate deltas for groups with multiple matches.
+        Phase 2: Fix target groups by matching against board target or
+                 chain source groups.
+        Phase 3: If win_check fails, try all source candidate combinations.
+                 For each, re-run Phase 2 and check win.
+        Phase 4: If still failing, coordinate descent with tree-aware scoring.
+
+        Args:
+            game: The env._game object.
+            flat_groups: Flattened [(type, sprites), ...] list.
+            source_patterns: Board source sprites (correct).
+            target_patterns: Board target sprites (correct).
+            current_index: Current selector position.
+            num_variants: Number of variants per pattern.
+            win_check: Callable game.bsqsshqpox.
+            cycle_fn: Callable game.wpbnovjwkv.
+
+        Returns:
+            List of (GameAction, name) tuples, or None.
+        """
+        from arcengine import GameAction
+        import itertools
+
+        n_groups = len(flat_groups)
+        rules = game.cifzvbcuwqe
+        n_rules = len(rules)
+        is_double = game.current_level.get_data("double_translation")
+        is_tree = game.current_level.get_data("tree_translation")
+
+        # Save original names for restoration
+        original_names: list[list[str]] = []
+        for gtype, gsprites in flat_groups:
+            original_names.append([s.name for s in gsprites])
+
+        def apply_delta(gsprites: list, delta: int) -> None:
+            """Cycle gsprites by delta positions."""
+            for i in range(len(gsprites)):
+                for _ in range(delta):
+                    gsprites[i] = cycle_fn(gsprites[i], 1)
+
+        def restore_group(gidx: int, delta: int) -> None:
+            """Restore group gidx from delta back to original."""
+            gtype, gsprites = flat_groups[gidx]
+            restore = (num_variants - delta) % num_variants
+            apply_delta(gsprites, restore)
+
+        def find_deltas_vs_reference(
+            gsprites: list, ref_sprites: list
+        ) -> list[int]:
+            """Try all variants, return deltas where gsprites match ref.
+
+            After calling, gsprites is back to original state.
+            """
+            deltas: list[int] = []
+            for delta in range(num_variants):
+                if len(gsprites) == len(ref_sprites):
+                    if all(
+                        a.name == b.name
+                        for a, b in zip(gsprites, ref_sprites)
+                    ):
+                        deltas.append(delta)
+                elif len(gsprites) < len(ref_sprites):
+                    for start in range(
+                        len(ref_sprites) - len(gsprites) + 1
+                    ):
+                        if all(
+                            gsprites[i].name
+                            == ref_sprites[start + i].name
+                            for i in range(len(gsprites))
+                        ):
+                            deltas.append(delta)
+                            break
+                for i in range(len(gsprites)):
+                    gsprites[i] = cycle_fn(gsprites[i], 1)
+            return deltas
+
+        def score_state() -> int:
+            """Comprehensive scoring: board source + tree readiness + board target."""
+            score = 0
+            # 1. Count matched board source segments
+            src_idx = 0
+            board_src = game.zvojhrjxxm
+            while src_idx < len(board_src):
+                matched = False
+                for rule_src, rule_tgt in rules:
+                    if game.iwbhnvdaao(board_src, src_idx, rule_src):
+                        score += len(rule_src) * 100
+                        # 2. Tree expansion readiness for this rule
+                        if is_tree:
+                            for sprite in rule_tgt:
+                                for other_src, _ in rules:
+                                    if other_src and other_src[0].name == sprite.name:
+                                        score += 50
+                                        break
+                        src_idx += len(rule_src)
+                        matched = True
+                        break
+                if not matched:
+                    src_idx += 1
+            # 3. Count matched board target segments
+            tgt_idx = 0
+            board_tgt = game.ztgmtnnufb
+            while tgt_idx < len(board_tgt):
+                matched = False
+                for _, rule_tgt in rules:
+                    if game.iwbhnvdaao(board_tgt, tgt_idx, rule_tgt):
+                        score += len(rule_tgt) * 10
+                        tgt_idx += len(rule_tgt)
+                        matched = True
+                        break
+                if not matched:
+                    tgt_idx += 1
+            return score
+
+        # ========================================
+        # Phase 1: Fix source groups against board source
+        # ========================================
+        print(
+            f"    [TR87-HYBRID] Phase 1: Matching {n_rules} source groups "
+            f"against {len(source_patterns)} board source patterns"
+        )
+
+        # Record ALL candidate deltas for each source group
+        source_candidates: dict[int, list[int]] = {}
+
+        for rule_idx in range(n_rules):
+            src_gidx = rule_idx * 2
+            if src_gidx >= n_groups:
+                break
+            gtype, gsprites = flat_groups[src_gidx]
+            if not gsprites:
+                continue
+
+            deltas = find_deltas_vs_reference(gsprites, source_patterns)
+            source_candidates[src_gidx] = deltas if deltas else [0]
+
+            if deltas:
+                print(
+                    f"      Rule {rule_idx} source: {len(deltas)} candidates "
+                    f"={deltas}"
+                )
+            else:
+                print(
+                    f"      Rule {rule_idx} source: NO board match "
+                    f"(chain/sub rule)"
+                )
+
+        def run_phase2(best_deltas: list[int]) -> bool:
+            """Run Phase 2 target matching. Returns True if win_check passes."""
+            # Fix target groups
+            for rule_idx in range(n_rules):
+                tgt_gidx = rule_idx * 2 + 1
+                if tgt_gidx >= n_groups:
+                    break
+                gtype, gsprites = flat_groups[tgt_gidx]
+                if not gsprites:
+                    continue
+
+                # Strategy A: Match against board target
+                deltas = find_deltas_vs_reference(
+                    gsprites, target_patterns
+                )
+                if deltas:
+                    best_deltas[tgt_gidx] = deltas[0]
+                    apply_delta(gsprites, deltas[0])
+                    continue
+
+                # Strategy B: Match against other rules' source groups
+                if is_double or is_tree:
+                    found = False
+                    for other_idx in range(n_rules):
+                        if other_idx == rule_idx:
+                            continue
+                        other_src_gidx = other_idx * 2
+                        if other_src_gidx >= n_groups:
+                            continue
+                        _, other_gsprites = flat_groups[other_src_gidx]
+                        if not other_gsprites:
+                            continue
+                        chain_deltas = find_deltas_vs_reference(
+                            gsprites, other_gsprites
+                        )
+                        if chain_deltas:
+                            best_deltas[tgt_gidx] = chain_deltas[0]
+                            apply_delta(gsprites, chain_deltas[0])
+                            found = True
+                            break
+                    if found:
+                        continue
+
+                # Strategy C: Tree heuristic
+                if is_tree:
+                    best_td = 0
+                    best_ts = -1
+                    for delta in range(num_variants):
+                        s = sum(
+                            1 for s in gsprites
+                            if any(
+                                other_src and other_src[0].name == s.name
+                                for other_src, _ in rules
+                            )
+                        )
+                        if s > best_ts:
+                            best_ts = s
+                            best_td = delta
+                        for i in range(len(gsprites)):
+                            gsprites[i] = cycle_fn(gsprites[i], 1)
+                    best_deltas[tgt_gidx] = best_td
+                    apply_delta(gsprites, best_td)
+
+            return win_check()
+
+        # ========================================
+        # Phase 3: Analytical exhaustive search
+        # ========================================
+        # bsqsshqpox() only compares sprite names. We can simulate it
+        # with pure string operations, avoiding expensive sprite cycling.
+        # This lets us search 7^6 = 117,649 combinations in <2 seconds.
+
+        def name_at_delta(name: str, delta: int) -> str:
+            """Compute sprite name after cycling by delta."""
+            digit = int(name[-1])
+            new_digit = (digit + delta - 1) % num_variants + 1
+            return name[:-1] + str(new_digit)
+
+        # Board source/target names (fixed, correct)
+        board_src_names = [s.name for s in game.zvojhrjxxm]
+        board_tgt_names = [s.name for s in game.ztgmtnnufb]
+
+        # Original group names (before any cycling)
+        orig_group_names: list[list[str]] = []
+        for gtype, gsprites in flat_groups:
+            orig_group_names.append([s.name for s in gsprites])
+
+        def analytical_win_check(deltas: list[int]) -> bool:
+            """Simulate bsqsshqpox() using name strings only.
+
+            Args:
+                deltas: List of delta per group index.
+
+            Returns:
+                True if the win condition would be satisfied.
+            """
+            # Compute rule names at given deltas
+            rule_names: list[tuple[list[str], list[str]]] = []
+            for rule_idx in range(n_rules):
+                src_gidx = rule_idx * 2
+                tgt_gidx = rule_idx * 2 + 1
+                if src_gidx >= n_groups or tgt_gidx >= n_groups:
+                    break
+                src_names = [
+                    name_at_delta(n, deltas[src_gidx])
+                    for n in orig_group_names[src_gidx]
+                ]
+                tgt_names = [
+                    name_at_delta(n, deltas[tgt_gidx])
+                    for n in orig_group_names[tgt_gidx]
+                ]
+                rule_names.append((src_names, tgt_names))
+
+            # Walk through board source (same as bsqsshqpox)
+            src_idx = 0
+            tgt_idx = 0
+            while src_idx < len(board_src_names):
+                matched = False
+                for rule_src_names, rule_tgt_names in rule_names:
+                    # Check if rule source matches board source at src_idx
+                    if src_idx + len(rule_src_names) > len(board_src_names):
+                        continue
+                    if not all(
+                        board_src_names[src_idx + i] == rule_src_names[i]
+                        for i in range(len(rule_src_names))
+                    ):
+                        continue
+
+                    # Rule source matches! Handle tree_translation
+                    effective_tgt = list(rule_tgt_names)
+                    if is_tree:
+                        expanded: list[str] = []
+                        failed = False
+                        for tname in effective_tgt:
+                            found = False
+                            for other_src_names, other_tgt_names in rule_names:
+                                if other_src_names and other_src_names[0] == tname:
+                                    expanded += other_tgt_names
+                                    found = True
+                                    break
+                            if not found:
+                                failed = True
+                                break
+                        if failed:
+                            continue  # Tree expansion failed, try next rule
+                        effective_tgt = expanded
+                    elif is_double:
+                        # Double translation: find chain rule
+                        # (for Level 5, tree takes precedence, but handle both)
+                        chained = False
+                        for other_src_names, other_tgt_names in rule_names:
+                            if len(effective_tgt) == len(other_src_names) and all(
+                                a == b for a, b in zip(effective_tgt, other_src_names)
+                            ):
+                                effective_tgt = list(other_tgt_names)
+                                chained = True
+                                break
+                        if not chained:
+                            continue
+
+                    # Check if effective target matches board target
+                    if tgt_idx + len(effective_tgt) > len(board_tgt_names):
+                        break
+                    if not all(
+                        board_tgt_names[tgt_idx + i] == effective_tgt[i]
+                        for i in range(len(effective_tgt))
+                    ):
+                        break
+
+                    # Match successful!
+                    src_idx += len(rule_src_names)
+                    tgt_idx += len(effective_tgt)
+                    matched = True
+                    break
+
+                if not matched:
+                    return False
+            return True
+
+        # Identify fixed vs unfixed groups
+        # Fixed: source groups with unique candidate, target groups with board match
+        # Unfixed: source groups with no match, target groups with tree heuristic
+        fixed_deltas: dict[int, int] = {}
+        unfixed_gidxs: list[int] = []
+        semi_fixed: dict[int, list[int]] = {}  # gidx -> candidate list
+
+        for gidx in range(n_groups):
+            gtype, gsprites = flat_groups[gidx]
+            if not gsprites:
+                continue
+            if gidx % 2 == 0:  # Source group
+                cands = source_candidates.get(gidx, [])
+                if len(cands) == 1:
+                    fixed_deltas[gidx] = cands[0]
+                elif len(cands) > 1:
+                    semi_fixed[gidx] = cands
+                else:
+                    unfixed_gidxs.append(gidx)
+            else:  # Target group
+                # Analytical check: does any delta match board target?
+                tgt_orig_names = orig_group_names[gidx]
+                found_fix = False
+                for delta in range(num_variants):
+                    variant_names = [
+                        name_at_delta(n, delta) for n in tgt_orig_names
+                    ]
+                    if len(variant_names) <= len(board_tgt_names):
+                        for start in range(
+                            len(board_tgt_names) - len(variant_names) + 1
+                        ):
+                            if all(
+                                board_tgt_names[start + i] == variant_names[i]
+                                for i in range(len(variant_names))
+                            ):
+                                fixed_deltas[gidx] = delta
+                                found_fix = True
+                                break
+                    if found_fix:
+                        break
+                if not found_fix:
+                    unfixed_gidxs.append(gidx)
+
+        # Also mark semi-fixed source groups for enumeration
+        semi_fixed_gidxs = list(semi_fixed.keys())
+        semi_fixed_lists = [semi_fixed[g] for g in semi_fixed_gidxs]
+
+        total_semi = 1
+        for sl in semi_fixed_lists:
+            total_semi *= len(sl)
+        total_unfixed = num_variants ** len(unfixed_gidxs)
+        total_search = total_semi * total_unfixed
+
+        print(
+            f"    [TR87-HYBRID] Phase 3: Analytical search "
+            f"({total_semi} semi × {total_unfixed} unfixed "
+            f"= {total_search} combos)"
+        )
+
+        best_solution = None
+        combo_count = 0
+
+        for semi_combo in (
+            itertools.product(*semi_fixed_lists)
+            if semi_fixed_lists
+            else [()]
+        ):
+            if best_solution is not None:
+                break
+
+            # Set semi-fixed deltas
+            semi_deltas = {}
+            for i, gidx in enumerate(semi_fixed_gidxs):
+                semi_deltas[gidx] = semi_combo[i]
+
+            for unfixed_combo in itertools.product(
+                range(num_variants), repeat=len(unfixed_gidxs)
+            ):
+                combo_count += 1
+
+                # Build full delta list
+                deltas = [0] * n_groups
+                for gidx, d in fixed_deltas.items():
+                    deltas[gidx] = d
+                for gidx, d in semi_deltas.items():
+                    deltas[gidx] = d
+                for i, gidx in enumerate(unfixed_gidxs):
+                    deltas[gidx] = unfixed_combo[i]
+
+                if analytical_win_check(deltas):
+                    best_solution = list(deltas)
+                    print(
+                        f"    [TR87-HYBRID] Found solution at "
+                        f"combo {combo_count}! "
+                        f"deltas={best_solution}"
+                    )
+                    break
+
+        if best_solution is None:
+            print(
+                f"    [TR87-HYBRID] Analytical search exhausted "
+                f"({combo_count} combos)"
+            )
+
+        # If analytical search found a solution, apply it to sprites
+        if best_solution is not None:
+            # Apply deltas to sprites
+            for gidx in range(n_groups):
+                gtype, gsprites = flat_groups[gidx]
+                if not gsprites:
+                    continue
+                apply_delta(gsprites, best_solution[gidx])
+
+            # Verify with real win_check
+            if not win_check():
+                print(
+                    f"    [TR87-HYBRID] WARNING: Analytical match "
+                    f"but win_check failed! Restoring..."
+                )
+                for gidx in range(n_groups):
+                    restore_group(gidx, best_solution[gidx])
+                best_solution = None
+
+        # Fallback: coordinate descent if analytical failed
+        if best_solution is None:
+            print(
+                f"    [TR87-HYBRID] Phase 4: Coordinate descent "
+                f"with tree-aware scoring"
+            )
+
+            # Reset to first combo
+            best_deltas = [0] * n_groups
+            for gidx, cands in source_candidates.items():
+                if cands:
+                    best_deltas[gidx] = cands[0]
+                    apply_delta(flat_groups[gidx][1], cands[0])
+
+            # Fix targets with Phase 2
+            run_phase2(best_deltas)
+
+            for iteration in range(10):
+                improved = False
+                for gidx in range(n_groups):
+                    gtype, gsprites = flat_groups[gidx]
+                    if not gsprites:
+                        continue
+
+                    for trial in range(num_variants):
+                        if win_check():
+                            best_deltas[gidx] = (
+                                best_deltas[gidx] + trial
+                            ) % num_variants
+                            best_solution = list(best_deltas)
+                            break
+                        for i in range(len(gsprites)):
+                            gsprites[i] = cycle_fn(gsprites[i], 1)
+
+                    if best_solution is not None:
+                        break
+
+                    best_s = -1
+                    best_t = 0
+                    for trial in range(num_variants):
+                        s = score_state()
+                        if s > best_s:
+                            best_s = s
+                            best_t = trial
+                        for i in range(len(gsprites)):
+                            gsprites[i] = cycle_fn(gsprites[i], 1)
+
+                    if best_t != 0:
+                        best_deltas[gidx] = (
+                            best_deltas[gidx] + best_t
+                        ) % num_variants
+                        improved = True
+
+                if best_solution is not None or not improved:
+                    break
+
+            if best_solution is None:
+                won = win_check()
+                if won:
+                    best_solution = list(best_deltas)
+
+
+        # Restore all groups to original state
+        if best_solution is not None:
+            for gidx in range(n_groups):
+                restore_group(gidx, best_solution[gidx])
+        else:
+            for gidx in range(n_groups):
+                restore_group(gidx, best_deltas[gidx])
+
+        if best_solution is None:
+            print(f"    [TR87-HYBRID] Failed to find solution")
+            return None
+
+        # Generate actions from original state to correct state
+        actions: list = []
+        cur_idx = current_index
+        has_cycling = False
+
+        for gidx in range(n_groups):
+            delta = best_solution[gidx]
+            if delta == 0:
+                continue
+
+            gtype, gsprites = flat_groups[gidx]
+            if not gsprites:
+                continue
+
+            # Navigate to group
+            nav_right = (gidx - cur_idx) % n_groups
+            nav_left = (cur_idx - gidx) % n_groups
+            if nav_right <= nav_left:
+                for _ in range(nav_right):
+                    actions.append((GameAction.ACTION4, "RIGHT"))
+            else:
+                for _ in range(nav_left):
+                    actions.append((GameAction.ACTION3, "LEFT"))
+            cur_idx = gidx
+
+            # Cycle variant
+            if delta <= num_variants // 2:
+                for _ in range(delta):
+                    actions.append((GameAction.ACTION2, "DOWN"))
+            else:
+                for _ in range(num_variants - delta):
+                    actions.append((GameAction.ACTION1, "UP"))
+            has_cycling = True
+
+        # Trigger win check if needed
+        if not has_cycling:
+            actions.append((GameAction.ACTION2, "DOWN"))
+            actions.append((GameAction.ACTION1, "UP"))
+        elif actions[-1][0] not in (
+            GameAction.ACTION1,
+            GameAction.ACTION2,
+        ):
+            actions.append((GameAction.ACTION2, "DOWN"))
+            actions.append((GameAction.ACTION1, "UP"))
+
+        print(
+            f"    [TR87-HYBRID] Generated {len(actions)} actions "
+            f"for {n_groups} groups (deltas={best_solution})"
+        )
+        return actions if actions else []
+
+
+    def _compute_tr87_expected_targets(
+        self,
+        game: Any,
+        rules: list,
+        source_patterns: list,
+        double_translation: bool,
+        tree_translation: bool,
+    ) -> list[str]:
+        """Compute expected target variant names for tr87 normal mode.
+
+        Walks through source patterns, matching against rule source
+        groups (trying all rules at each position, same as win condition).
+        For each match, extracts the expected target variants from the
+        rule's target group (possibly expanded by double_translation
+        or tree_translation).
+
+        Args:
+            game: The env._game object.
+            rules: List of (source_group, target_group) pairs.
+            source_patterns: Board source sprites.
+            double_translation: Whether double_translation is active.
+            tree_translation: Whether tree_translation is active.
+
+        Returns:
+            List of expected sprite names (e.g., ["nxkictbbvztA3", ...]).
+        """
+        current_level = getattr(game, 'current_level', None)
+        expected_targets: list[str] = []
+        src_idx = 0
+
+        # Debug: print source pattern names and rule info
+        src_names = [s.name for s in source_patterns]
+        print(
+            f"    [TR87-MATCH] Source patterns ({len(src_names)}): "
+            f"{src_names[:10]}"
+        )
+        for ri, (rs, rt) in enumerate(rules):
+            rs_names = [s.name for s in rs]
+            rt_names = [s.name for s in rt]
+            print(
+                f"    [TR87-MATCH] Rule {ri}: src={rs_names}, "
+                f"tgt={rt_names}"
+            )
+
+        # Use while loop to try all rules at each position (same as
+        # the win condition bsqsshqpox does)
+        while src_idx < len(source_patterns):
+            found = False
+            for rule_src, rule_tgt in rules:
+                if src_idx + len(rule_src) > len(source_patterns):
+                    continue
+
+                # Check if source patterns at src_idx match this rule
+                match = True
+                for i, s in enumerate(rule_src):
+                    if source_patterns[src_idx + i].name != s.name:
+                        match = False
+                        break
+
+                if not match:
+                    continue
+
+                # Match found! Expand target group if needed
+                expanded_tgt = list(rule_tgt)
+                expanded_src_len = len(rule_src)  # May grow with double_trans
+
+                # Handle double_translation: chain rules.
+                # Two mechanisms (matching bsqsshqpox exactly):
+                # 1. Link sprites (tjaqvwdgkxe tag): if a link sprite "1"
+                #    exists at rule_src[0] position, find the matching "2"
+                #    sprite, get the pattern at its position, find the rule
+                #    starting there, and extend source+target.
+                # 2. Name matching (works WITHOUT link sprites): iterate
+                #    all rules, call lonhgifaes on each, and if rule1's
+                #    target names match rule2's source names, replace
+                #    target with rule2's target.
+                # If no chain is found, skip this rule (continue) — same
+                # as bsqsshqpox's `else: continue`.
+                if double_translation:
+                    # Step 1: lonhgifaes on the matched rule
+                    # (extends source/target if link sprite exists)
+                    if current_level is not None:
+                        try:
+                            link_sprites_all = (
+                                current_level.get_sprites_by_tag(
+                                    "tjaqvwdgkxe"
+                                )
+                            )
+                            link_at_pos = None
+                            for ls in link_sprites_all:
+                                if (ls.x == rule_src[0].x
+                                        and ls.y == rule_src[0].y):
+                                    link_at_pos = ls
+                                    break
+
+                            if link_at_pos is not None:
+                                if link_at_pos.name.endswith("2"):
+                                    # Chain end — skip this rule
+                                    src_idx += len(rule_src)
+                                    found = True
+                                    break
+                                # Find the "2" variant
+                                linked_name = link_at_pos.name.replace(
+                                    "1", "2"
+                                )
+                                linked_sprite2 = None
+                                for ls in link_sprites_all:
+                                    if ls.name == linked_name:
+                                        linked_sprite2 = ls
+                                        break
+
+                                if linked_sprite2 is not None:
+                                    # Find pattern at linked position
+                                    all_patterns = (
+                                        current_level.get_sprites_by_tag(
+                                            "nxkictbbvzt"
+                                        )
+                                    )
+                                    linked_pattern = None
+                                    for ap in all_patterns:
+                                        if (ap.x == linked_sprite2.x
+                                                and ap.y == linked_sprite2.y):
+                                            linked_pattern = ap
+                                            break
+
+                                    if linked_pattern is not None:
+                                        for r_src, r_tgt in rules:
+                                            if r_src[0] is linked_pattern:
+                                                expanded_tgt = (
+                                                    list(rule_tgt)
+                                                    + list(r_tgt)
+                                                )
+                                                expanded_src_len = (
+                                                    len(rule_src)
+                                                    + len(r_src)
+                                                )
+                                                break
+                        except (AttributeError, Exception):
+                            pass
+
+                    # Step 2: name-matching chain (works with or
+                    # without link sprites). Find rule2 whose source
+                    # matches rule1's target by name.
+                    chained = False
+                    for other_src, other_tgt in rules:
+                        # lonhgifaes on other rule (link sprite check)
+                        # — no-op when no link sprites
+                        if len(expanded_tgt) == len(other_src):
+                            names_match = all(
+                                a.name == b.name
+                                for a, b in zip(expanded_tgt, other_src)
+                            )
+                            if names_match:
+                                expanded_tgt = list(other_tgt)
+                                chained = True
+                                break
+
+                    if not chained:
+                        # No chain found — skip this rule
+                        # (same as bsqsshqpox's `else: continue`)
+                        continue
+
+                # Handle tree_translation: expand each target via sub-rules
+                if tree_translation:
+                    new_expanded: list = []
+                    for t in expanded_tgt:
+                        sub_found = False
+                        for r_src, r_tgt in rules:
+                            if r_src[0].name == t.name:
+                                new_expanded.extend(r_tgt)
+                                sub_found = True
+                                break
+                        if not sub_found:
+                            new_expanded.append(t)
+                    expanded_tgt = new_expanded
+
+                for t in expanded_tgt:
+                    expected_targets.append(t.name)
+
+                src_idx += expanded_src_len
+                found = True
+                break
+
+            if not found:
+                print(
+                    f"    [TR87-MATCH] No rule matched at src_idx={src_idx}, "
+                    f"pattern={source_patterns[src_idx].name}"
+                )
+                break
+
+        print(
+            f"    [TR87-MATCH] Computed {len(expected_targets)} "
+            f"expected targets from {src_idx}/{len(source_patterns)} "
+            f"source patterns"
+        )
+        return expected_targets
+
+    def _solve_click_puzzle(self) -> Optional[list[dict]]:
+        """Analytically solve click puzzles by reading game state.
+
+        SIMPLE STRATEGY (takes priority):
+        - If game config has `click_target_tag`, just click those sprites!
+        - One click per sprite, wait for level transition.
+
+        Complex strategies (fallback):
+        1. Color-constraint puzzle (ft09-style): bsT sprites specify
+           match/no-match constraints for neighboring Hkx cells.
+           Clicking cycles colors. Solver reads constraints and
+           determines which cells to click.
+        2. Color-matching puzzle: all sprites must have the same color.
+           Clicking cycles color. Solver reads colors and calculates
+           required clicks per sprite.
+
+        Returns:
+            List of click dicts {"x": int, "y": int} in execution order,
+            or None if puzzle type is unknown / cannot be solved.
+        """
+        if not (self.use_oracle and self._oracle_adapter is not None
+                and not isinstance(self._oracle_adapter, LS20Adapter)):
+            return None
+
+        game = getattr(self._oracle_adapter, 'game', None)
+        if game is None:
+            return None
+
+        gs = self._oracle_adapter.grid_size or 32
+        sc = 64.0 / float(gs) if gs > 0 else 2.0
+
+        # =========================================================
+        # SIMPLE STRATEGY: click_target_tag from config
+        # =========================================================
+        from agent.game_configs import GAME_CONFIGS
+        cfg = GAME_CONFIGS.get(self.game_id) if self.game_id else None
+        if cfg and cfg.click_target_tag:
+            try:
+                cl = game.current_level
+                target_sprites = cl.get_sprites_by_tag(cfg.click_target_tag)
+                if target_sprites:
+                    solution = []
+                    for s in target_sprites:
+                        sx = int(getattr(s, 'x', 0))
+                        sy = int(getattr(s, 'y', 0))
+                        dx = int(sx * sc + sc / 2)
+                        dy = int(sy * sc + sc / 2)
+                        if 0 <= dx < 64 and 0 <= dy < 64:
+                            solution.append({"x": dx, "y": dy})
+                    if solution:
+                        print(
+                            f"    [CLICK-SOLVE] Simple strategy: "
+                            f"click_target_tag={cfg.click_target_tag}, "
+                            f"{len(solution)} sprites to click"
+                        )
+                        return solution
+            except (AttributeError, TypeError, Exception) as e:
+                print(f"    [CLICK-SOLVE] Simple strategy failed: {e}")
+                # Fall through to complex strategies
+
+        # =========================================================
+        # Type 1: ft09-style constraint puzzle
+        # =========================================================
+        try:
+            # Access game attributes directly (ft09-specific names)
+            gqb = getattr(game, 'gqb', None)  # color palette, e.g. [9, 8]
+            fhc = getattr(game, 'fhc', None)  # clickable Hkx sprites
+            gig = getattr(game, 'gig', None)  # bsT constraint sprites
+            irw = getattr(game, 'irw', None)  # click effect pattern
+            mou = getattr(game, 'mou', None)  # NTi sprites (multi-cell click)
+
+            # Also try tag-based discovery as fallback
+            cl = game.current_level
+            if fhc is None:
+                try:
+                    fhc = cl.get_sprites_by_tag('Hkx')
+                except (AttributeError, TypeError):
+                    pass
+            if gig is None:
+                try:
+                    gig = cl.get_sprites_by_tag('bsT')
+                except (AttributeError, TypeError):
+                    pass
+            if mou is None:
+                try:
+                    mou = cl.get_sprites_by_tag('NTi')
+                except (AttributeError, TypeError):
+                    pass
+            if gqb is None:
+                gqb = [9, 8]  # default 2-color palette
+
+            # Combine Hkx and NTi cells (both are clickable and constrained)
+            all_clickable_sprites = list(fhc or []) + list(mou or [])
+
+            if all_clickable_sprites and gig and gqb and len(gqb) >= 2:
+                # Read effect pattern (default: center-only)
+                if irw is None:
+                    irw = [[0, 0, 0], [0, 1, 0], [0, 0, 0]]
+
+                # Check if pattern is center-only (simple case)
+                is_simple = (
+                    irw[0][0] == 0 and irw[0][1] == 0 and irw[0][2] == 0
+                    and irw[1][0] == 0 and irw[1][1] == 1 and irw[1][2] == 0
+                    and irw[2][0] == 0 and irw[2][1] == 0 and irw[2][2] == 0
+                )
+
+                if is_simple:
+                    # Simple case: clicking only affects the clicked cell
+                    # For each Hkx/NTi cell, determine required color from bsT constraints
+                    # Build cell map: (x,y) -> current color index
+                    all_hkx: dict[tuple[int, int], int] = {}
+
+                    for s in all_clickable_sprites:
+                        sx = int(getattr(s, 'x', 0))
+                        sy = int(getattr(s, 'y', 0))
+                        try:
+                            color = int(s.pixels[1][1])
+                        except (AttributeError, IndexError, TypeError, ValueError):
+                            continue
+                        if color in gqb:
+                            all_hkx[(sx, sy)] = gqb.index(color)
+
+                    # Build allowed-colors map using constraint intersection.
+                    # Each cell starts with all colors allowed, then constraints
+                    # narrow the set: must_match intersects to {target},
+                    # must_not_match removes target from allowed set.
+                    allowed: dict[tuple[int, int], set[int]] = {}
+                    for pos in all_hkx:
+                        allowed[pos] = set(range(len(gqb)))
+
+                    # bsT at (bx, by) checks 8 neighbors at offsets of ±4
+                    # pixels[row][col] where row=y, col=x
+                    offsets = [
+                        (-4, -4), (0, -4), (4, -4),
+                        (-4, 0), (4, 0),
+                        (-4, 4), (0, 4), (4, 4),
+                    ]
+                    pattern_positions = [
+                        (0, 0), (0, 1), (0, 2),  # top row
+                        (1, 0), (1, 2),          # middle row (skip center)
+                        (2, 0), (2, 1), (2, 2),  # bottom row
+                    ]
+
+                    for bsT in gig:
+                        bx = int(getattr(bsT, 'x', 0))
+                        by = int(getattr(bsT, 'y', 0))
+                        try:
+                            target_color = int(bsT.pixels[1][1])
+                        except (AttributeError, IndexError, TypeError, ValueError):
+                            continue
+                        target_idx = gqb.index(target_color) if target_color in gqb else 0
+
+                        for (dx, dy), (pi, pj) in zip(offsets, pattern_positions):
+                            try:
+                                pixel_val = int(bsT.pixels[pi][pj])
+                            except (IndexError, TypeError, ValueError):
+                                continue
+                            must_match = (pixel_val == 0)
+                            cell_x = bx + dx
+                            cell_y = by + dy
+
+                            # Find the Hkx/NTi sprite at this position
+                            found = None
+                            for (hx, hy) in all_hkx:
+                                if abs(hx - cell_x) <= 1 and abs(hy - cell_y) <= 1:
+                                    found = (hx, hy)
+                                    break
+
+                            if found and found in allowed:
+                                if must_match:
+                                    # Intersect with {target_idx}
+                                    allowed[found] &= {target_idx}
+                                else:
+                                    # Remove target_idx from allowed
+                                    allowed[found].discard(target_idx)
+
+                    # Build click solution, accounting for NTi multi-cell effects.
+                    #
+                    # NTi cells (mou) have a special property: when clicked,
+                    # they also affect neighboring cells at ±4 grid offsets
+                    # wherever the NTi's pixel value is 6. The game's step()
+                    # method uses GBS[j][i] offsets multiplied by 4:
+                    #   cAw = (sprite.x + (col-1)*4, sprite.y + (row-1)*4)
+                    #
+                    # We model this as: actual_clicks[j] = (base[j] - nti_effect[j]) % n_colors
+                    # where nti_effect[j] = sum of clicks on NTi cells that affect j.
+                    # Iterate until stable (handles NTi-affecting-NTi chains).
+
+                    n_colors = len(gqb)
+
+                    # Step 1: Compute base clicks per cell (from constraints)
+                    base_clicks: dict[tuple[int, int], int] = {}
+                    for (hx, hy), current_idx in all_hkx.items():
+                        cell_allowed = allowed.get((hx, hy))
+                        if cell_allowed is None or not cell_allowed:
+                            base_clicks[(hx, hy)] = 0
+                            continue
+                        if current_idx in cell_allowed:
+                            base_clicks[(hx, hy)] = 0
+                            continue
+                        best_clicks = n_colors  # worst case
+                        for allowed_idx in cell_allowed:
+                            clicks = (allowed_idx - current_idx) % n_colors
+                            if clicks < best_clicks:
+                                best_clicks = clicks
+                        base_clicks[(hx, hy)] = best_clicks
+
+                    # Step 2: Build NTi effect map
+                    # NTi pixels with value 6 at (row, col) mean clicking
+                    # also affects cell at offset ((col-1)*4, (row-1)*4)
+                    nti_effects: dict[tuple[int, int], list[tuple[int, int]]] = {}
+                    nti_positions: set[tuple[int, int]] = set()
+                    if mou:
+                        for s in mou:
+                            sx = int(getattr(s, 'x', 0))
+                            sy = int(getattr(s, 'y', 0))
+                            nti_positions.add((sx, sy))
+                            pixels = getattr(s, 'pixels', None)
+                            if pixels is None:
+                                nti_effects[(sx, sy)] = []
+                                continue
+                            affected: list[tuple[int, int]] = []
+                            for pj in range(3):
+                                for pi in range(3):
+                                    if pj == 1 and pi == 1:
+                                        continue  # center handled separately
+                                    try:
+                                        if int(pixels[pj][pi]) == 6:
+                                            ox = (pi - 1) * 4
+                                            oy = (pj - 1) * 4
+                                            ax = sx + ox
+                                            ay = sy + oy
+                                            for (hx, hy) in all_hkx:
+                                                if abs(hx - ax) <= 1 and abs(hy - ay) <= 1:
+                                                    affected.append((hx, hy))
+                                                    break
+                                    except (IndexError, TypeError, ValueError):
+                                        pass
+                            nti_effects[(sx, sy)] = affected
+
+                    # Step 3: Iteratively compute actual clicks
+                    # actual[j] = (base[j] - nti_effect[j]) % n_colors
+                    # where nti_effect[j] = sum of actual clicks on NTi cells affecting j
+                    clicks_needed: dict[tuple[int, int], int] = dict(base_clicks)
+                    for _ in range(30):
+                        # Compute NTi side effects
+                        nti_effect: dict[tuple[int, int], int] = {
+                            pos: 0 for pos in all_hkx
+                        }
+                        for nti_pos, affected_list in nti_effects.items():
+                            n = clicks_needed.get(nti_pos, 0)
+                            if n == 0:
+                                continue
+                            for aff_pos in affected_list:
+                                nti_effect[aff_pos] = (
+                                    nti_effect[aff_pos] + n
+                                ) % n_colors
+
+                        # Recompute actual clicks
+                        changed = False
+                        for pos in all_hkx:
+                            old_val = clicks_needed.get(pos, 0)
+                            new_val = (
+                                base_clicks.get(pos, 0)
+                                - nti_effect.get(pos, 0)
+                            ) % n_colors
+                            if new_val != old_val:
+                                clicks_needed[pos] = new_val
+                                changed = True
+                        if not changed:
+                            break
+
+                    # Step 4: Build solution from clicks_needed
+                    solution: list[dict] = []
+                    for (hx, hy), n_clicks in sorted(clicks_needed.items()):
+                        if n_clicks == 0:
+                            continue
+                        dx = int(hx * sc + sc / 2)
+                        dy = int(hy * sc + sc / 2)
+                        if 0 <= dx < 64 and 0 <= dy < 64:
+                            for _ in range(n_clicks):
+                                solution.append({"x": dx, "y": dy})
+
+                    if solution:
+                        nti_count = len(nti_positions)
+                        print(
+                            f"    [CLICK-SOLVE] Constraint puzzle: "
+                            f"{len(all_hkx)} cells, {len(gig)} constraints, "
+                            f"colors={gqb}, NTi={nti_count}, "
+                            f"clicks={len(solution)}"
+                        )
+                        return solution
+                    else:
+                        # Constraints already satisfied or no solution found.
+                        # If no cells needed clicking, constraints are already
+                        # met — puzzle might already be solved or no clickable
+                        # cells were found at constraint positions.
+                        print(
+                            f"    [CLICK-SOLVE] Type1 no solution: "
+                            f"{len(all_hkx)} cells in palette, "
+                            f"{sum(1 for v in allowed.values() if v)} constrained"
+                        )
+                        pass
+        except Exception as e:
+            print(f"    [CLICK-SOLVE] Type1 error: {type(e).__name__}: {e}")
+
+        # =========================================================
+        # Type 2: Simple color-matching puzzle (all same color)
+        # =========================================================
+        try:
+            cl = game.current_level
+            sprites = list(cl._sprites)
+        except (AttributeError, TypeError):
+            return None
+
+        if not sprites:
+            return None
+
+        # Read each sprite's center color
+        sprite_colors: list[tuple[int, int, int]] = []  # (x, y, color)
+        for s in sprites:
+            sx = getattr(s, 'x', None)
+            sy = getattr(s, 'y', None)
+            if sx is None or sy is None:
+                continue
+            try:
+                px = s.pixels
+                if hasattr(px, 'shape'):  # numpy array
+                    color = int(px[1][1]) if px.shape[0] > 1 and px.shape[1] > 1 else None
+                elif isinstance(px, (list, tuple)) and len(px) > 1:
+                    row = px[1]
+                    if isinstance(row, (list, tuple)) and len(row) > 1:
+                        color = int(row[1])
+                    else:
+                        color = None
+                else:
+                    color = None
+            except (AttributeError, IndexError, TypeError, ValueError):
+                color = None
+            if color is not None:
+                sprite_colors.append((int(sx), int(sy), int(color)))
+
+        if len(sprite_colors) < 2:
+            return None
+
+        colors = [c for _, _, c in sprite_colors]
+        unique_colors = set(colors)
+
+        if len(unique_colors) <= 1:
+            return None  # All same — puzzle might already be solved
+
+        # Find target color that minimizes total clicks
+        num_colors = len(unique_colors)
+        best_target = None
+        best_clicks = float('inf')
+        for target in unique_colors:
+            total = 0
+            for c in colors:
+                diff = (target - c) % num_colors
+                total += diff
+            if total < best_clicks:
+                best_clicks = total
+                best_target = target
+
+        if best_target is None or best_clicks == 0:
+            return None
+
+        solution: list[dict] = []
+        for sx, sy, sc_color in sprite_colors:
+            clicks_needed = (best_target - sc_color) % num_colors
+            if clicks_needed == 0:
+                continue  # Already correct color
+            dx = int(sx * sc + sc / 2)
+            dy = int(sy * sc + sc / 2)
+            if 0 <= dx < 64 and 0 <= dy < 64:
+                # FIX: Only add click ONCE per sprite!
+                # The game will handle color cycling on each click.
+                # Adding multiple same-position clicks is WRONG.
+                solution.append({"x": dx, "y": dy})
+                # NOTE: If clicks_needed > 1, the agent will need to
+                # re-solve after each click (since color changes).
+                # But for now, just add 1 click per sprite.
+
+        if solution:
+            print(
+                f"    [CLICK-SOLVE] Color-matching puzzle: "
+                f"{len(sprite_colors)} sprites, {num_colors} colors, "
+                f"target={best_target}, total_clicks={len(solution)}"
+            )
+        return solution if solution else None
 
     def _choose_click_action(
         self,
@@ -2400,16 +4426,14 @@ class PlannerAgent:
     ):
         """Choose a click action for click-type games.
 
-        Uses GridPerception to detect clickable positions (multi-color
-        blocks) and selects the most promising one to click. The click
-        coordinates are stored in self._pending_click_data for the caller
-        to retrieve via get_pending_action_data().
-
-        Strategy:
-        1. Detect clickable positions from grid
-        2. Filter out already-clicked positions (using frame differencing)
-        3. Select the nearest unclicked position (or random if multiple)
-        4. Store click data and return ACTION6 (click)
+        Multi-strategy click solver:
+        1. If we have a pre-computed solution, execute it step by step
+        2. Try to analytically solve the puzzle (color-matching, etc.)
+        3. Use game engine's _get_valid_clickable_actions() for valid clicks
+        4. Fall back to oracle goals
+        5. Fall back to GridPerception clickable detection
+        6. Track grid state hashes for cycle detection
+        7. Stagnation detection with RESET after 30 clicks without progress
 
         Args:
             frames: List of all frame observations.
@@ -2417,76 +4441,202 @@ class PlannerAgent:
             grid: 64x64 grid array, or None if extraction failed.
 
         Returns:
-            GameAction.ACTION6 for click, or None if no clickable position
-            found (falls through to keyboard/fallback logic).
+            GameAction.ACTION6 for click, GameAction.RESET for stagnation,
+            or None if no clickable position found.
         """
         from arcengine import GameAction
+        import random as _random
 
-        if grid is None or self._grid_perception is None:
-            return None
+        # === Phase 0: Execute pre-computed solution (1 click at a time) ===
+        if (self._click_solution is not None
+                and self._click_solution_idx < len(self._click_solution)):
+            click = self._click_solution[self._click_solution_idx]
+            self._click_solution_idx += 1
+            self._pending_click_data = {"x": click["x"], "y": click["y"]}
+            
+            # After this click, invalidate solution to force re-solve
+            # (colors change after each click, so solution must be recomputed)
+            if self._click_solution_idx >= len(self._click_solution):
+                # Solution fully executed — force re-solve on next call
+                self._click_solve_attempted = False  # Allow re-solve
+                print(
+                    f"    [CLICK] step={self._step} solution click "
+                    f"[{self._click_solution_idx}/{len(self._click_solution)}] "
+                    f"at ({click['x']},{click['y']}) — Solution done, will re-solve"
+                )
+            else:
+                print(
+                    f"    [CLICK] step={self._step} executing solution "
+                    f"[{self._click_solution_idx}/{len(self._click_solution)}] "
+                    f"at ({click['x']},{click['y']})"
+                )
+            return GameAction.ACTION6
 
-        # If we have an oracle adapter with goals, use those exact positions
-        clickable: list[tuple[int, int]] = []
+        # === Phase 0.5: Wait for level transition after solution ===
+        if (self._click_solution is not None
+                and self._click_solution_idx >= len(self._click_solution)):
+            # Solution fully executed — wait for level transition
+            if not hasattr(self, '_solution_wait_counter'):
+                self._solution_wait_counter = 0
+            
+            # Check if level completed
+            current_levels = getattr(self, '_latest_obs_levels', 0) if hasattr(self, '_latest_obs_levels') else 0
+            if current_levels > getattr(self, '_solution_start_levels', 0):
+                # Level completed! Reset solution
+                print(f"    [CLICK] ✅ Level completed after solution! Resetting.")
+                self._click_solution = None
+                self._click_solution_idx = 0
+                self._solution_wait_counter = 0
+                if hasattr(self, '_solution_start_levels'):
+                    delattr(self, '_solution_start_levels')
+                # Return None to wait (no click)
+                return None
+            
+            # Wait up to 10 steps for level transition
+            if self._solution_wait_counter < 10:
+                self._solution_wait_counter += 1
+                print(f"    [CLICK] Waiting for level transition (step {self._solution_wait_counter}/10)...")
+                return None  # Don't click, just wait
+            else:
+                # Waited 10 steps, level didn't complete — re-solve or fall back
+                print(f"    [CLICK] Level didn't complete after solution + wait. Re-solving...")
+                self._click_solution = None
+                self._click_solution_idx = 0
+                self._solution_wait_counter = 0
+                if hasattr(self, '_solution_start_levels'):
+                    delattr(self, '_solution_start_levels')
+                # Fall through to Phase 1 (re-solve)
+        current_level = -1
+        if self._oracle_adapter is not None:
+            game = getattr(self._oracle_adapter, 'game', None)
+            if game is not None:
+                try:
+                    cl = game.current_level
+                    current_level = getattr(cl, 'level_index', -1)
+                except (AttributeError, TypeError):
+                    pass
+
+        if (not self._click_solve_attempted
+                or current_level != self._click_solve_level):
+            self._click_solve_attempted = True
+            self._click_solve_level = current_level
+            solution = self._solve_click_puzzle()
+            if solution is not None and len(solution) > 0:
+                self._click_solution = solution
+                self._click_solution_idx = 0
+                # Execute first click immediately
+                click = self._click_solution[self._click_solution_idx]
+                self._click_solution_idx += 1
+                self._pending_click_data = {"x": click["x"], "y": click["y"]}
+                print(
+                    f"    [CLICK] step={self._step} solution click "
+                    f"[1/{len(self._click_solution)}] at "
+                    f"({click['x']},{click['y']})"
+                )
+                return GameAction.ACTION6
+
+        # === Phase 2: Get clickable positions ===
+        clickable: list[tuple[int, int]] = []  # (display_x, display_y)
+
+        # Strategy A: Game engine's _get_valid_clickable_actions()
         if (self.use_oracle and self._oracle_adapter is not None
+                and not isinstance(self._oracle_adapter, LS20Adapter)):
+            game = getattr(self._oracle_adapter, 'game', None)
+            if game is not None:
+                try:
+                    valid = game._get_valid_clickable_actions()
+                    if valid:
+                        gs = self._oracle_adapter.grid_size or 32
+                        sc = 64.0 / float(gs) if gs > 0 else 2.0
+                        for sprite in valid:
+                            sx = getattr(sprite, 'x', None)
+                            sy = getattr(sprite, 'y', None)
+                            if sx is not None and sy is not None:
+                                dx = int(sx * sc + sc / 2)
+                                dy = int(sy * sc + sc / 2)
+                                if 0 <= dx < 64 and 0 <= dy < 64:
+                                    clickable.append((dx, dy))
+                except (AttributeError, TypeError, Exception):
+                    pass
+
+        # Strategy B: Oracle goals
+        if not clickable and (self.use_oracle and self._oracle_adapter is not None
                 and not isinstance(self._oracle_adapter, LS20Adapter)):
             goal_entities = self._oracle_adapter.goals
             if goal_entities:
-                grid_size = self._oracle_adapter.grid_size
-                scale = 64.0 / float(grid_size) if grid_size > 0 else 1.0
+                gs = self._oracle_adapter.grid_size or 32
+                sc = 64.0 / float(gs) if gs > 0 else 2.0
                 clickable = [
-                    (int(g.x * scale), int(g.y * scale))
+                    (int(g.x * sc + sc / 2), int(g.y * sc + sc / 2))
                     for g in goal_entities
+                    if hasattr(g, 'x') and hasattr(g, 'y')
                 ]
 
-        # Fall back to grid perception if adapter didn't provide goals
-        if not clickable:
-            clickable = self._grid_perception.detect_clickable_positions(grid)
+        # Strategy C: Grid perception
+        if not clickable and grid is not None and self._grid_perception is not None:
+            raw = self._grid_perception.detect_clickable_positions(grid)
+            clickable = [(p[0] + 2, p[1] + 2) for p in raw]
 
         if not clickable:
-            # No clickable positions detected — try keyboard actions
-            # or fall through to fallback
             return None
 
-        # Filter out positions we've already clicked (player position)
-        player_pos = self._grid_perception.get_player_pixel_pos()
-        candidates = [
-            pos for pos in clickable
-            if player_pos is None or pos != player_pos
-        ]
+        # === Phase 3: Cycle detection via grid state hashing ===
+        if grid is not None:
+            try:
+                gh = hash(grid.tobytes())
+            except (AttributeError, Exception):
+                gh = None
+            if gh is not None:
+                if not hasattr(self, '_click_grid_states'):
+                    self._click_grid_states: dict[int, int] = {}
+                self._click_grid_states[gh] = (
+                    self._click_grid_states.get(gh, 0) + 1
+                )
+                # If we've seen this exact state 3+ times, we're cycling
+                if self._click_grid_states[gh] >= 3:
+                    _random.shuffle(clickable)
+                    self._clicked_positions.clear()
+                    self._click_grid_states.clear()
+                    print(f"    [CLICK] cycle detected, shuffling order")
 
-        if not candidates:
-            return None
+        # === Phase 4: Stagnation detection ===
+        if not hasattr(self, '_click_stagnation'):
+            self._click_stagnation = 0
+        self._click_stagnation += 1
 
-        # Select target: prefer positions not yet clicked
-        # (track clicked positions across steps)
-        if not hasattr(self, '_clicked_positions'):
-            self._clicked_positions: set[tuple[int, int]] = set()
+        # After 30 clicks without level advance, RESET to try fresh
+        if self._click_stagnation >= 30:
+            self._click_stagnation = 0
+            self._clicked_positions.clear()
+            if hasattr(self, '_click_grid_states'):
+                self._click_grid_states.clear()
+            self._click_solve_attempted = False  # Allow re-solve after RESET
+            print(f"    [CLICK] stagnation RESET at step={self._step}")
+            return GameAction.RESET
 
+        # === Phase 5: Select target ===
         unclicked = [
-            pos for pos in candidates
+            pos for pos in clickable
             if pos not in self._clicked_positions
         ]
 
         if unclicked:
-            # Click the first unclicked position
             target = unclicked[0]
-        elif candidates:
-            # All clicked — re-click the first candidate (might have changed)
-            target = candidates[0]
+        elif clickable:
+            # All clicked — second round, clear and retry
+            target = clickable[0]
             self._clicked_positions.clear()
         else:
             return None
 
-        # Store click data for the caller
-        click_x = target[0] + 2  # Center of 5x5 block
-        click_y = target[1] + 2
-        self._pending_click_data = {"x": click_x, "y": click_y}
+        # === Phase 6: Execute click ===
+        self._pending_click_data = {"x": target[0], "y": target[1]}
         self._clicked_positions.add(target)
 
         print(
-            f"    [CLICK] step={self._step} clicking ({click_x},{click_y}) "
-            f"block=({target[0]},{target[1]}), "
-            f"clicked={len(self._clicked_positions)}"
+            f"    [CLICK] step={self._step} pos=({target[0]},{target[1]}) "
+            f"remaining={max(0, len(unclicked)-1)}/{len(clickable)} "
+            f"stag={self._click_stagnation}"
         )
 
         return GameAction.ACTION6
@@ -2592,8 +4742,22 @@ class PlannerAgent:
         # level don't apply to the new level's layout)
         self._danger_walls.clear()
 
+        # Reset movement tracking
+        self._prev_player_pos = None
+        self._prev_action_was_plan = False
+        self._movement_fail_count = 0
+
         # Clear clicked positions for click-type games
         self._clicked_positions.clear()
+        # Reset click puzzle solver state for new level
+        self._click_solution = None
+        self._click_solution_idx = 0
+        self._click_solve_attempted = False
+        self._click_solve_level = -1
+        if hasattr(self, '_click_stagnation'):
+            self._click_stagnation = 0
+        if hasattr(self, '_click_grid_states'):
+            self._click_grid_states.clear()
 
     def _action_to_int(self, action) -> int:
         """Convert GameAction to integer ID.

@@ -103,3 +103,46 @@ tests/benchmark_ls20.py
 tests/test_agent_ls20.py
 tests/test_dopamine_ls20.py
 tests/test_explorer_ls20.py
+
+# Backup files
+*.backup
+*.bak
+
+# Database files
+*.db
+
+# Archive files
+*.zip
+
+# Benchmark results (transient)
+benchmark_*.txt
+test_25games_results_*.txt
+diagnostic_*_report_*.txt
+final_test_results_*.txt
+
+# Probe / inspect scripts (one-off diagnostics)
+probe_*.py
+inspect_*.py
+click_game_probe_results.json
+probe_results.json
+deep_game_probe.json
+diagnostic_results.json
+
+# Kaggle submission artifacts
+kaggle_submission_v01/
+kaggle_submit_v01/
+kaggle_output.json
+
+# Test scripts for specific games (one-off)
+test_vc33_*.py
+test_deep_architecture.py
+test_ft09_fix.py
+test_g50t_minimal.py
+test_grid_only_mode.py
+test_new_architecture.py
+test_adapter_creation.py
+test_25games_quick.py
+
+# Solution versions (keep latest only)
+solution.py
+solution_v0[2-5]_*.py

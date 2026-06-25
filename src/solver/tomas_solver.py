@@ -25,6 +25,7 @@ except ImportError:
     _HAVE_PSI_GATE = False
     PsiFusionGate = None  # type: ignore
     create_default_anchors = None  # type: ignore
+from src.solver.demo_induction import DemoInducer  # v2.9: Modifier-aware MDL prior
 from src.utils.kaggle_format import KaggleFormatAdapter, VideoARCTask
 from src.utils.gpu_optimizer import GPUOptimizer
 from src.utils.logger import get_auditor
@@ -154,6 +155,9 @@ class TOMASSolver:
             self.searcher, self.verifier, vl_adapter=self._vl_adapter
         )
 
+        # v2.9: DemoInducer with modifier-aware MDL prior
+        self.inducer = DemoInducer(library=self.library)
+
         # Format adapter
         self.kaggle_adapter = KaggleFormatAdapter()
 
@@ -163,6 +167,106 @@ class TOMASSolver:
         self.bayesian_time_threshold: float = ms_config.get("bayesian_time_threshold", 80)
         self.video_complexity_threshold: int = ms_config.get("video_complexity_threshold", 2)
         self.bayesian_complexity_threshold: int = ms_config.get("bayesian_complexity_threshold", 4)
+
+    # ------------------------------------------------------------
+    # Modifier Hints Extraction (v2.9)
+    # ------------------------------------------------------------
+
+    def _extract_modifier_hints(self, task: dict[str, Any]) -> list[str]:
+        """Extract modifier hints from task metadata.
+
+        Modifier hints provide domain knowledge about game mechanics
+        without accessing private logic. Sources:
+        - task["modifiers"]: explicit modifier list
+        - task["game_id"]: infer from game ID patterns
+        - sprite tags in ARC-AGI-3 games
+
+        Args:
+            task: Raw task dictionary.
+
+        Returns:
+            List of modifier hint strings.
+        """
+        hints: list[str] = []
+
+        # Explicit modifiers field
+        if "modifiers" in task:
+            hints.extend(task["modifiers"])
+
+        # Infer from game_id patterns
+        game_id = task.get("game_id", "")
+        if game_id:
+            gid_lower = game_id.lower()
+            if any(kw in gid_lower for kw in ["lock", "key", "door", "seq"]):
+                hints.append("lock_key_seq")
+            if any(kw in gid_lower for kw in ["fog", "war", "explore", "visible"]):
+                hints.append("fog_of_war")
+            if any(kw in gid_lower for kw in ["grav", "fall", "drop"]):
+                hints.append("gravity")
+            if any(kw in gid_lower for kw in ["color", "cycle", "palette"]):
+                hints.append("color_cycle")
+            if any(kw in gid_lower for kw in ["mirror", "flip", "reflect"]):
+                hints.append("mirror_axis")
+
+        # Infer from demo pair patterns (simple heuristic)
+        demo_pairs = task.get("demonstrations", task.get("train", []))
+        if demo_pairs and len(demo_pairs) >= 2:
+            # Check for lock-key pattern: output has fewer colors than input
+            try:
+                inp_colors = len(set(int(x) for x in demo_pairs[0].get("input", [0])))
+                out_colors = len(set(int(x) for x in demo_pairs[0].get("output", [0])))
+                if out_colors < inp_colors:
+                    hints.append("lock_key_seq")
+            except Exception:
+                pass
+
+        # Deduplicate while preserving order
+        seen: set[str] = set()
+        unique_hints: list[str] = []
+        for h in hints:
+            if h not in seen:
+                seen.add(h)
+                unique_hints.append(h)
+        return unique_hints
+
+    # ------------------------------------------------------------
+    # Modifier-Aware Re-ranking (v2.9)
+    # ------------------------------------------------------------
+
+    def _rerank_with_modifier_prior(
+        self,
+        valid_programs: list[ProgramNode],
+        modifier_hints: list[str],
+    ) -> list[ProgramNode]:
+        """Re-rank valid programs using modifier-aware MDL prior boost.
+
+        For each program, computes:
+            score = -mdl_cost + prior_boost(modifier_hints)
+        then re-sorts by score (descending).
+
+        Args:
+            valid_programs: List of valid ProgramNodes from two-phase search.
+            modifier_hints: List of active modifier hint strings.
+
+        Returns:
+            Re-ranked list of ProgramNodes.
+        """
+        if not modifier_hints or not valid_programs:
+            return valid_programs
+
+        scored: list[tuple[float, ProgramNode]] = []
+        for prog in valid_programs:
+            mdl = float(prog.total_mdl) if hasattr(prog, "total_mdl") else 50.0
+            prior_boost = self.inducer._calc_modifier_prior(prog, modifier_hints)
+            score = -mdl + prior_boost
+            scored.append((score, prog))
+
+        scored.sort(key=lambda x: x[0], reverse=True)
+        return [prog for _, prog in scored]
+
+    # ------------------------------------------------------------
+    # solve() dispatch
+    # ------------------------------------------------------------
 
     def solve(self, task: dict[str, Any], mode: str = "auto") -> dict[str, Any]:
         """Unified solve entry point.
@@ -238,6 +342,13 @@ class TOMASSolver:
         # Run search
         self.verifier.set_demo_pairs(demo_pairs)
         valid_programs = self.searcher.two_phase_search(demo_pairs)
+
+        # v2.9: Re-rank with modifier-aware MDL prior boost
+        modifier_hints = self._extract_modifier_hints(task)
+        if modifier_hints and valid_programs:
+            valid_programs = self._rerank_with_modifier_prior(
+                valid_programs, modifier_hints
+            )
 
         # v2.4: AEGIS evolution (if enabled)
         if self.aegis_engine is not None and len(valid_programs) >= 3:

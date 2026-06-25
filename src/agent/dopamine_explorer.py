@@ -916,6 +916,10 @@ class DopamineExplorer:
         self._step += 1
         self._total_actions += 1
 
+        # Guard against empty/invalid frames (e.g. game over, level complete)
+        if latest_frame is None or not hasattr(latest_frame, 'frame') or not latest_frame.frame:
+            return None
+
         grid = np.array(latest_frame.frame[0])
         available_actions = list(latest_frame.available_actions)
         state = latest_frame.state

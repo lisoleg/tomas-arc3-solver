@@ -6,11 +6,14 @@ removed redundant MDL recomputation in enumerate_candidates.
 TOMAS v2.2 optimization: Numba JIT grid comparison in verifier.
 TOMAS v2.3 optimization: CUDA GPU batch verification + advanced pruning
 (Betti0, symmetry dedup, incremental MDL, heuristic ordering).
+TOMAS v3.0 optimization: TOSAS-inspired prime-signature fingerprint
+for Phase A secondary filtering + prime-basis primitive ordering.
 """
 from __future__ import annotations
 
 import os
 import time
+from collections import deque
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -57,6 +60,98 @@ try:
 except ImportError:
     PruningOptimizer = None  # type: ignore[misc, assignment]
 
+
+
+
+# =============================================================================
+# TOSAS v3.0: Prime-Signature Fingerprint (素基指数指纹)
+# =============================================================================
+
+def prime_signature_fingerprint(grid):
+    """TOSAS-inspired Prime-Signature Fingerprint (素基指数指纹).
+
+    Maps ARC grid to "prime-base exponent vector" analogy:
+    - Number of distinct colors (non-zero) = ω(n) (number of distinct prime factors)
+    - Total non-zero cells = Ω(n) (total prime factors, with multiplicities)
+    - Max 4-connected component size = max(e_i) (max exponent in prime factorization)
+
+    This is a lightweight feature (O(HW)) for Phase A secondary filtering.
+
+    Args:
+        grid: Input grid as numpy ndarray.
+
+    Returns:
+        Tuple of (num_distinct_colors, total_mass, max_cluster_size).
+    """
+    import numpy as np
+    from collections import deque
+    
+    flat = grid.flatten()
+    nonzero = flat[flat != 0]
+
+    if len(nonzero) == 0:
+        return (0, 0, 0)
+
+    # ω(n) analogy: number of distinct colors
+    num_distinct = len(np.unique(nonzero))
+
+    # Ω(n) analogy: total non-zero cells (with multiplicities)
+    total_mass = len(nonzero)
+
+    # max(e_i) analogy: max 4-connected component size
+    max_cluster = _largest_4connected_component(grid)
+
+    return (num_distinct, total_mass, max_cluster)
+
+
+def _largest_4connected_component(grid):
+    """Compute the size of the largest 4-connected component (BFS)."""
+    import numpy as np
+    from collections import deque
+    
+    H, W = grid.shape
+    visited = np.zeros((H, W), dtype=bool)
+    max_size = 0
+
+    for r in range(H):
+        for c in range(W):
+            if grid[r, c] != 0 and not visited[r, c]:
+                queue = deque([(r, c)])
+                visited[r, c] = True
+                size = 0
+                while queue:
+                    cr, cc = queue.popleft()
+                    size += 1
+                    for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                        nr, nc = cr + dr, cc + dc
+                        if 0 <= nr < H and 0 <= nc < W and                            grid[nr, nc] == grid[cr, cc] and not visited[nr, nc]:
+                            visited[nr, nc] = True
+                            queue.append((nr, nc))
+                max_size = max(max_size, size)
+
+    return max_size
+
+
+def _signature_distance(sig1, sig2):
+    """L0 distance between two prime-signature fingerprints."""
+    return sum(abs(a - b) for a, b in zip(sig1, sig2))
+
+
+def _sort_by_primality(candidates):
+    """Sort candidates by "primality" (prime-like first)."""
+    def _primality_score(node):
+        # Atomic primitive = 0 (most prime-like)
+        if not node.children:
+            return 0
+        # Composite Macro: depth = complexity (higher = more composite)
+        return len(node.children)
+
+    return sorted(candidates, key=_primality_score)
+
+
+# =============================================================================
+# KappaSnapSearcher Class
+# =============================================================================
 
 class KappaSnapSearcher:
     """kappa-Snap abductive search with Two-Phase filtering.
@@ -224,6 +319,9 @@ class KappaSnapSearcher:
         # Phase A: Topological hash quick filter
         phase_a_passed = self.phase_a_filter(all_candidates, demo_pairs)
 
+        # v3.0: TOSAS prime-signature secondary filtering
+        phase_a_passed = self._prime_signature_filter(phase_a_passed, demo_pairs)
+
         # Apply library learning to reduce MDL
         if self.library is not None:
             phase_a_passed = self.apply_library(phase_a_passed)
@@ -231,6 +329,9 @@ class KappaSnapSearcher:
         # v2.3: Symmetry equivalence deduplication
         if self.pruning is not None:
             phase_a_passed = self.pruning.symmetry_dedup(phase_a_passed)
+
+        # v3.0: Prime-basis primitive ordering (primes first)
+        phase_a_passed = _sort_by_primality(phase_a_passed)
 
         # v2.3: Heuristic candidate ordering
         if self.pruning is not None:
@@ -262,6 +363,57 @@ class KappaSnapSearcher:
             Filtered list of candidates passing the hash check.
         """
         return self.topo_filter.quick_filter(candidates, demo_pairs)
+
+    def _prime_signature_filter(
+        self,
+        candidates: list,
+        demo_pairs: list,
+    ) -> list:
+        """v3.0: TOSAS-inspired prime-signature secondary filtering.
+
+        Computes prime-signature fingerprint for input/output grids,
+        then filters candidates based on signature distance.
+
+        Args:
+            candidates: List of candidates that passed Phase A.
+            demo_pairs: Demo pairs for signature computation.
+
+        Returns:
+            Filtered list (removed candidates with large signature distance).
+        """
+        if len(demo_pairs) < 2:
+            return candidates  # Not enough demo pairs
+
+        # Compute input signature (from first demo)
+        first_demo = demo_pairs[0]
+        input_grids = first_demo.get("input", [])
+        if not input_grids:
+            return candidates
+        inp_sig = prime_signature_fingerprint(input_grids[0])
+
+        # Compute output signatures
+        output_grids = first_demo.get("output", [])
+        if not output_grids:
+            return candidates
+        out_sig = prime_signature_fingerprint(output_grids[0])
+
+        # Filter: if signature distance is too large, candidate is unlikely
+        filtered = []
+        max_dist = 10  # Conservative threshold (tunable)
+
+        for candidate in candidates:
+            # Compute candidate's output signature
+            try:
+                pred_grid = candidate.apply(input_grids[0])
+                pred_sig = prime_signature_fingerprint(pred_grid)
+                dist = _signature_distance(out_sig, pred_sig)
+                if dist <= max_dist:
+                    filtered.append(candidate)
+            except Exception:
+                # If apply fails, keep candidate (conservative)
+                filtered.append(candidate)
+
+        return filtered if filtered else candidates  # Fallback to all if filter removes everything
 
     def phase_b_enumerate(
         self,

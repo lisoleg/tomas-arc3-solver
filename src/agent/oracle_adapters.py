@@ -426,6 +426,19 @@ class FT09Adapter(OracleAdapter):
         self._ft09_step: int = max(1, raw_pdw // 2)
 
     @property
+    def grid_size(self) -> int:
+        """Get grid size from FT09's pdw attribute.
+
+        FT09 uses a 32x32 game grid with a 64x64 display, so the
+        scale factor for coordinate conversion is 2.0. The base
+        class returns 64 which would give scale=1.0 (incorrect).
+
+        Returns:
+            Grid dimension (32 for FT09, from game.pdw).
+        """
+        return getattr(self.game, 'pdw', 32)
+
+    @property
     def player(self) -> Optional[GameEntity]:
         """Get the player/cursor entity from FT09's zth.
 
@@ -455,15 +468,17 @@ class FT09Adapter(OracleAdapter):
 
     @property
     def goals(self) -> list[GameEntity]:
-        """Get goal entities from FT09's fhc.
+        """Get goal entities from FT09's fhc and mou.
 
-        fhc contains 8 clickable objects that are likely goals.
+        fhc contains Hkx clickable objects and mou contains NTi
+        clickable objects. Both are valid click targets.
 
         Returns:
             List of goal GameEntity objects.
         """
-        # fhc: 8 clickable objects, likely goals
+        # Combine Hkx (fhc) and NTi (mou) clickable objects
         sprites = self._get_sprite_list('fhc')
+        sprites += self._get_sprite_list('mou')
         return [self._to_entity(s, step=self._ft09_step) for s in sprites]
 
     @property
@@ -519,7 +534,7 @@ def get_oracle_adapter(
     return None
 
 
-def auto_detect_adapter(game: Any) -> Optional[OracleAdapter]:
+def auto_detect_adapter(game: Any, game_id: Optional[str] = None) -> Optional[OracleAdapter]:
     """Auto-detect game type and return appropriate adapter.
 
     Tries each adapter's detection method to find the best match
@@ -532,9 +547,11 @@ def auto_detect_adapter(game: Any) -> Optional[OracleAdapter]:
         3. FT09: has 'zth' and 'fhc' attributes
         4. Universal: fallback for any game with env._game access.
            Uses UniversalOracleAdapter to auto-discover entities.
+           When game_id is provided, uses game_configs for entity detection.
 
     Args:
         game: The env._game object.
+        game_id: Optional game identifier for config-based detection.
 
     Returns:
         OracleAdapter instance (never None if UniversalOracleAdapter
@@ -556,9 +573,10 @@ def auto_detect_adapter(game: Any) -> Optional[OracleAdapter]:
     # Fallback: Universal adapter for any game with env._game access.
     # The UniversalOracleAdapter auto-discovers entities by scanning
     # game attributes, enabling Oracle mode for all 25 games.
+    # When game_id is provided, uses game_configs.py for entity tags.
     try:
         from .universal_oracle_adapter import UniversalOracleAdapter
-        return UniversalOracleAdapter(game)
+        return UniversalOracleAdapter(game, game_id=game_id)
     except ImportError:
         pass
 

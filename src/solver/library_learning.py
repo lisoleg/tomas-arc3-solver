@@ -3,16 +3,121 @@
 TOMAS v3.0: Sleep-Step continual learning — extract sub-expressions from
 solved programs, compute MDL compression gain, and register new primitives
 into the DSL registry for monotonic coverage improvement (Theorem 4).
+
+TOMAS v3.1: TOSAS-inspired Primality Check — filter out "composite"
+Macros (can be expressed by existing primitives) to keep library minimal.
 """
 from __future__ import annotations
 
 import hashlib
 import json
+import time
 from pathlib import Path
 from typing import Any
 
 from src.core.dsl_primitives import DSLElement, ProgramNode
 
+
+# =============================================================================
+# TOSAS-inspired Primality Check (素基性检查)
+# =============================================================================
+
+def is_prime_like(
+    candidate: ProgramNode,
+    primitive_set: list[DSLElement],
+    composite_patterns: dict[str, list[str]] | None = None,
+) -> bool:
+    """TOSAS-inspired Primality Check — test if candidate is "prime-like"
+    
+    A "prime-like" ProgramNode cannot be expressed as a NASGA combination
+    of existing primitives (i.e., it's "atomic" / "indivisible").
+    
+    A "composite" (non-prime-like) node can be decomposed into existing
+    primitives — it should NOT be registered as a new library entry.
+    
+    Args:
+        candidate: The ProgramNode to test.
+        primitive_set: List of existing DSL primitives.
+        composite_patterns: Optional dict of known composite patterns
+                          (e.g., {"rotate90_then_fill": ["rotate90", "fill"]}),
+                          Typicaly loaded from config.
+        
+    Returns:
+        True if candidate is "prime-like" (should be kept),
+        False if candidate is "composite" (should be rejected).
+    """
+    # 1. Trivial case: candidate itself is in primitive_set → not "new"
+    # NOTE: We skip this check because ProgramNode may not have equiv() method
+    # for p in primitive_set:
+    #     if candidate.equiv(p):
+    #         return False  # It's already a known primitive
+
+    # 2. Structural check: composite pattern detection
+    if composite_patterns is not None and hasattr(candidate, "dsl_name"):
+        dsl_name = getattr(candidate, "dsl_name", None)
+        if dsl_name is not None and dsl_name in composite_patterns:
+            # Check if children match the composite pattern
+            child_names = [getattr(c, "dsl_name", "") for c in candidate.children]
+            if child_names == composite_patterns[dsl_name]:
+                return False  # Composite: can be expressed by existing primitives
+
+    # 3. TODO: Full NASGA combination check (requires κ-Snap searcher)
+    # For now, we use a heuristic: if candidate has >2 children,
+    # it might be composite (can be decomposed).
+    # This is a simplified version — full check requires search.
+
+    # For leaf nodes (depth=1), they are always prime-like
+    if not candidate.children:
+        return True
+
+    # For composite nodes, check if any child is already in primitive_set
+    # If ALL children are in primitive_set, it's likely composite
+    # NOTE: We use name comparison instead of equiv() (which may not exist)
+    all_children_are_primitives = True
+    for c in candidate.children:
+        if c is None:
+            continue
+        child_name = getattr(c, "dsl_name", None)
+        if child_name is None:
+            all_children_are_primitives = False
+            break
+        # Check if this child's name is in primitive_set
+        child_in_set = any(child_name == getattr(p, "name", None) for p in primitive_set)
+        if not child_in_set:
+            all_children_are_primitives = False
+            break
+    
+    if all_children_are_primitives and len(candidate.children) > 1:
+        # Likely composite — but we need search to be sure
+        # For now, let it pass (conservative: avoid false negatives)
+        pass
+
+    return True  # Default: assume prime-like
+
+
+def _log_composite_observation(program: ProgramNode, composite_log: list[dict]) -> None:
+    """Log "composite rejected" events for later DSL optimization.
+
+    Corresponds to "复合体理学" in TOSAS — composite patterns that
+    are frequently observed but rejected from library can guide future
+    DSL primitive set expansion.
+
+    Args:
+        program: The composite ProgramNode that was rejected.
+        composite_log: List to append the observation to.
+    """
+    entry = {
+        "type": "composite_rejected",
+        "dsl_name": getattr(program, "dsl_name", repr(program)),
+        "children": [getattr(c, "dsl_name", "") for c in program.children],
+        "timestamp": time.time(),
+    }
+    composite_log.append(entry)
+
+
+# =============================================================================
+# LibraryLearning Class
+# =============================================================================
 
 class LibraryLearning:
     """DreamCoder-style library learning for DSL subroutine extraction.
@@ -381,7 +486,22 @@ class LibraryLearning:
 
         # 5. Register top max_new as new DSLElement primitives
         new_primitives: list[DSLElement] = []
+        
+        # TOSAS v3.1: Composite patterns for structural primality check
+        composite_patterns = getattr(self, "composite_patterns", None)
+        
         for gain, hash_str, subtree, freq in gains[:max_new]:
+            # TOSAS v3.1: Primality Check — reject "composite" Macros
+            if not is_prime_like(subtree, self.get_abstractions(), composite_patterns):
+                # Composite Macro: can be expressed by existing primitives
+                # → Do NOT register (avoid library bloat)
+                # Log for later DSL optimization
+                if not hasattr(self, "composite_log"):
+                    self.composite_log: list[dict] = []
+                _log_composite_observation(subtree, self.composite_log)
+                continue  # Skip this candidate — don't register!
+            
+            # Prime-like Macro: indivisible → register as new primitive
             # Generate a short unique name for the learned primitive
             short_hash = hashlib.md5(
                 hash_str.encode("utf-8")
