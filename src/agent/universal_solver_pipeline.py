@@ -126,10 +126,11 @@ class UniversalSolverPipeline:
         is_click_game: Whether the game uses click-based interaction.
     """
 
-    def __init__(self, game: Any, game_id: str = "") -> None:
+    def __init__(self, game: Any, game_id: str = "", max_time: float = 30.0) -> None:
         """Initialize the universal solver pipeline."""
         self.game = game
         self.game_id = game_id.split("-")[0] if game_id else ""
+        self._max_time = max_time
         self.adapter = UniversalOracleAdapter(game, game_id=self.game_id)
 
         # Detect game properties from introspection

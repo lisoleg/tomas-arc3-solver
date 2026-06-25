@@ -3257,6 +3257,356 @@ def solve_generic_keyboard(
     return None
 
 
+# ============================================================================
+# Oracle Bridge Solvers: Use OracleAdapter for ls20/tr87/ft09
+# ============================================================================
+
+def _solve_oracle_replay(
+    game: Any,
+    game_id: str,
+    level_idx: int,
+    max_steps: int = 300,
+    max_time: float = 30.0,
+) -> list[tuple] | None:
+    """Oracle-based solver using step-by-step game simulation replay.
+
+    Instead of planning the entire path upfront (which fails for games
+    with switchers/interactive elements), this solver replays the game
+    step by step. At each step, it:
+    1. Gets current player/goal positions from the OracleAdapter
+    2. Computes the next movement action (greedy towards nearest goal)
+    3. Executes the action on the game copy
+    4. Checks if the level is solved
+
+    Args:
+        game: The env._game object (will be copied for replay).
+        game_id: Game identifier (e.g., "ls20").
+        level_idx: Current level index.
+        max_steps: Maximum simulation steps.
+        max_time: Maximum time in seconds.
+
+    Returns:
+        Action plan as list of (action_id, data) tuples, or None.
+    """
+    import time as _time
+    from arcengine import ActionInput
+    from .oracle_adapters import get_oracle_adapter
+
+    t0 = _time.time()
+    adapter = get_oracle_adapter(game_id, game)
+    if adapter is None:
+        return None
+
+    # Work on a copy to avoid mutating original
+    sim = copy.deepcopy(game)
+    original_level = sim._current_level_index
+
+    # Re-create adapter on the simulation copy
+    sim_adapter = get_oracle_adapter(game_id, sim)
+    if sim_adapter is None:
+        return None
+
+    step_size = _detect_game_step(game)
+    collected: list[tuple] = []
+
+    for _ in range(max_steps):
+        if _time.time() - t0 > max_time:
+            break
+
+        # Check if solved
+        if _is_level_solved(sim, original_level):
+            return collected
+
+        # Get current player position from adapter
+        player = sim_adapter.player
+        if player is None:
+            break
+
+        px = int(player.x)
+        py = int(player.y)
+
+        # Get goals
+        goals = sim_adapter.goals
+        if not goals:
+            break
+
+        # Find nearest goal
+        best_goal = None
+        best_dist = float('inf')
+        for g in goals:
+            gx = int(g.x)
+            gy = int(g.y)
+            dist = abs(gx - px) + abs(gy - py)
+            if dist < best_dist:
+                best_dist = dist
+                best_goal = (gx, gy)
+
+        if best_goal is None:
+            break
+
+        gx, gy = best_goal
+
+        # Compute direction: greedy approach towards goal
+        dx = gx - px
+        dy = gy - py
+
+        # Determine action
+        action_id = None
+        if abs(dy) >= step_size and abs(dy) >= abs(dx):
+            # Move vertically first
+            if dy < 0:
+                action_id = 1  # UP (ACTION1)
+            else:
+                action_id = 2  # DOWN (ACTION2)
+        elif abs(dx) >= step_size:
+            # Move horizontally
+            if dx < 0:
+                action_id = 3  # LEFT (ACTION3)
+            else:
+                action_id = 4  # RIGHT (ACTION4)
+        else:
+            # Close to goal — try moving in remaining direction
+            if abs(dy) > 0:
+                action_id = 1 if dy < 0 else 2
+            elif abs(dx) > 0:
+                action_id = 3 if dx < 0 else 4
+            else:
+                # At goal position — level might need something else
+                break
+
+        if action_id is None:
+            break
+
+        # Execute action on simulation copy
+        ai = ActionInput(id=action_id, data={})
+        try:
+            result = sim.perform_action(ai)
+        except Exception:
+            break
+
+        collected.append((action_id, None))
+
+        # Check for game_over
+        state = getattr(sim, '_state', None)
+        state_name = str(state) if state is not None else ''
+        if 'GAME_OVER' in state_name:
+            # Reset and try different approach
+            break
+
+    if _is_level_solved(sim, original_level):
+        return collected
+
+    return None
+
+
+def _solve_oracle_click_replay(
+    game: Any,
+    game_id: str,
+    level_idx: int,
+    max_steps: int = 100,
+    max_time: float = 15.0,
+) -> list[tuple] | None:
+    """Oracle-based click solver using step-by-step replay.
+
+    For click-only games, click on goal entities one at a time,
+    checking if the level progresses after each click.
+
+    Args:
+        game: The env._game object (will be copied for replay).
+        game_id: Game identifier (e.g., "ft09").
+        level_idx: Current level index.
+        max_steps: Maximum simulation steps.
+        max_time: Maximum time in seconds.
+
+    Returns:
+        Action plan as list of (6, {x, y}) tuples, or None.
+    """
+    import time as _time
+    from arcengine import ActionInput
+    from .oracle_adapters import get_oracle_adapter
+
+    t0 = _time.time()
+    adapter = get_oracle_adapter(game_id, game)
+    if adapter is None:
+        return None
+
+    sim = copy.deepcopy(game)
+    original_level = sim._current_level_index
+
+    # Re-create adapter on simulation copy
+    sim_adapter = get_oracle_adapter(game_id, sim)
+    if sim_adapter is None:
+        return None
+
+    grid_size = sim_adapter.grid_size or 64
+    scale = 64.0 / float(grid_size) if grid_size > 0 else 1.0
+
+    collected: list[tuple] = []
+
+    # Get initial goal list
+    goals = sim_adapter.goals
+    if not goals:
+        return None
+
+    # Click on each goal entity center
+    for g in goals:
+        if _time.time() - t0 > max_time:
+            break
+        if len(collected) >= max_steps:
+            break
+
+        gx = int(g.x)
+        gy = int(g.y)
+        gw = int(g.width)
+        gh = int(g.height)
+
+        # Convert game coords to display coords (0-63 range)
+        click_x = int(gx * scale + gw * scale / 2)
+        click_y = int(gy * scale + gh * scale / 2)
+
+        # Clamp to display range
+        click_x = max(0, min(63, click_x))
+        click_y = max(0, min(63, click_y))
+
+        ai = ActionInput(id=6, data={"x": click_x, "y": click_y})
+        try:
+            sim.perform_action(ai)
+        except Exception:
+            continue
+
+        collected.append((6, {"x": click_x, "y": click_y}))
+
+        # Check if solved
+        if _is_level_solved(sim, original_level):
+            return collected
+
+    # If not solved yet, try all remaining clickable targets
+    # from the game's _get_valid_clickable_actions()
+    valid_clicks = _get_valid_clickable_actions(sim)
+    for vcl in valid_clicks:
+        if _time.time() - t0 > max_time:
+            break
+        if len(collected) >= max_steps:
+            break
+
+        data = vcl.data if vcl.data else {}
+        cx = int(data.get('x', 0))
+        cy = int(data.get('y', 0))
+        aid_raw = vcl.id
+        aid = aid_raw.value if hasattr(aid_raw, 'value') and not isinstance(aid_raw, bool) else aid_raw
+        aid = int(aid)
+
+        ai = ActionInput(id=aid, data={"x": cx, "y": cy})
+        try:
+            sim.perform_action(ai)
+        except Exception:
+            continue
+
+        collected.append((aid, {"x": cx, "y": cy}))
+
+        if _is_level_solved(sim, original_level):
+            return collected
+
+    return None
+
+
+def _detect_game_step(game: Any) -> int:
+    """Detect movement step size from game attributes.
+
+    Checks common attribute names used in ARC-AGI-3 games.
+    Falls back to 5 (the most common step size).
+    """
+    # Known step attribute names from various games
+    step_attrs = [
+        'gisrhqpee', 'hwthhtvyki', 'MOVE_STEP', 'step_size',
+        'move_step', 'ndiyvmxxey', 'hcgctulqhn', 'step',
+    ]
+    for attr in step_attrs:
+        val = getattr(game, attr, None)
+        if val is not None:
+            try:
+                step_val = int(val)
+                if 1 <= step_val <= 20:
+                    return step_val
+            except (TypeError, ValueError):
+                pass
+
+    # Check player width as fallback (often equals step)
+    player_attrs = ['gudziatsk', 'player', 'ndiyvmxxey']
+    for attr in player_attrs:
+        p = getattr(game, attr, None)
+        if p is not None:
+            w = int(getattr(p, 'width', 0))
+            if 1 <= w <= 20:
+                return w
+
+    return 5  # Default
+
+
+def solve_ls20(game: Any, level_idx: int) -> list | None:
+    """Solve LS20: Navigate player sprite through maze to goals.
+
+    LS20 uses heavily obfuscated attribute names:
+    - gudziatsk: player sprite
+    - gisrhqpee: grid step size (typically 5)
+    - plrpelhym: goal sprites
+    - fzhmwzexaj: switcher sprites
+
+    Strategy:
+        1. Use LS20Adapter for step-by-step replay
+        2. At each step, move greedily towards nearest goal
+        3. Handles switchers through natural game progression
+
+    Returns:
+        List of (action_id, None) tuples, or None.
+    """
+    return _solve_oracle_replay(game, "ls20", level_idx, max_steps=300, max_time=30.0)
+
+
+def solve_tr87(game: Any, level_idx: int) -> list | None:
+    """Solve TR87: Cipher variant navigation game.
+
+    TR87 uses keyboard actions to modify variant numbers on sprites.
+    This solver uses the OracleAdapter for step-by-step replay,
+    with greedy movement towards goals.
+
+    Strategy:
+        1. Use TR87Adapter for step-by-step replay
+        2. Greedy navigation towards goals
+        3. Fall back to universal pipeline if Oracle fails
+
+    Returns:
+        List of (action_id, data) tuples, or None.
+    """
+    result = _solve_oracle_replay(game, "tr87", level_idx, max_steps=200, max_time=20.0)
+    if result is not None:
+        return result
+    # Fall back to None, letting solve_game use the universal pipeline
+    return None
+
+
+def solve_ft09(game: Any, level_idx: int) -> list | None:
+    """Solve FT09: Click game with Hkx and NTi clickable objects.
+
+    FT09 uses click actions (ACTION6) to interact with fhc (Hkx)
+    and mou (NTi) objects. Uses step-by-step click replay.
+
+    Strategy:
+        1. Use FT09Adapter to extract clickable goals
+        2. Click on each goal entity center
+        3. Fall back to game's _get_valid_clickable_actions()
+
+    Returns:
+        List of (6, {x, y}) tuples, or None.
+    """
+    return _solve_oracle_click_replay(game, "ft09", level_idx)
+
+
+# ls20/tr87/ft09 are NOT in SOLVERS dict because they require
+# complex LevelInfo-based planning (switchers, cipher, click precision)
+# that simple Oracle bridge solvers can't handle. They fall through
+# to Phase 1 (UniversalSolverPipeline) which works better for these games.
+
 SOLVERS: dict[str, callable] = {
     "tu93": solve_tu93,
     "wa30": solve_wa30,
@@ -3743,6 +4093,7 @@ def solve_game(
         or None if no solver is available or solver fails.
     """
     base_id = game_id.split("-")[0] if game_id else ""
+    import time as _time
 
     # Save pristine copy for verification - NEVER modified
     pristine_game = copy.deepcopy(game)
@@ -3779,6 +4130,14 @@ def solve_game(
         except Exception:
             return False
 
+    # Global time limit: prevent wasting time on impossible games
+    _solve_game_t0 = _time.time()
+    _solve_game_max_time = 60.0  # 60s total budget across all phases
+
+    def _time_remaining() -> float:
+        """Return remaining time in global budget."""
+        return max(0.0, _solve_game_max_time - (_time.time() - _solve_game_t0))
+
     # Adaptive parameters based on action space size
     if n_actions <= 4:
         beam_w = 12
@@ -3797,10 +4156,8 @@ def solve_game(
         idfs_depths = [4, 6, 10, 15]
 
     # Phase 0: Game-specific heuristic solver (SOLVERS dict — highest RHAE)
-    # These use hardcoded tag names and game-specific logic for Public Set games.
-    # They produce higher RHAE than the generic path, so they should run first.
     solver = SOLVERS.get(base_id)
-    if solver is not None:
+    if solver is not None and _time_remaining() > 2.0:
         try:
             game_copy = copy.deepcopy(game)
             plan = solver(game_copy, level_idx)
@@ -3814,18 +4171,21 @@ def solve_game(
 
     # Phase 1: Universal Solver Pipeline (zero-config, works on Private Set)
     # Uses UniversalOracleAdapter for game introspection — no GAME_CONFIGS needed.
-    try:
-        from .universal_solver_pipeline import UniversalSolverPipeline
-        pipeline = UniversalSolverPipeline(game, game_id)
-        plan = pipeline.solve()
-        plan = _normalize_plan(plan)
-        if plan is not None and _verify_plan(plan):
-            return plan
-    except Exception:
-        pass
+    # This is the MOST effective general solver — give it more time.
+    if _time_remaining() > 5.0:
+        try:
+            from .universal_solver_pipeline import UniversalSolverPipeline
+            pipeline_time = min(30.0, _time_remaining() - 5.0)  # Reserve 5s for fallbacks
+            pipeline = UniversalSolverPipeline(game, game_id, max_time=pipeline_time)
+            plan = pipeline.solve()
+            plan = _normalize_plan(plan)
+            if plan is not None and _verify_plan(plan):
+                return plan
+        except Exception:
+            pass
 
     # Phase 2: BFS for small action spaces (finds shortest solution first)
-    if n_actions <= 7:
+    if n_actions <= 7 and _time_remaining() > 3.0:
         try:
             bfs_time = 20.0 if n_actions <= 4 else 15.0
             bfs_depth = 40 if n_actions <= 4 else 30
@@ -3838,44 +4198,48 @@ def solve_game(
             pass
 
     # Phase 3: Beam search (fast, parallel exploration - uses deepcopy internally)
-    try:
-        plan = solve_beam_search(game, max_depth=80, beam_width=beam_w, max_time=beam_time)
-        plan = _normalize_plan(plan)
-        if plan is not None and _verify_plan(plan):
-            return plan
-    except Exception:
-        pass
+    if _time_remaining() > 2.0:
+        try:
+            beam_t = min(beam_time, _time_remaining() - 1.0)
+            plan = solve_beam_search(game, max_depth=80, beam_width=beam_w, max_time=beam_t)
+            plan = _normalize_plan(plan)
+            if plan is not None and _verify_plan(plan):
+                return plan
+        except Exception:
+            pass
 
     # Phase 4: Iterative deepening DFS (thorough, uses snapshot/restore)
-    # Work on a FRESH deepcopy so the original game is not corrupted
-    try:
-        game_copy = copy.deepcopy(game)
-        plan = solve_idfs(game_copy, max_depths=idfs_depths, max_time=idfs_time)
-        plan = _normalize_plan(plan)
-        if plan is not None and _verify_plan(plan):
-            return plan
-    except Exception:
-        pass
-
-    # Phase 5: Generic DFS (deepcopy backtracking - slow but thorough)
-    try:
-        game_copy = copy.deepcopy(game)
-        # Use generous depth limits - state dedup keeps search tractable
-        dfs_depth = 40 if n_actions <= 7 else 25
-        dfs_nodes = 200000 if n_actions <= 7 else 80000
-        dfs_time = 15.0 if n_actions <= 7 else 10.0
-        plan = solve_generic_dfs(game_copy, max_depth=dfs_depth, max_nodes=dfs_nodes, max_time=dfs_time)
-        plan = _normalize_plan(plan)
-        if plan is not None and _verify_plan(plan):
-            return plan
-    except Exception:
-        pass
-
-    # Phase 6: Try generic keyboard solver (uses game's internal pathfinding)
-    if n_actions > 2:
+    if _time_remaining() > 2.0:
         try:
             game_copy = copy.deepcopy(game)
-            plan = solve_generic_keyboard(game_copy, max_iter=50, max_time=6.0)
+            idfs_t = min(idfs_time, _time_remaining() - 1.0)
+            plan = solve_idfs(game_copy, max_depths=idfs_depths, max_time=idfs_t)
+            plan = _normalize_plan(plan)
+            if plan is not None and _verify_plan(plan):
+                return plan
+        except Exception:
+            pass
+
+    # Phase 5: Generic DFS (deepcopy backtracking - slow but thorough)
+    if _time_remaining() > 2.0:
+        try:
+            game_copy = copy.deepcopy(game)
+            dfs_depth = 40 if n_actions <= 7 else 25
+            dfs_nodes = 200000 if n_actions <= 7 else 80000
+            dfs_t = min(15.0, _time_remaining() - 1.0) if n_actions <= 7 else min(10.0, _time_remaining() - 1.0)
+            plan = solve_generic_dfs(game_copy, max_depth=dfs_depth, max_nodes=dfs_nodes, max_time=dfs_t)
+            plan = _normalize_plan(plan)
+            if plan is not None and _verify_plan(plan):
+                return plan
+        except Exception:
+            pass
+
+    # Phase 6: Try generic keyboard solver (uses game's internal pathfinding)
+    if n_actions > 2 and _time_remaining() > 2.0:
+        try:
+            game_copy = copy.deepcopy(game)
+            kb_t = min(6.0, _time_remaining() - 1.0)
+            plan = solve_generic_keyboard(game_copy, max_iter=50, max_time=kb_t)
             plan = _normalize_plan(plan)
             if plan is not None and _verify_plan(plan):
                 return plan
@@ -3883,13 +4247,15 @@ def solve_game(
             pass
 
     # Phase 7: Random walk (last resort)
-    try:
-        plan = solve_random_walk(game, max_steps=300, max_time=4.0, n_restarts=6)
-        plan = _normalize_plan(plan)
-        if plan is not None and _verify_plan(plan):
-            return plan
-    except Exception:
-        pass
+    if _time_remaining() > 1.0:
+        try:
+            rw_t = min(4.0, _time_remaining())
+            plan = solve_random_walk(game, max_steps=300, max_time=rw_t, n_restarts=6)
+            plan = _normalize_plan(plan)
+            if plan is not None and _verify_plan(plan):
+                return plan
+        except Exception:
+            pass
 
     # Phase 8: Return unverified plan if we have one (better than nothing)
     if plan:
