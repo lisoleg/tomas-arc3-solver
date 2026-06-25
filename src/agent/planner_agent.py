@@ -4485,7 +4485,13 @@ class PlannerAgent:
         # =========================================================
         # SIMPLE STRATEGY: click_target_tag from config
         # =========================================================
-        from agent.game_configs import GAME_CONFIGS
+        try:
+            from .game_configs import GAME_CONFIGS
+        except ImportError:
+            try:
+                from src.agent.game_configs import GAME_CONFIGS
+            except ImportError:
+                GAME_CONFIGS = {}
         cfg = GAME_CONFIGS.get(self.game_id) if self.game_id else None
         if cfg and cfg.click_target_tag:
             try:
