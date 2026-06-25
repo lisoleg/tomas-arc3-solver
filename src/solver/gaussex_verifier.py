@@ -2,9 +2,14 @@
 
 TOMAS v2.2: Numba JIT grid comparison in verify_program.
 TOMAS v2.3: Batch verification interface for GPU acceleration.
+TOMAS v3.1: Dead-Zero gating (information fidelity threshold) + MUS
+(Mutual Exclusion System) dual-storage for conflicting hypotheses.
 """
 from __future__ import annotations
 
+import hashlib
+import time
+from collections import defaultdict
 from typing import Any
 
 import numpy as np
@@ -50,6 +55,20 @@ class GaussExVerifier:
         self.fibers: dict[int, set[int]] = {}
         # Cache: (program_id, pair_idx) -> fiber set
         self._fiber_cache: dict[tuple[int, int], set[int]] = {}
+
+        # v3.1: Dead-Zero gating
+        self.theta_dead: float = 0.15  # Information fidelity dead threshold
+        self._fidelity_cache: dict[int, float] = {}  # id(program) -> fidelity
+        self._dead_zero_rejects: int = 0  # Counter for rejected programs
+
+        # v3.1: MUS (Mutual Exclusion System) dual-storage
+        self.mus_log: list[dict[str, Any]] = []  # MUS candidate pairs
+        self._mus_detection_threshold: float = 0.4  # Min divergence to flag MUS
+        self._mus_max_retained: int = 20  # Max MUS pairs to keep
+
+        # v3.1: Psi anchor audit
+        self.psi_anchors: list[dict[str, Any]] = []  # ψ audit trail
+        self._psi_anchor_counter: int = 0
 
     def verify_program(
         self,
@@ -476,3 +495,491 @@ class GaussExVerifier:
 
         self._fiber_cache[cache_key] = fiber
         return fiber
+
+    # =========================================================================
+    # v3.1: Dead-Zero Information Fidelity Gating
+    # =========================================================================
+
+    def _calc_fidelity(
+        self,
+        program: ProgramNode,
+        demo_pairs: list[dict[str, Any]],
+    ) -> float:
+        """Compute information fidelity of a program against demo pairs.
+
+        Fidelity measures how much information the program preserves
+        about the input-output transformation, as opposed to hallucinating
+        or producing degenerate outputs.
+
+        The metric combines three signals:
+        1. **Structural fidelity**: How well output structure matches input
+           (shape preservation, color count ratio)
+        2. **Predictive fidelity**: How consistent predictions are across
+           demo pairs (Jitter-based sigma)
+        3. **Topological fidelity**: Betti0 preservation ratio
+
+        Fidelity ∈ [0, 1]. Programs with fidelity < theta_dead are
+        considered "Dead-Zero" — information-destructive and rejected.
+
+        This implements the Dead-Zero gate from the TOMAS theory:
+            "Low-fidelity programs correspond to hallucinatory reasoning;
+             they must be gated before consuming verification budget."
+        — GaussEx + Lean4 Dual Verification (Dead-Zero safety)
+
+        Args:
+            program: ProgramNode to evaluate.
+            demo_pairs: Demo pairs for fidelity computation.
+
+        Returns:
+            Fidelity score in [0, 1].
+        """
+        # Check cache
+        prog_id = id(program)
+        if prog_id in self._fidelity_cache:
+            return self._fidelity_cache[prog_id]
+
+        if not demo_pairs:
+            return 1.0  # No demos to check against
+
+        struct_scores: list[float] = []
+        pred_scores: list[float] = []
+        topo_scores: list[float] = []
+
+        for pair in demo_pairs:
+            input_grids = pair.get("input", [])
+            output_grids = pair.get("output", [])
+            for i, input_grid in enumerate(input_grids):
+                if i >= len(output_grids):
+                    continue
+                try:
+                    predicted = program.apply(input_grid)
+                    expected = output_grids[i]
+                    inp = np.asarray(input_grid)
+                    pred = np.asarray(predicted)
+                    exp = np.asarray(expected)
+
+                    # 1. Structural fidelity: shape match
+                    if pred.shape == exp.shape:
+                        struct_scores.append(1.0)
+                    else:
+                        struct_scores.append(0.0)
+                        pred_scores.append(0.0)
+                        topo_scores.append(0.0)
+                        continue
+
+                    # 2. Predictive fidelity: pixel match ratio
+                    match_ratio = float(np.mean(pred == exp))
+                    # Degenerate output check: all zeros or all same color
+                    is_degenerate = (
+                        np.all(pred == 0)
+                        or len(np.unique(pred)) == 1
+                    )
+                    if is_degenerate:
+                        match_ratio *= 0.3  # Heavy penalty for degenerate output
+                    pred_scores.append(match_ratio)
+
+                    # 3. Topological fidelity: Betti0 ratio
+                    inp_betti0 = _count_connected_components(inp)
+                    pred_betti0 = _count_connected_components(pred)
+                    exp_betti0 = _count_connected_components(exp)
+
+                    # How close is predicted Betti0 to expected?
+                    betti0_range = max(abs(inp_betti0 - exp_betti0), 1)
+                    betti0_error = abs(pred_betti0 - exp_betti0) / betti0_range
+                    topo_scores.append(max(0.0, 1.0 - betti0_error))
+
+                except Exception:
+                    struct_scores.append(0.0)
+                    pred_scores.append(0.0)
+                    topo_scores.append(0.0)
+
+        if not struct_scores:
+            return 0.0
+
+        # Weighted fidelity score
+        struct_fidelity = float(np.mean(struct_scores)) if struct_scores else 0.0
+        pred_fidelity = float(np.mean(pred_scores)) if pred_scores else 0.0
+        topo_fidelity = float(np.mean(topo_scores)) if topo_scores else 0.0
+
+        # Fidelity = 0.3*structural + 0.5*predictive + 0.2*topological
+        fidelity = 0.3 * struct_fidelity + 0.5 * pred_fidelity + 0.2 * topo_fidelity
+
+        # Cache result
+        self._fidelity_cache[prog_id] = fidelity
+        return fidelity
+
+    def _dead_zero_gate(
+        self,
+        program: ProgramNode,
+        demo_pairs: list[dict[str, Any]],
+    ) -> tuple[bool, float]:
+        """Dead-Zero gate: reject programs with critically low fidelity.
+
+        This is the primary safety mechanism against hallucinatory programs.
+        When fidelity < theta_dead, the program is considered information-
+        destructive and must be rejected regardless of formal verification.
+
+        Returns (passed, fidelity):
+            - passed: True if fidelity >= theta_dead
+            - fidelity: The computed fidelity score
+
+        Args:
+            program: ProgramNode to gate.
+            demo_pairs: Demo pairs for fidelity computation.
+
+        Returns:
+            Tuple of (passed, fidelity_score).
+        """
+        fidelity = self._calc_fidelity(program, demo_pairs)
+        passed = fidelity >= self.theta_dead
+
+        if not passed:
+            self._dead_zero_rejects += 1
+
+        return passed, fidelity
+
+    # =========================================================================
+    # v3.1: MUS (Mutual Exclusion System) Dual-Storage
+    # =========================================================================
+
+    def _detect_mutual_exclusion(
+        self,
+        prog_a: ProgramNode,
+        prog_b: ProgramNode,
+        demo_pairs: list[dict[str, Any]],
+    ) -> bool:
+        """Detect if two programs are mutually exclusive.
+
+        Two programs are mutually exclusive if they produce conflicting
+        outputs for the same input — i.e., both cannot be simultaneously
+        correct. This triggers MUS dual-storage: keep both as alternative
+        hypotheses instead of prematurely discarding one.
+
+        Detection criteria:
+        1. Both programs pass verification individually
+        2. Outputs diverge on at least one demo pair
+        3. Divergence exceeds mus_detection_threshold
+
+        Args:
+            prog_a: First program.
+            prog_b: Second program.
+            demo_pairs: Demo pairs for comparison.
+
+        Returns:
+            True if mutual exclusion is detected.
+        """
+        divergences: list[float] = []
+
+        for pair in demo_pairs:
+            input_grids = pair.get("input", [])
+            for grid in input_grids:
+                try:
+                    out_a = np.asarray(prog_a.apply(grid))
+                    out_b = np.asarray(prog_b.apply(grid))
+
+                    if out_a.shape != out_b.shape:
+                        # Different output shapes — strong divergence
+                        divergences.append(1.0)
+                        continue
+
+                    # Pixel-level divergence
+                    divergence = float(np.mean(out_a != out_b))
+                    divergences.append(divergence)
+                except Exception:
+                    # If either fails, they can't be directly compared
+                    divergences.append(0.5)
+
+        if not divergences:
+            return False
+
+        mean_divergence = float(np.mean(divergences))
+        return mean_divergence >= self._mus_detection_threshold
+
+    def record_mus_pair(
+        self,
+        prog_a: ProgramNode,
+        prog_b: ProgramNode,
+        confidence_a: float = 0.5,
+        confidence_b: float = 0.5,
+        tag: str = "",
+    ) -> str:
+        """Record a MUS (mutually exclusive) hypothesis pair.
+
+        Both programs are preserved as alternative solutions. The MUS
+        cell can be resolved later via Bayesian evidence accumulation
+        (see psi_fusion_gate.MusCell).
+
+        Args:
+            prog_a: First mutually exclusive program.
+            prog_b: Second mutually exclusive program.
+            confidence_a: Confidence in program A.
+            confidence_b: Confidence in program B.
+            tag: Optional conflict description tag.
+
+        Returns:
+            MUS cell ID (hash).
+        """
+        mus_entry = {
+            "cell_id": hashlib.md5(
+                f"{id(prog_a)}{id(prog_b)}{time.time()}".encode()
+            ).hexdigest()[:12],
+            "prog_a_id": id(prog_a),
+            "prog_b_id": id(prog_b),
+            "confidence_a": confidence_a,
+            "confidence_b": confidence_b,
+            "tag": tag,
+            "timestamp": time.time(),
+            "mdl_a": getattr(prog_a, "total_mdl", 0),
+            "mdl_b": getattr(prog_b, "total_mdl", 0),
+        }
+
+        self.mus_log.append(mus_entry)
+
+        # Prune old entries if exceeding max
+        if len(self.mus_log) > self._mus_max_retained:
+            self.mus_log = self.mus_log[-self._mus_max_retained:]
+
+        return mus_entry["cell_id"]
+
+    def get_mus_statistics(self) -> dict[str, Any]:
+        """Get MUS dual-storage statistics.
+
+        Returns:
+            Dict with mus_count, resolution_stats, etc.
+        """
+        return {
+            "total_mus_pairs": len(self.mus_log),
+            "mus_tags": list(set(e["tag"] for e in self.mus_log if e["tag"])),
+            "avg_confidence_a": (
+                float(np.mean([e["confidence_a"] for e in self.mus_log]))
+                if self.mus_log else 0.0
+            ),
+            "avg_confidence_b": (
+                float(np.mean([e["confidence_b"] for e in self.mus_log]))
+                if self.mus_log else 0.0
+            ),
+        }
+
+    # =========================================================================
+    # v3.1: Psi Anchor Audit
+    # =========================================================================
+
+    def record_psi_anchor(
+        self,
+        program: ProgramNode,
+        fidelity: float,
+        decision: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> int:
+        """Record a psi audit anchor for this verification step.
+
+        Psi anchors provide an audit trail for every verification decision,
+        enabling detection of alignment faking and confidence drift.
+
+        Each anchor records:
+            - What program was evaluated
+            - Its computed fidelity
+            - The decision made (pass/reject/mus)
+            - Contextual metadata
+
+        Args:
+            program: The program being verified.
+            fidelity: Computed fidelity score.
+            decision: Decision string ("PASS", "DEAD_ZERO_REJECT",
+                "MUS_STORED", "VERIFIED").
+            metadata: Optional extra context.
+
+        Returns:
+            Anchor index.
+        """
+        anchor = {
+            "anchor_id": self._psi_anchor_counter,
+            "program_id": id(program),
+            "fidelity": fidelity,
+            "decision": decision,
+            "mdl": getattr(program, "total_mdl", 0),
+            "timestamp": time.time(),
+            "metadata": metadata or {},
+        }
+        self.psi_anchors.append(anchor)
+        self._psi_anchor_counter += 1
+
+        # Prune old anchors
+        if len(self.psi_anchors) > 100:
+            self.psi_anchors = self.psi_anchors[-100:]
+
+        return anchor["anchor_id"]
+
+    def get_psi_audit_trail(self) -> list[dict[str, Any]]:
+        """Get the full psi audit trail.
+
+        Returns:
+            List of all recorded psi anchors.
+        """
+        return list(self.psi_anchors)
+
+    # =========================================================================
+    # Dead-Zero + MUS integrated verification
+    # =========================================================================
+
+    def verify_with_gating(
+        self,
+        program: ProgramNode,
+        demo_pairs: list[dict[str, Any]],
+        pre_computed: dict[tuple[int, int], np.ndarray] | None = None,
+    ) -> tuple[bool, float, str]:
+        """Verify a program with Dead-Zero gating and MUS detection.
+
+        Full pipeline:
+        1. Compute information fidelity
+        2. Dead-Zero gate: reject if fidelity < theta_dead
+        3. Standard GaussEx verification (if passed gate)
+        4. Record psi anchor for audit
+
+        Args:
+            program: ProgramNode to verify.
+            demo_pairs: Demo pairs for verification.
+            pre_computed: Optional pre-computed predictions.
+
+        Returns:
+            Tuple of (passed, fidelity, decision):
+                - passed: True if program is valid
+                - fidelity: Computed fidelity score
+                - decision: "PASS", "DEAD_ZERO_REJECT", or "FAILED_VERIFY"
+        """
+        # Step 1: Dead-Zero gate
+        passed_gate, fidelity = self._dead_zero_gate(program, demo_pairs)
+
+        if not passed_gate:
+            self.record_psi_anchor(
+                program, fidelity, "DEAD_ZERO_REJECT",
+                {"theta_dead": self.theta_dead},
+            )
+            return False, fidelity, "DEAD_ZERO_REJECT"
+
+        # Step 2: Standard verification
+        verified = self.verify_program(program, demo_pairs, pre_computed)
+
+        if verified:
+            self.record_psi_anchor(
+                program, fidelity, "PASS",
+                {"verified": True},
+            )
+            return True, fidelity, "PASS"
+        else:
+            self.record_psi_anchor(
+                program, fidelity, "FAILED_VERIFY",
+                {"verified": False},
+            )
+            return False, fidelity, "FAILED_VERIFY"
+
+    def verify_batch_with_gating(
+        self,
+        programs: list[ProgramNode],
+        demo_pairs: list[dict[str, Any]],
+        cuda_verifier: Any = None,
+    ) -> tuple[list[ProgramNode], list[dict[str, Any]]]:
+        """Batch verify with Dead-Zero gating + MUS detection.
+
+        Modified batch verification that:
+        1. Pre-filters programs via Dead-Zero gate
+        2. Standard batch verification for surviving programs
+        3. Detects mutually exclusive (MUS) pairs among valid programs
+        4. Records psi audit anchors throughout
+
+        Args:
+            programs: List of ProgramNodes to verify.
+            demo_pairs: Demo pairs for verification.
+            cuda_verifier: Optional CUDA batch verifier.
+
+        Returns:
+            Tuple of (valid_programs, mus_pairs):
+                - valid_programs: Programs passing all checks
+                - mus_pairs: Detected MUS hypothesis pairs
+        """
+        if not programs:
+            return [], []
+
+        # Step 1: Dead-Zero pre-filtering
+        survivors: list[ProgramNode] = []
+        for prog in programs:
+            passed, fidelity = self._dead_zero_gate(prog, demo_pairs)
+            if passed:
+                survivors.append(prog)
+
+        if not survivors:
+            return [], []
+
+        # Step 2: Standard batch verification
+        valid = self.verify_program_batch(survivors, demo_pairs, cuda_verifier)
+
+        # Step 3: MUS detection among valid programs
+        mus_pairs: list[dict[str, Any]] = []
+        if len(valid) >= 2:
+            # Only check pairs with close MDL (likely competitors)
+            sorted_valid = sorted(valid, key=lambda p: p.total_mdl)
+            for i in range(len(sorted_valid)):
+                for j in range(i + 1, min(i + 4, len(sorted_valid))):
+                    if self._detect_mutual_exclusion(
+                        sorted_valid[i], sorted_valid[j], demo_pairs
+                    ):
+                        cell_id = self.record_mus_pair(
+                            sorted_valid[i], sorted_valid[j],
+                            confidence_a=0.6, confidence_b=0.4,
+                            tag="batch_verification_mus",
+                        )
+                        mus_pairs.append({
+                            "cell_id": cell_id,
+                            "prog_a_mdl": sorted_valid[i].total_mdl,
+                            "prog_b_mdl": sorted_valid[j].total_mdl,
+                        })
+
+        return valid, mus_pairs
+
+    def reset_gate_stats(self) -> None:
+        """Reset Dead-Zero gate and MUS statistics."""
+        self._dead_zero_rejects = 0
+        self._fidelity_cache.clear()
+        self.mus_log.clear()
+        self.psi_anchors.clear()
+        self._psi_anchor_counter = 0
+
+
+# =============================================================================
+# Helper: Connected Components (for Betti0)
+# =============================================================================
+
+def _count_connected_components(grid: np.ndarray) -> int:
+    """Count 4-connected components (Betti0) in a grid.
+
+    Args:
+        grid: Input numpy array.
+
+    Returns:
+        Number of connected components.
+    """
+    from collections import deque
+
+    H, W = grid.shape
+    visited = np.zeros((H, W), dtype=bool)
+    count = 0
+
+    for r in range(H):
+        for c in range(W):
+            if grid[r, c] != 0 and not visited[r, c]:
+                count += 1
+                # BFS
+                color = grid[r, c]
+                queue = deque([(r, c)])
+                visited[r, c] = True
+                while queue:
+                    cr, cc = queue.popleft()
+                    for dr, dc in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                        nr, nc = cr + dr, cc + dc
+                        if (0 <= nr < H and 0 <= nc < W
+                                and not visited[nr, nc]
+                                and grid[nr, nc] == color):
+                            visited[nr, nc] = True
+                            queue.append((nr, nc))
+
+    return count

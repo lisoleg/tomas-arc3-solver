@@ -19,9 +19,10 @@ dsl:
 search:
   max_depth: 3                 # max composition depth
   mdl_threshold: 50            # max MDL cost for a valid program
-  time_limit_seconds: 80       # per-task time budget
+  time_limit_seconds: 70       # per-task time budget
   phase_a_target_filter_rate: 0.90  # Phase A should filter 90%+ candidates
   topo_hash_cache_size: 10000
+  beam_width: 8                 # beam search width for candidate truncation
 
 # --- Bayesian parameters ---
 bayesian:
@@ -147,6 +148,8 @@ pruning:
   enable_heuristic_order: true   # heuristic candidate ordering
   enable_incremental_mdl: true   # incremental MDL pruning at depth 3
   mdl_threshold: 50              # max MDL for valid programs (mirrors search.mdl_threshold)
+  enable_color_signature: true  # color signature invariant pruning
+  enable_luzhao_dna: true       # Luzhao DNA topological invariant
 
 # ============================================================
 # TOMAS v2.4: Absorbed modules from tomas-agi & mnq repos
@@ -192,3 +195,33 @@ math_sequences:
   enable_cache: true
   fibonacci_max_n: 1000
   bagua_mode: "xiantian"         # "xiantian" | "houtian"
+
+# ============================================================
+# TOMAS v3.1: Oracle Mode + Modifier Prior Boost (元宝建议)
+# ============================================================
+
+# --- Modifier Prior Boost ---
+modifier_prior_boost:
+  enabled: true
+  boost_factor: 1.5             # MDL reduction factor for modifier-matched candidates
+  hint_sources: ["oracle", "demo", "self_learned"]
+
+# --- Oracle Mode ---
+oracle:
+  enabled: false                # set true when arc_agi Oracle is available
+  use_hybrid_agent: true        # use HybridTaiyiAgent for L2→L3→L4→L5 pipeline
+  max_episodes_per_level: 3     # retry attempts per level
+  dead_zero_interrupt: true     # stop episode if RHAE drops to zero
+
+# --- Sleep-Step Warmup (Library Learning) ---
+sleep_step:
+  enabled: false                # set true to run sleep-step warmup before solving
+  warmup_tasks: 25              # number of public tasks for warmup
+  output_library: "library.json"
+  tosas_filter: true            # use TOSAS primality filter during warmup
+
+# --- Defensive Engineering ---
+defensive:
+  per_task_timeout: 70          # seconds, per-task hard timeout
+  cuda_oom_fallback: true       # fallback to CPU on CUDA OOM
+  signal_alarm_enabled: true    # use signal.alarm for timeout (Unix only)

@@ -2596,6 +2596,134 @@ def _connect_dots(grid: np.ndarray, color: int = 1, **_: Any) -> np.ndarray:
     return result
 
 
+def _pickup_object(grid: np.ndarray, color: int = 1, **_: Any) -> np.ndarray:
+    """Pick up (remove) all cells of the specified color, leaving background."""
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    result = g.copy()
+    result[result == color] = 0
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _toggle_lock(grid: np.ndarray, color: int = 1, **_: Any) -> np.ndarray:
+    """Toggle locked regions: fill enclosed areas of given color with border color."""
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    result = g.copy()
+    # Find enclosed regions (holes) and toggle them
+    from scipy.ndimage import label, binary_fill_holes
+    mask = (g == color)
+    filled = binary_fill_holes(mask)
+    holes = filled & ~mask
+    result[holes] = color
+    # Remove original border
+    result[mask] = 0
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _reveal_fog(grid: np.ndarray, fog_color: int = 0, reveal_color: int = 1, **_: Any) -> np.ndarray:
+    """Reveal hidden cells: cells adjacent to non-fog cells become revealed."""
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    result = g.copy()
+    from scipy.ndimage import binary_dilation
+    non_fog = (g != fog_color)
+    revealed = binary_dilation(non_fog, iterations=1) & (g == fog_color)
+    result[revealed] = reveal_color
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _scan_visible(grid: np.ndarray, **_: Any) -> np.ndarray:
+    """Scan and mark visible (non-occluded) cells based on line-of-sight from top-left."""
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    H, W = g.shape
+    result = np.zeros_like(g)
+    # Simple visibility: a cell is visible if no non-zero cell blocks it from (0,0)
+    for r in range(H):
+        for c in range(W):
+            visible = True
+            # Check diagonal path from (0,0) to (r,c)
+            steps = max(r, c)
+            if steps > 0:
+                for s in range(1, steps):
+                    pr, pc = int(r * s / steps), int(c * s / steps)
+                    if g[pr, pc] != 0 and (pr, pc) != (r, c):
+                        visible = False
+                        break
+            if visible:
+                result[r, c] = g[r, c] if g[r, c] != 0 else 1
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _apply_sequence(grid: np.ndarray, sequence: list = None, **_: Any) -> np.ndarray:
+    """Apply a sequence of color mappings in order: [(from_color, to_color), ...]"""
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    result = g.copy()
+    if sequence is None:
+        sequence = [(1, 2), (2, 3), (3, 4)]
+    for from_c, to_c in sequence:
+        result[result == from_c] = to_c
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
+def _if_color_at(grid: np.ndarray, pos: list = None, color: int = 1,
+                 then_op: str = "fill", then_color: int = 2, **_: Any) -> np.ndarray:
+    """Conditional: if grid[pos] == color, apply then_op on the grid."""
+    if grid.ndim == 3:
+        g = grid[0]
+        is_3d = True
+    else:
+        g = grid
+        is_3d = False
+    result = g.copy()
+    if pos is None:
+        pos = [0, 0]
+    r, c = pos[0] % g.shape[0], pos[1] % g.shape[1]
+    if g[r, c] == color:
+        if then_op == "fill":
+            result[result != 0] = then_color
+        elif then_op == "clear":
+            result[:] = 0
+        elif then_op == "swap":
+            result[g == color] = then_color
+            result[g == then_color] = color
+    if is_3d:
+        return result[np.newaxis, :, :]
+    return result
+
+
 def _register_primitives() -> None:
     """Register all DSL primitives in the registry."""
     DSLElement._registry = {
@@ -2688,6 +2816,13 @@ def _register_primitives() -> None:
         "count-objects-mark": _count_objects_mark,
         "propagate-color": _propagate_color,
         "connect-dots": _connect_dots,
+        # v3.1: Yuanbao-suggested primitives for ARC-AGI-3 interactive
+        "pickup-object": _pickup_object,
+        "toggle-lock": _toggle_lock,
+        "reveal-fog": _reveal_fog,
+        "scan-visible": _scan_visible,
+        "apply-sequence": _apply_sequence,
+        "if-color-at": _if_color_at,
     }
 
 

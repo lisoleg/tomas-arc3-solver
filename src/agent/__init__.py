@@ -45,6 +45,10 @@ from .self_learning import (
     ReviewResult,
     CognitiveResult,
     Operator,
+    PsiAuditor,
+    PsiAuditEntry,
+    ConditionalDeltaTDiscovery,
+    ConditionalRule,
 )
 
 __all__ = [
@@ -80,4 +84,10 @@ __all__ = [
     "ReviewResult",
     "CognitiveResult",
     "Operator",
+    # P1-1/P1-2: NARLA audit modules
+    "PsiAuditor",
+    "PsiAuditEntry",
+    # P1-8: Conditional ΔT Discovery
+    "ConditionalDeltaTDiscovery",
+    "ConditionalRule",
 ]

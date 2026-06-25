@@ -617,7 +617,7 @@ class GridPerception:
         has_click = any(a in click_actions for a in available_actions)
 
         if has_keyboard and has_click:
-            return "keyboard_click"
+            return "keyboard+click"
         elif has_keyboard:
             return "keyboard"
         elif has_click:

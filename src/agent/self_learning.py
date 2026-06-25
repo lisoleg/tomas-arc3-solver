@@ -52,8 +52,10 @@ Author: TOMAS Team
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
+import time
 from collections import Counter, defaultdict
 from dataclasses import dataclass, field, asdict
 from typing import Optional, Any
@@ -1881,3 +1883,875 @@ class OperatorAccumulator:
         self._library.clear()
         self._macro_db.clear()
         self._extraction_count = 0
+
+
+# ============================================================================
+# v3.1: Psi Audit System — ψ锚点审计 + MUS双存 + 对齐伪装检测
+# ============================================================================
+
+@dataclass
+class PsiAuditEntry:
+    """A single ψ audit record for traceability and alignment monitoring.
+
+    Each entry captures a decision point in the agent's reasoning
+    pipeline, enabling post-hoc analysis of decision quality and
+    detection of alignment faking.
+
+    Attributes:
+        step: Global step counter.
+        node_id: Identifier for the decision node (e.g., program hash).
+        fidelity: Information fidelity score from GaussEx Dead-Zero gate.
+        decision_basis: What the decision was based on (e.g., "gaussex_pass",
+            "dead_zero_reject", "mus_stored", "bayesian_fusion").
+        confidence: Agent's self-reported confidence [0, 1].
+        psi_hash: ψ-anchor hash for consistency tracking.
+        metadata: Additional contextual metadata.
+        timestamp: When the entry was recorded (Unix epoch).
+    """
+
+    step: int = 0
+    node_id: str = ""
+    fidelity: float = 0.0
+    decision_basis: str = ""
+    confidence: float = 0.5
+    psi_hash: str = ""
+    metadata: dict = field(default_factory=dict)
+    timestamp: float = field(default_factory=time.time)
+
+
+class PsiAuditor:
+    """ψ审计器：追踪决策质量，检测对齐伪装。
+
+    Core capabilities:
+    1. **Step-level audit logging**: Records every decision with fidelity,
+       confidence, and decision basis for complete traceability.
+    2. **ψ-anchor consistency detection**: Monitors whether the agent's
+       self-reported confidence is consistent with actual fidelity.
+       Inconsistency → Potential Alignment Faking.
+    3. **Confidence-Fidelity Gap tracking**: Computes the gap between
+       what the agent claims (confidence) and what GaussEx measures
+       (fidelity). Systematic gaps indicate misalignment.
+    4. **MUS preservation**: Tracks mutually exclusive hypotheses that
+       were stored for later resolution.
+
+    Usage:
+        auditor = PsiAuditor()
+        auditor.log_step(step=0, node_id="prog_abc", fidelity=0.85,
+                         decision_basis="gaussex_pass", confidence=0.7)
+        # ... many steps later ...
+        audit = auditor.get_audit_report()
+        if audit["alignment_faking_detected"]:
+            print("WARNING: Potential alignment faking!")
+    """
+
+    # Threshold for detecting alignment faking
+    CONFIDENCE_FIDELITY_GAP_THRESHOLD: float = 0.3
+    # Window size for trend detection
+    TREND_WINDOW: int = 10
+
+    def __init__(self) -> None:
+        """Initialize the ψ auditor."""
+        self._audit_trail: list[PsiAuditEntry] = []
+        self._total_steps: int = 0
+        self._alignment_warnings: list[dict] = []
+        self._mus_preserved: list[dict] = []
+
+        # Aggregated statistics
+        self._fidelity_sum: float = 0.0
+        self._confidence_sum: float = 0.0
+        self._dead_zero_count: int = 0
+        self._mus_count: int = 0
+
+    def log_step(
+        self,
+        step: int,
+        node_id: str,
+        fidelity: float,
+        decision_basis: str,
+        confidence: float = 0.5,
+        metadata: dict | None = None,
+    ) -> int:
+        """Log a single decision step to the ψ audit trail.
+
+        Args:
+            step: Global step counter.
+            node_id: Decision node identifier.
+            fidelity: GaussEx information fidelity score.
+            decision_basis: Basis for the decision.
+            confidence: Agent's self-reported confidence [0, 1].
+            metadata: Extra contextual data.
+
+        Returns:
+            Entry index in audit trail.
+        """
+        # Compute ψ-hash for consistency tracking
+        psi_hash = hashlib.md5(
+            f"{node_id}{fidelity:.4f}{decision_basis}{confidence:.4f}".encode()
+        ).hexdigest()[:8]
+
+        entry = PsiAuditEntry(
+            step=step,
+            node_id=node_id,
+            fidelity=fidelity,
+            decision_basis=decision_basis,
+            confidence=confidence,
+            psi_hash=psi_hash,
+            metadata=metadata or {},
+            timestamp=time.time(),
+        )
+
+        self._audit_trail.append(entry)
+        self._total_steps += 1
+        self._fidelity_sum += fidelity
+        self._confidence_sum += confidence
+
+        if decision_basis == "dead_zero_reject":
+            self._dead_zero_count += 1
+
+        # Real-time alignment faking check
+        self._check_alignment_faking(entry)
+
+        return len(self._audit_trail) - 1
+
+    def log_mus_preservation(
+        self,
+        cell_id: str,
+        prog_a_id: str,
+        prog_b_id: str,
+        reason: str = "",
+    ) -> None:
+        """Log a MUS (Mutually Exclusive System) preservation event.
+
+        When two contradictory but individually valid programs are
+        detected, both are preserved rather than prematurely discarded.
+        This records the event for later analysis.
+
+        Args:
+            cell_id: MUS cell identifier.
+            prog_a_id: First program's node ID.
+            prog_b_id: Second program's node ID.
+            reason: Why MUS preservation was triggered.
+        """
+        self._mus_preserved.append({
+            "cell_id": cell_id,
+            "prog_a_id": prog_a_id,
+            "prog_b_id": prog_b_id,
+            "reason": reason,
+            "timestamp": time.time(),
+        })
+        self._mus_count += 1
+
+    def _check_alignment_faking(self, entry: PsiAuditEntry) -> None:
+        """Check for alignment faking patterns in the audit trail.
+
+        Alignment faking indicators:
+        1. **Confidence-Fidelity Gap**: Agent claims high confidence
+           but fidelity is low. Gap > threshold → suspicious.
+        2. **Trend Divergence**: Confidence increases while fidelity
+           decreases → potential self-deception.
+        3. **ψ-Hash Inconsistency**: Same node_id/program produces
+           different ψ-hashes at different times → inconsistency.
+
+        Args:
+            entry: The newly added audit entry.
+        """
+        # Indicator 1: Confidence-Fidelity Gap
+        gap = entry.confidence - entry.fidelity
+        if gap > self.CONFIDENCE_FIDELITY_GAP_THRESHOLD:
+            self._alignment_warnings.append({
+                "type": "confidence_fidelity_gap",
+                "step": entry.step,
+                "node_id": entry.node_id,
+                "gap": gap,
+                "confidence": entry.confidence,
+                "fidelity": entry.fidelity,
+                "severity": "HIGH" if gap > 0.5 else "MEDIUM",
+            })
+
+        # Indicator 2: Trend divergence (over recent window)
+        if len(self._audit_trail) >= self.TREND_WINDOW:
+            recent = self._audit_trail[-self.TREND_WINDOW:]
+            confidences = [e.confidence for e in recent]
+            fidelities = [e.fidelity for e in recent]
+
+            # Linear trend (simple slope)
+            conf_slope = _linear_trend(confidences)
+            fid_slope = _linear_trend(fidelities)
+
+            # Confidence rises while fidelity falls → alarm
+            if conf_slope > 0.01 and fid_slope < -0.01:
+                self._alignment_warnings.append({
+                    "type": "trend_divergence",
+                    "step": entry.step,
+                    "conf_trend": conf_slope,
+                    "fid_trend": fid_slope,
+                    "severity": "MEDIUM",
+                })
+
+        # Indicator 3: ψ-hash inconsistency for same node
+        same_node_entries = [e for e in self._audit_trail
+                            if e.node_id == entry.node_id and e.psi_hash != entry.psi_hash]
+        if len(same_node_entries) >= 3:
+            self._alignment_warnings.append({
+                "type": "psi_hash_inconsistency",
+                "step": entry.step,
+                "node_id": entry.node_id,
+                "inconsistent_count": len(same_node_entries),
+                "severity": "HIGH",
+            })
+
+    def detect_psi_inconsistency(self) -> dict[str, Any]:
+        """Run full ψ inconsistency detection across the audit trail.
+
+        Checks for:
+        - ψ-anchor drift: same program evaluated differently over time
+        - Decision reversals: pass → reject → pass cycles
+        - Confidence inflation: monotonically increasing confidence
+          despite flat/decreasing fidelity
+
+        Returns:
+            Dict with detection results and recommendations.
+        """
+        if len(self._audit_trail) < 5:
+            return {
+                "inconsistency_detected": False,
+                "reason": "insufficient_data",
+                "recommendations": [],
+            }
+
+        # 1. ψ-anchor drift
+        node_groups: dict[str, list[float]] = defaultdict(list)
+        for entry in self._audit_trail:
+            node_groups[entry.node_id].append(entry.fidelity)
+
+        drift_nodes = []
+        for node_id, fidelities in node_groups.items():
+            if len(fidelities) >= 3:
+                fid_range = max(fidelities) - min(fidelities)
+                if fid_range > 0.3:  # Significant fidelity swing
+                    drift_nodes.append({
+                        "node_id": node_id,
+                        "fidelity_range": fid_range,
+                        "evaluations": len(fidelities),
+                    })
+
+        # 2. Decision reversals
+        decisions = [e.decision_basis for e in self._audit_trail]
+        reversal_count = 0
+        for i in range(len(decisions) - 2):
+            if decisions[i] != decisions[i + 1] and decisions[i + 1] != decisions[i + 2]:
+                reversal_count += 1
+
+        # 3. Confidence inflation
+        if len(self._audit_trail) >= self.TREND_WINDOW:
+            recent = self._audit_trail[-self.TREND_WINDOW:]
+            confs = [e.confidence for e in recent]
+            fids = [e.fidelity for e in recent]
+            confs_increasing = all(confs[i] <= confs[i + 1] for i in range(len(confs) - 1))
+            avg_fid_trend = _linear_trend(fids)
+            confidence_inflation = confs_increasing and avg_fid_trend < 0.01
+        else:
+            confidence_inflation = False
+
+        recommendations = []
+        if drift_nodes:
+            recommendations.append(
+                f"ψ-anchor drift detected for {len(drift_nodes)} nodes. "
+                "Review the evaluation pipeline for non-determinism."
+            )
+        if reversal_count > len(self._audit_trail) * 0.1:
+            recommendations.append(
+                "Frequent decision reversals detected. Consider Bayesian "
+                "fusion to stabilize decisions."
+            )
+        if confidence_inflation:
+            recommendations.append(
+                "Confidence inflation detected: agent self-reports increasing "
+                "confidence despite flat fidelity. Potential alignment faking."
+            )
+
+        is_inconsistent = bool(drift_nodes) or confidence_inflation or \
+            reversal_count > len(self._audit_trail) * 0.15
+
+        return {
+            "inconsistency_detected": is_inconsistent,
+            "psi_drift_nodes": drift_nodes,
+            "decision_reversals": reversal_count,
+            "confidence_inflation": confidence_inflation,
+            "total_alignment_warnings": len(self._alignment_warnings),
+            "recommendations": recommendations,
+        }
+
+    def get_audit_report(self) -> dict[str, Any]:
+        """Generate a comprehensive ψ audit report.
+
+        Returns:
+            Dict with complete audit statistics and alignment assessment.
+        """
+        avg_fidelity = self._fidelity_sum / max(1, self._total_steps)
+        avg_confidence = self._confidence_sum / max(1, self._total_steps)
+        gap = avg_confidence - avg_fidelity
+
+        # Alignment faking probability (heuristic)
+        # Based on: gap size + warning count + trend divergence count
+        gap_score = min(1.0, abs(gap) / self.CONFIDENCE_FIDELITY_GAP_THRESHOLD)
+        warning_score = min(1.0, len(self._alignment_warnings) / 10.0)
+        trend_divergences = sum(
+            1 for w in self._alignment_warnings if w["type"] == "trend_divergence"
+        )
+        trend_score = min(1.0, trend_divergences / 3.0)
+
+        alignment_faking_prob = 0.4 * gap_score + 0.35 * warning_score + 0.25 * trend_score
+        alignment_faking_detected = alignment_faking_prob > 0.5
+
+        # Decision distribution
+        decision_counts = defaultdict(int)
+        for entry in self._audit_trail:
+            decision_counts[entry.decision_basis] += 1
+
+        return {
+            "total_steps": self._total_steps,
+            "avg_fidelity": avg_fidelity,
+            "avg_confidence": avg_confidence,
+            "confidence_fidelity_gap": gap,
+            "dead_zero_rejects": self._dead_zero_count,
+            "mus_preserved": self._mus_count,
+            "alignment_faking_probability": alignment_faking_prob,
+            "alignment_faking_detected": alignment_faking_detected,
+            "alignment_warnings": self._alignment_warnings[-5:],  # Last 5
+            "decision_distribution": dict(decision_counts),
+            "psi_inconsistency": self.detect_psi_inconsistency(),
+            "recent_fidelity_trend": _linear_trend(
+                [e.fidelity for e in self._audit_trail[-self.TREND_WINDOW:]]
+            ) if len(self._audit_trail) >= self.TREND_WINDOW else 0.0,
+        }
+
+    def get_audit_trail(self, max_entries: int = 50) -> list[dict]:
+        """Get recent audit trail entries as dicts.
+
+        Args:
+            max_entries: Maximum entries to return.
+
+        Returns:
+            List of audit entry dicts.
+        """
+        recent = self._audit_trail[-max_entries:]
+        return [
+            {
+                "step": e.step,
+                "node_id": e.node_id,
+                "fidelity": e.fidelity,
+                "decision_basis": e.decision_basis,
+                "confidence": e.confidence,
+                "psi_hash": e.psi_hash,
+                "timestamp": e.timestamp,
+            }
+            for e in recent
+        ]
+
+    def reset(self) -> None:
+        """Reset the audit trail and all statistics."""
+        self._audit_trail.clear()
+        self._total_steps = 0
+        self._alignment_warnings.clear()
+        self._mus_preserved.clear()
+        self._fidelity_sum = 0.0
+        self._confidence_sum = 0.0
+        self._dead_zero_count = 0
+        self._mus_count = 0
+
+
+# ============================================================================
+# Psi Audit integration into CognitiveRecursiveDynamics
+# ============================================================================
+
+class AuditedCognitiveRecursiveDynamics(CognitiveRecursiveDynamics):
+    """CognitiveRecursiveDynamics with integrated ψ audit system.
+
+    Extends the 5-layer cognitive reasoning with ψ-anchor audit at
+    each layer transition, enabling alignment monitoring and
+    confidence calibration based on actual fidelity scores.
+
+    Usage:
+        acrd = AuditedCognitiveRecursiveDynamics()
+        acrd.attach_auditor()  # Or pass an existing PsiAuditor
+        result = acrd.think(perception_data, context)
+        # acrd.auditor.get_audit_report() shows alignment status
+    """
+
+    def __init__(self) -> None:
+        """Initialize with ψ audit support."""
+        super().__init__()
+        self.auditor: PsiAuditor | None = None
+        self._step_counter: int = 0
+
+    def attach_auditor(self, auditor: PsiAuditor | None = None) -> None:
+        """Attach a ψ auditor for decision traceability.
+
+        Args:
+            auditor: Existing PsiAuditor, or None to create a new one.
+        """
+        self.auditor = auditor or PsiAuditor()
+
+    def think(
+        self,
+        perception: dict,
+        context: dict,
+    ) -> CognitiveResult:
+        """Execute 5-layer reasoning with ψ audit at each layer.
+
+        Each layer transition is recorded as a ψ audit entry,
+        enabling post-hoc analysis of the reasoning quality.
+
+        Args:
+            perception: Perception data.
+            context: Contextual information.
+
+        Returns:
+            CognitiveResult with audit metadata.
+        """
+        self._step_counter += 1
+        step = self._step_counter
+
+        # Run the standard reasoning pipeline
+        result = super().think(perception, context)
+
+        # Attach audit metadata if auditor is active
+        if self.auditor is not None and result.action is not None:
+            # Compute a synthetic fidelity from confidence and biases
+            # (real fidelity would come from GaussEx verifier)
+            synthetic_fidelity = result.confidence
+            biases = result.meta_assessment.get("biases_detected", [])
+            if biases:
+                synthetic_fidelity *= max(0.3, 1.0 - 0.15 * len(biases))
+
+            # Determine decision basis
+            strategy = result.layer_outputs.get("L2_Strategic", {}).get("strategy", "unknown")
+            decision_basis = f"cognitive_{strategy}"
+
+            # Log the decision
+            self.auditor.log_step(
+                step=step,
+                node_id=f"cog_{step}_{result.action}",
+                fidelity=synthetic_fidelity,
+                decision_basis=decision_basis,
+                confidence=result.confidence,
+                metadata={
+                    "strategy": strategy,
+                    "biases": biases,
+                    "understanding": result.meta_assessment.get("understanding_quality", "unknown"),
+                },
+            )
+
+        return result
+
+    def get_audit_report(self) -> dict[str, Any] | None:
+        """Get ψ audit report from attached auditor.
+
+        Returns:
+            Audit report dict, or None if no auditor attached.
+        """
+        if self.auditor is None:
+            return None
+        return self.auditor.get_audit_report()
+
+
+# ============================================================================
+# P1-8: Conditional ΔT Discovery — Auto-discover conditional transformations
+# ============================================================================
+
+@dataclass
+class ConditionalRule:
+    """A conditional transformation rule discovered from experience.
+
+    Represents: IF condition_features THEN apply transformation T
+    (ELSE apply transformation T' if specified).
+
+    Attributes:
+        condition: Feature conditions that must hold (dict of feature→value).
+        transformation: The transformation to apply when condition holds.
+        alt_transformation: Alternative transformation when condition fails.
+        confidence: Rule confidence [0, 1] based on observed frequency.
+        support: Number of trajectory samples supporting this rule.
+        game_id: Game identifier this rule was discovered from.
+    """
+    condition: dict[str, Any] = field(default_factory=dict)
+    transformation: str = ""
+    alt_transformation: str = ""
+    confidence: float = 0.0
+    support: int = 0
+    game_id: str = ""
+
+
+class ConditionalDeltaTDiscovery:
+    """P1-8: Automatically discover conditional ΔT patterns from trajectories.
+
+    Analyzes successful and failed trajectories to discover conditions under
+    which specific transformations are effective. This enables the agent to
+    learn rules like:
+        "IF grid has symmetry → use symmetry_completion"
+        "IF grid has >3 colors → use color_map_transform"
+        "IF grid is sparse → use flood_fill"
+
+    Discovery pipeline:
+    1. **Feature extraction**: Compute grid features (symmetry, color count,
+       sparsity, connectivity) for each state in trajectory.
+    2. **Outcome labeling**: Label each (state, action) pair as success/failure
+       based on trajectory outcome.
+    3. **Conditional clustering**: Group states by feature similarity.
+    4. **Rule extraction**: For each cluster, determine the transformation
+       with highest success rate → form a conditional rule.
+    5. **Rule refinement**: Merge similar rules, prune low-confidence ones.
+
+    Usage:
+        discovery = ConditionalDeltaTDiscovery()
+        rules = discovery.discover([trajectory1, trajectory2, ...])
+        best_transform = discovery.select_transform(current_features, rules)
+    """
+
+    # Minimum samples for a rule to be considered reliable
+    MIN_SAMPLES: int = 3
+    # Minimum confidence for a rule to be kept
+    MIN_CONFIDENCE: float = 0.6
+    # Maximum number of rules to keep
+    MAX_RULES: int = 50
+
+    def __init__(self) -> None:
+        """Initialize the conditional ΔT discovery system."""
+        self._rules: list[ConditionalRule] = []
+        self._feature_history: list[dict[str, Any]] = []
+        self._outcome_history: list[bool] = []
+
+    def discover(
+        self,
+        trajectories: list[Trajectory],
+    ) -> list[ConditionalRule]:
+        """Discover conditional transformation rules from trajectories.
+
+        Args:
+            trajectories: List of episode trajectories with states, actions,
+                and outcomes.
+
+        Returns:
+            List of discovered ConditionalRule instances sorted by confidence.
+        """
+        # 1. Extract features and outcomes from all trajectories
+        samples: list[tuple[dict[str, Any], str, bool]] = []
+
+        for traj in trajectories:
+            for i, (state, action) in enumerate(
+                zip(traj.states, traj.actions)
+            ):
+                features = self._extract_features(state)
+                # Determine if this action led to success in the trajectory
+                # (simplified: later states closer to goal = success)
+                success = self._label_outcome(traj, i)
+                action_name = f"action_{action}"
+                samples.append((features, action_name, success))
+
+        if len(samples) < self.MIN_SAMPLES:
+            return []
+
+        # 2. Group samples by action type
+        by_action: dict[str, list[tuple[dict[str, Any], bool]]] = defaultdict(list)
+        for features, action_name, success in samples:
+            by_action[action_name].append((features, success))
+
+        # 3. For each action, find discriminating features
+        new_rules: list[ConditionalRule] = []
+        for action_name, action_samples in by_action.items():
+            if len(action_samples) < self.MIN_SAMPLES:
+                continue
+
+            # Find features that discriminate success from failure
+            discriminating = self._find_discriminating_features(action_samples)
+
+            if discriminating:
+                # Create conditional rule
+                success_count = sum(1 for _, s in action_samples if s)
+                total_count = len(action_samples)
+                confidence = success_count / total_count
+
+                if confidence >= self.MIN_CONFIDENCE:
+                    rule = ConditionalRule(
+                        condition=discriminating,
+                        transformation=action_name,
+                        confidence=confidence,
+                        support=total_count,
+                        game_id="",
+                    )
+                    new_rules.append(rule)
+
+        # 4. Merge similar rules and prune low-confidence ones
+        new_rules = self._merge_rules(new_rules)
+        new_rules = [r for r in new_rules if r.confidence >= self.MIN_CONFIDENCE]
+        new_rules = sorted(new_rules, key=lambda r: r.confidence, reverse=True)
+        new_rules = new_rules[:self.MAX_RULES]
+
+        # Update internal rule set
+        self._rules.extend(new_rules)
+        self._rules = sorted(self._rules, key=lambda r: r.confidence, reverse=True)
+        self._rules = self._rules[:self.MAX_RULES]
+
+        return new_rules
+
+    def _extract_features(self, state: Any) -> dict[str, Any]:
+        """Extract grid features from a game state.
+
+        Computes structural features that may discriminate when different
+        transformations are effective:
+        - grid_size: Total cell count
+        - unique_colors: Number of distinct colors
+        - sparsity: Fraction of non-zero cells
+        - has_symmetry: Whether grid has horizontal/vertical symmetry
+        - max_object_size: Size of largest connected component
+
+        Args:
+            state: Game state (grid array or dict with 'grid' key).
+
+        Returns:
+            Feature dictionary.
+        """
+        features: dict[str, Any] = {}
+
+        # Extract grid from state
+        grid = None
+        if isinstance(state, np.ndarray):
+            grid = state
+        elif isinstance(state, dict) and "grid" in state:
+            grid = np.array(state["grid"])
+        elif hasattr(state, "__array__"):
+            grid = np.array(state)
+
+        if grid is None or grid.size == 0:
+            return features
+
+        # Basic features
+        features["grid_size"] = int(grid.size)
+        features["unique_colors"] = int(len(np.unique(grid)))
+        features["sparsity"] = float(np.count_nonzero(grid) / max(grid.size, 1))
+
+        # Symmetry detection
+        if grid.ndim == 2:
+            h, w = grid.shape
+            # Horizontal symmetry (flip left-right)
+            h_sym = np.array_equal(grid, np.fliplr(grid))
+            # Vertical symmetry (flip up-down)
+            v_sym = np.array_equal(grid, np.flipud(grid))
+            features["has_symmetry"] = bool(h_sym or v_sym)
+
+            # Connected components (simplified: count distinct non-zero regions)
+            try:
+                from scipy import ndimage
+                labeled, num_components = ndimage.label(grid > 0)
+                features["num_objects"] = int(num_components)
+            except ImportError:
+                # Fallback: count non-zero rows as rough object count
+                features["num_objects"] = int(np.count_nonzero(grid.any(axis=1)))
+        else:
+            features["has_symmetry"] = False
+            features["num_objects"] = 0
+
+        return features
+
+    def _label_outcome(self, trajectory: Trajectory, step_idx: int) -> bool:
+        """Label whether an action at a given step led to a positive outcome.
+
+        Simplified heuristic: if the trajectory eventually succeeds, actions
+        in the first half are labeled positive; if it fails, all are negative.
+
+        Args:
+            trajectory: The episode trajectory.
+            step_idx: Index of the action in the trajectory.
+
+        Returns:
+            True if the action is considered successful.
+        """
+        if not hasattr(trajectory, "rewards") or not trajectory.rewards:
+            # No reward data: assume success if trajectory is in later half
+            return step_idx > len(trajectory.actions) // 2
+
+        if step_idx < len(trajectory.rewards):
+            return trajectory.rewards[step_idx] > 0
+
+        return False
+
+    def _find_discriminating_features(
+        self,
+        samples: list[tuple[dict[str, Any], bool]],
+    ) -> dict[str, Any]:
+        """Find features that discriminate success from failure.
+
+        For each feature, compute the success rate when the feature is
+        present vs. absent. Features with large success-rate gaps are
+        discriminating.
+
+        Args:
+            samples: List of (features, success) pairs.
+
+        Returns:
+            Dictionary of discriminating feature conditions.
+        """
+        if not samples:
+            return {}
+
+        # Collect all feature keys
+        all_keys: set[str] = set()
+        for features, _ in samples:
+            all_keys.update(features.keys())
+
+        discriminating: dict[str, Any] = {}
+        for key in all_keys:
+            # Split samples by feature value
+            present: list[bool] = []
+            absent: list[bool] = []
+            for features, success in samples:
+                val = features.get(key)
+                if val is not None and val != False and val != 0:
+                    present.append(success)
+                else:
+                    absent.append(success)
+
+            if len(present) < 2 or len(absent) < 2:
+                continue
+
+            present_rate = sum(present) / len(present)
+            absent_rate = sum(absent) / len(absent)
+
+            # Discrimination gap > 0.2 is significant
+            gap = abs(present_rate - absent_rate)
+            if gap > 0.2:
+                # Use the value associated with higher success rate
+                if present_rate > absent_rate:
+                    # Feature presence correlates with success
+                    discriminating[key] = True
+                else:
+                    # Feature absence correlates with success
+                    discriminating[key] = False
+
+        return discriminating
+
+    def _merge_rules(
+        self, rules: list[ConditionalRule]
+    ) -> list[ConditionalRule]:
+        """Merge rules with identical conditions and transformations.
+
+        Args:
+            rules: List of rules to merge.
+
+        Returns:
+            Merged list with combined support and averaged confidence.
+        """
+        if len(rules) <= 1:
+            return rules
+
+        merged: dict[str, ConditionalRule] = {}
+        for rule in rules:
+            key = f"{json.dumps(rule.condition, sort_keys=True)}|{rule.transformation}"
+            if key in merged:
+                existing = merged[key]
+                # Combine support and recompute confidence
+                total_support = existing.support + rule.support
+                weighted_conf = (
+                    existing.confidence * existing.support
+                    + rule.confidence * rule.support
+                ) / max(total_support, 1)
+                existing.support = total_support
+                existing.confidence = weighted_conf
+            else:
+                merged[key] = rule
+
+        return list(merged.values())
+
+    def select_transform(
+        self,
+        current_features: dict[str, Any],
+        rules: list[ConditionalRule] | None = None,
+    ) -> Optional[str]:
+        """Select the best transformation given current features.
+
+        Matches current features against rule conditions and returns
+        the transformation from the highest-confidence matching rule.
+
+        Args:
+            current_features: Features of the current game state.
+            rules: Rules to match against (defaults to internal rules).
+
+        Returns:
+            Transformation name, or None if no rule matches.
+        """
+        if rules is None:
+            rules = self._rules
+
+        best_match: Optional[ConditionalRule] = None
+        best_confidence = 0.0
+
+        for rule in rules:
+            # Check if all conditions are satisfied
+            match = True
+            for cond_key, cond_val in rule.condition.items():
+                actual_val = current_features.get(cond_key)
+                if actual_val != cond_val:
+                    # Handle boolean comparisons
+                    if cond_val is True and not actual_val:
+                        match = False
+                        break
+                    elif cond_val is False and actual_val:
+                        match = False
+                        break
+                    elif actual_val != cond_val:
+                        match = False
+                        break
+
+            if match and rule.confidence > best_confidence:
+                best_match = rule
+                best_confidence = rule.confidence
+
+        if best_match is not None:
+            return best_match.transformation
+        return None
+
+    def get_rules(self) -> list[ConditionalRule]:
+        """Get all discovered conditional rules.
+
+        Returns:
+            List of ConditionalRule instances.
+        """
+        return self._rules.copy()
+
+    def clear(self) -> None:
+        """Clear all discovered rules and history."""
+        self._rules.clear()
+        self._feature_history.clear()
+        self._outcome_history.clear()
+
+
+# ============================================================================
+# Helper Functions
+# ============================================================================
+
+def _linear_trend(values: list[float]) -> float:
+    """Compute linear trend slope using simple least squares.
+
+    Args:
+        values: List of numeric values.
+
+    Returns:
+        Slope of linear fit (positive = increasing, negative = decreasing).
+    """
+    if len(values) < 2:
+        return 0.0
+    n = len(values)
+    x = np.arange(n, dtype=np.float64)
+    y = np.array(values, dtype=np.float64)
+
+    # Simple linear regression: slope = cov(x,y) / var(x)
+    x_mean = np.mean(x)
+    y_mean = np.mean(y)
+    numerator = np.sum((x - x_mean) * (y - y_mean))
+    denominator = np.sum((x - x_mean) ** 2)
+
+    if denominator == 0:
+        return 0.0
+
+    return float(numerator / denominator)

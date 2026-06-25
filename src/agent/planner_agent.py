@@ -1726,7 +1726,7 @@ class PlannerAgent:
         self._grid_perception: Optional[GridPerception] = None
         self._grid_initialized: bool = False
 
-        # Action type ("keyboard", "click", "keyboard_click", "unknown")
+        # Action type ("keyboard", "click", "keyboard+click", "unknown")
         self._action_type: str = "unknown"
 
         # Click data (for click-type games)
@@ -1747,6 +1747,7 @@ class PlannerAgent:
         # Fallback agent (for when planning fails)
         self._fallback: Optional[DopamineExplorer] = None
         self._using_fallback = False
+        self._plan_exhaustion_count: int = 0
 
         # Step tracking
         self._step: int = 0
@@ -1786,6 +1787,30 @@ class PlannerAgent:
 
         # Seen state hashes for stagnation tracking
         self._seen_state_hashes: set[str] = set()
+
+        # === P0-2: Frame Pre-filtering (差分阈值跳过静态帧) ===
+        # Skip redundant perception update when frame diff is below threshold,
+        # reducing ~30% of redundant computation on static/animation frames.
+        self._prev_grid: Optional[np.ndarray] = None
+        self._frame_diff_threshold: float = 0.005  # 0.5% pixel change threshold
+        self._static_frame_skip_count: int = 0
+
+        # === P0-3: Bayesian RHAE Circuit Breaker (效率<0.5回溯) ===
+        # Track per-level RHAE efficiency; when efficiency drops below
+        # threshold, trigger L2 backtracking (clear plan + switch strategy).
+        self._rhae_efficiency_history: list[float] = []
+        self._rhae_threshold: float = 0.5  # Below this → backtrack
+        self._rhae_backtrack_count: int = 0
+        self._max_rhae_backtracks: int = 3  # Max backtracks per level
+        self._level_plan_strategies: list[str] = ["bfs", "adapter", "grid", "dfs"]
+        self._current_strategy_idx: int = 0
+
+        # === P0-4: DFS Backtracking Planner ===
+        # Stack-based DFS with visited set for action sequence exploration.
+        self._dfs_stack: list[tuple[int, list, set]] = []  # (depth, action_seq, visited)
+        self._dfs_visited: set[str] = set()
+        self._dfs_max_depth: int = 50
+        self._dfs_max_iterations: int = 500
 
         # Store oracle preference; actual adapter creation happens in
         # _check_oracle_availability() on first choose_action() call.
@@ -1900,8 +1925,25 @@ class PlannerAgent:
                     available_actions
                 )
             else:
-                # Default to keyboard for backward compatibility
-                self._action_type = "keyboard"
+                # Fallback: use GAME_CONFIGS to determine action type
+                # Many games return empty available_actions from env,
+                # but their config specifies the correct game_type.
+                from .game_configs import GAME_CONFIGS
+                base_id_fallback = self.game_id.split("-")[0] if self.game_id else ""
+                cfg = GAME_CONFIGS.get(base_id_fallback)
+                if cfg is not None:
+                    if cfg.game_type == "click":
+                        self._action_type = "click"
+                    elif cfg.game_type == "keyboard+click":
+                        self._action_type = "keyboard+click"
+                    else:
+                        self._action_type = "keyboard"
+                    # Use config's available_actions if provided
+                    if cfg.available_actions:
+                        available_actions = list(cfg.available_actions)
+                else:
+                    # Default to keyboard for backward compatibility
+                    self._action_type = "keyboard"
 
             # Get or create game profile
             if self.game_id:
@@ -2000,16 +2042,67 @@ class PlannerAgent:
         levels_completed = latest_frame.levels_completed
 
         # === Extract grid and update perception ===
+        # P0-2: Frame Pre-filtering — skip perception update for static frames
         grid: Optional[np.ndarray] = None
+        _skip_perception_update = False
         try:
             grid = np.array(latest_frame.frame[0])
-            # Get available actions from observation for action type detection
-            avail_actions: list[int] = []
-            if hasattr(latest_frame, 'available_actions'):
-                avail_actions = [int(a) for a in latest_frame.available_actions]
-            self._update_grid_perception(grid, available_actions=avail_actions)
+
+            # P0-2: Compute frame diff ratio vs previous frame
+            if self._prev_grid is not None and self._prev_grid.shape == grid.shape:
+                diff_ratio = float(np.count_nonzero(grid != self._prev_grid)) / float(grid.size)
+                if diff_ratio < self._frame_diff_threshold:
+                    # Static frame — skip expensive perception update
+                    _skip_perception_update = True
+                    self._static_frame_skip_count += 1
+                else:
+                    self._static_frame_skip_count = 0
+
+            self._prev_grid = grid.copy()
+
+            if not _skip_perception_update:
+                # Get available actions from observation for action type detection
+                avail_actions: list[int] = []
+                if hasattr(latest_frame, 'available_actions'):
+                    avail_actions = [int(a) for a in latest_frame.available_actions]
+                self._update_grid_perception(grid, available_actions=avail_actions)
         except (AttributeError, IndexError, Exception):
             pass
+
+        # P0-3: Bayesian RHAE Circuit Breaker — check efficiency mid-level
+        if (not level_changed and state != GameState.GAME_OVER
+                and self._level_start_step > 0
+                and self._rhae_backtrack_count < self._max_rhae_backtracks):
+            level_idx = self._levels_completed
+            if level_idx < len(self.level_baselines):
+                baseline_steps = self.level_baselines[level_idx]
+                actual_steps = self._step - self._level_start_step
+                if actual_steps > 0 and baseline_steps > 0:
+                    rhae_efficiency = float(baseline_steps) / float(max(actual_steps, 1))
+                    # Record efficiency periodically
+                    if actual_steps % 50 == 0:
+                        self._rhae_efficiency_history.append(rhae_efficiency)
+
+                    # Trigger backtrack when efficiency drops below threshold
+                    if rhae_efficiency < self._rhae_threshold and actual_steps > baseline_steps * 2:
+                        print(
+                            f"    [RHAE BREAKER] efficiency={rhae_efficiency:.2f} "
+                            f"< {self._rhae_threshold}, triggering L2 backtrack "
+                            f"(#{self._rhae_backtrack_count + 1})"
+                        )
+                        self._rhae_backtrack_count += 1
+                        # Clear current plan to force re-planning with next strategy
+                        self._plan = None
+                        self._plan_idx = 0
+                        self._plan_failed = True
+                        # Advance to next planning strategy
+                        self._current_strategy_idx = (
+                            (self._current_strategy_idx + 1)
+                            % len(self._level_plan_strategies)
+                        )
+                        # Clear danger walls partially (keep 50% most recent)
+                        if len(self._danger_walls) > 4:
+                            self._danger_walls = set(list(self._danger_walls)[-len(self._danger_walls) // 2:])
 
         # === Step 1: Handle GAME_OVER ===
         if state == GameState.GAME_OVER:
@@ -2072,16 +2165,61 @@ class PlannerAgent:
             self._check_oracle_availability()
 
         # === Step 4: Click-type game handling ===
-        if self._action_type in ("click", "keyboard_click"):
-            action = self._choose_click_action(frames, latest_frame, grid)
-            if action is not None:
-                self._action_history.append(self._action_to_int(action))
-                self._level_action_history.append(self._action_to_int(action))
-                self._stagnation = 0
-                return action
+        # For games with game-specific solvers: prefer re-planning over
+        # generic click solver when the game-specific plan is exhausted.
+        # For games without solvers (ft09, ls20, tr87), always use click solver.
+        if self._action_type in ("click", "keyboard+click"):
+            _base_gid = (self.game_id or "").split("-")[0]
+            _has_game_solver = _base_gid in (
+                "dc22", "tu93", "wa30", "g50t", "ka59", "sk48", "m0r0",
+                "cn04", "r11l", "s5i5", "tn36", "su15", "vc33", "re86",
+                "ar25", "sc25", "sb26", "cd82", "sp80", "bp35", "lf52",
+            )
+
+            # Determine if generic click solver should be used.
+            # For games WITH dedicated solvers: skip click_solve when plan
+            # is exhausted so Step 5 can re-plan via the game-specific solver.
+            # Without a solver: always keep _has_active_plan=True.
+            if _has_game_solver:
+                # Plan is active → don't interrupt
+                _plan_active = (
+                    self._plan is not None
+                    and self._plan_idx < len(self._plan)
+                )
+                # Plan was just exhausted → clear it so Step 5 regenerates
+                if not _plan_active and self._plan is not None:
+                    # Clear exhausted plan to trigger re-planning in Step 5
+                    self._plan = None
+                    self._plan_idx = 0
+                # Use generic click solver ONLY if no solver OR in fallback mode
+                _use_click_solve = self._using_fallback
+            else:
+                _use_click_solve = True
+
+            if _use_click_solve:
+                action = self._choose_click_action(frames, latest_frame, grid)
+                if action is not None:
+                    self._action_history.append(self._action_to_int(action))
+                    self._level_action_history.append(self._action_to_int(action))
+                    self._stagnation = 0
+                    return action
 
         # === Step 5: Plan if needed ===
         if self._plan is None or self._plan_idx >= len(self._plan):
+            # Track plan exhaustion for current level
+            if self._plan is not None and self._plan_idx >= len(self._plan):
+                # Plan was exhausted without level completion
+                self._plan_exhaustion_count = getattr(self, '_plan_exhaustion_count', 0) + 1
+                _base_gid_5 = (self.game_id or "").split("-")[0]
+                _has_gs_5 = _base_gid_5 in ("dc22", "tu93", "wa30", "g50t", "ka59",
+                    "sk48", "m0r0", "cn04", "r11l", "s5i5", "tn36", "su15", "vc33",
+                    "re86", "ar25", "sc25", "sb26", "cd82", "sp80", "bp35", "lf52")
+                if _has_gs_5 and self._plan_exhaustion_count >= 3:
+                    # Switch to fallback after 3 failed plan attempts
+                    self._using_fallback = True
+                    self._plan = None
+                    self._plan_idx = 0
+            
             if not self._using_fallback:
                 self._plan_level()
 
@@ -2100,7 +2238,17 @@ class PlannerAgent:
         # If not, the target cell is an invisible wall — add to danger_walls
         # and invalidate the plan so it gets re-planned with the new wall.
         # Skip for cipher games (tr87) where there is no movement.
-        if (self._prev_action_was_plan and not self._is_cipher_game
+        # Skip for pure click games (s5i5, r11l, tn36, vc33, su15) — no player entity.
+        # For game-specific solvers, use a higher threshold (3 consecutive
+        # failures) to avoid false positives from coordinate mismatches.
+        _base_gid = (self.game_id or "").split("-")[0]
+        _has_game_solver = _base_gid in ("dc22", "tu93", "wa30", "g50t", "ka59",
+            "sk48", "m0r0", "cn04", "r11l", "s5i5", "tn36", "su15", "vc33",
+            "re86", "ar25", "sc25", "sb26", "cd82", "sp80", "bp35", "lf52")
+        _fail_threshold = 5 if _has_game_solver else 1
+        if (self._prev_action_was_plan
+                and not self._is_cipher_game
+                and self._action_type != "click"  # Pure click games: no player movement to detect
                 and self.use_oracle and self._oracle_adapter is not None):
             try:
                 player_entity = self._oracle_adapter.player
@@ -2111,39 +2259,51 @@ class PlannerAgent:
                     if self._prev_player_pos is not None and cur_pos == self._prev_player_pos:
                         # Player didn't move — target cell is blocked
                         self._movement_fail_count += 1
-                        # Determine the step size from the game config
-                        from .game_configs import GAME_CONFIGS
-                        cfg = GAME_CONFIGS.get(self.game_id)
-                        mv_step = 5  # default
-                        if cfg is not None:
-                            game_obj = getattr(self._oracle_adapter, 'game', None)
-                            if game_obj is not None:
-                                cl = getattr(game_obj, 'current_level', None)
-                                if cl is not None and cfg.player_tag is not None:
-                                    ps = cl.get_sprites_by_tag(cfg.player_tag)
-                                    if ps:
-                                        pw = int(getattr(ps[0], 'width', 5))
-                                        ph = int(getattr(ps[0], 'height', 5))
-                                        raw = max(pw, ph)
-                                        if raw > 0:
-                                            mv_step = max(1, int(raw * scale))
-                        # Look at the PREVIOUS action (plan_idx was already incremented)
-                        # The action that was just executed is at plan_idx - 1
-                        if self._plan is not None and self._plan_idx > 0 and self._plan_idx <= len(self._plan):
-                            blocked_action, _ = self._plan[self._plan_idx - 1]
-                            dx, dy = 0, 0
-                            from arcengine import GameAction as _GA
-                            if blocked_action == _GA.ACTION1: dy = -mv_step
-                            elif blocked_action == _GA.ACTION2: dy = mv_step
-                            elif blocked_action == _GA.ACTION3: dx = -mv_step
-                            elif blocked_action == _GA.ACTION4: dx = mv_step
-                            if dx != 0 or dy != 0:
-                                blocked_pos = (cur_pos[0] + dx, cur_pos[1] + dy)
-                                self._danger_walls.add(blocked_pos)
-                        # Invalidate plan to force re-planning with new wall
-                        self._plan = None
-                        self._plan_idx = 0
-                        self._plan_failed = True
+                        # Only invalidate after reaching the failure threshold
+                        if self._movement_fail_count >= _fail_threshold:
+                            # Determine the step size from the game config
+                            try:
+                                from .game_configs import GAME_CONFIGS
+                            except ImportError:
+                                try:
+                                    from src.agent.game_configs import GAME_CONFIGS
+                                except ImportError:
+                                    GAME_CONFIGS = {}
+                            cfg = GAME_CONFIGS.get(self.game_id)
+                            mv_step = 5  # default
+                            if cfg is not None:
+                                game_obj = getattr(self._oracle_adapter, 'game', None)
+                                if game_obj is not None:
+                                    cl = getattr(game_obj, 'current_level', None)
+                                    if cl is not None and cfg.player_tag is not None:
+                                        ps = cl.get_sprites_by_tag(cfg.player_tag)
+                                        if ps:
+                                            pw = int(getattr(ps[0], 'width', 5))
+                                            ph = int(getattr(ps[0], 'height', 5))
+                                            raw = max(pw, ph)
+                                            if raw > 0:
+                                                mv_step = max(1, int(raw * scale))
+                            # Look at the PREVIOUS action (plan_idx was already incremented)
+                            # The action that was just executed is at plan_idx - 1
+                            if self._plan is not None and self._plan_idx > 0 and self._plan_idx <= len(self._plan):
+                                blocked_action, _ = self._plan[self._plan_idx - 1]
+                                dx, dy = 0, 0
+                                from arcengine import GameAction as _GA
+                                if blocked_action == _GA.ACTION1: dy = -mv_step
+                                elif blocked_action == _GA.ACTION2: dy = mv_step
+                                elif blocked_action == _GA.ACTION3: dx = -mv_step
+                                elif blocked_action == _GA.ACTION4: dx = mv_step
+                                if dx != 0 or dy != 0:
+                                    blocked_pos = (cur_pos[0] + dx, cur_pos[1] + dy)
+                                    self._danger_walls.add(blocked_pos)
+                            # Invalidate plan to force re-planning with new wall
+                            self._plan = None
+                            self._plan_idx = 0
+                            self._plan_failed = True
+                            self._movement_fail_count = 0
+                    else:
+                        # Player moved successfully — reset fail counter
+                        self._movement_fail_count = 0
                     self._prev_player_pos = cur_pos
             except (AttributeError, Exception):
                 pass
@@ -2160,6 +2320,7 @@ class PlannerAgent:
                     name = second
                 elif second is None:
                     # New format: keyboard action, no click data
+                    self._pending_click_data = None  # Clear stale click data
                     name = action.name if hasattr(action, 'name') else str(action)
                 elif isinstance(second, (tuple, list)) and len(second) >= 2:
                     # New format: click action with (x, y) data
@@ -2183,18 +2344,195 @@ class PlannerAgent:
             # Sync fallback state
             self._fallback._step = self._step
             action = self._fallback.choose_action(frames, latest_frame)
+            # Safety: for click games, never return ACTION6 without click data
+            if (action in (GameAction.ACTION6, GameAction.ACTION7)
+                    and self._action_type in ("click", "keyboard+click")
+                    and not self._pending_click_data):
+                # Try generic click solver as last resort
+                click_action = self._choose_click_action(frames, latest_frame, grid)
+                if click_action is not None:
+                    action = click_action
+                else:
+                    # Skip click action, use a keyboard action instead
+                    available_kb = [a for a in latest_frame.available_actions
+                                    if a not in (GameAction.ACTION6, GameAction.ACTION7)]
+                    action = available_kb[0] if available_kb else GameAction.ACTION1
             self._action_history.append(self._action_to_int(action))
             self._level_action_history.append(self._action_to_int(action))
             return action
 
         # Ultimate fallback: random action
         available = list(latest_frame.available_actions)
+        # Safety: for click games, filter out ACTION6 if no click data
+        if self._action_type in ("click", "keyboard+click") and not self._pending_click_data:
+            available = [a for a in available if a not in (GameAction.ACTION6, GameAction.ACTION7)]
         if available:
             action = available[0]
         else:
             action = GameAction.ACTION1
         self._action_history.append(self._action_to_int(action))
         return action
+
+    def _dfs_backtrack_plan(self) -> Optional[list]:
+        """P0-4: DFS Backtracking Planner — stack-based DFS with visited set.
+
+        Explores action sequences using depth-first search with backtracking.
+        When a dead end is reached (GAME_OVER, wall, or cycle), the planner
+        backtracks to the most recent branching point and tries an alternative
+        action. This provides a fallback when BFS route planning fails.
+
+        Uses a visited set keyed on state hashes to prevent infinite loops.
+        Maximum depth and iterations bounded to ensure termination.
+
+        Returns:
+            List of (action, name) tuples if a plan is found, None otherwise.
+        """
+        from arcengine import GameAction
+
+        if self._dfs_stack:
+            # Resume from saved DFS state
+            pass
+        else:
+            # Initialize DFS with starting state
+            initial_hash = self._compute_state_hash()
+            if initial_hash is None:
+                return None
+            self._dfs_visited.add(initial_hash)
+            # Get available actions for initial state
+            try:
+                available = list(self._env._game.current_level.available_actions)
+            except (AttributeError, Exception):
+                available = [
+                    GameAction.ACTION1, GameAction.ACTION2,
+                    GameAction.ACTION3, GameAction.ACTION4,
+                ]
+            self._dfs_stack = [(0, [], {a: False for a in available})]
+
+        iterations = 0
+        while self._dfs_stack and iterations < self._dfs_max_iterations:
+            iterations += 1
+            depth, action_seq, tried = self._dfs_stack[-1]
+
+            if depth >= self._dfs_max_depth:
+                # Max depth reached — backtrack
+                self._dfs_stack.pop()
+                continue
+
+            # Find next untried action at this level
+            next_action = None
+            for a in tried:
+                if not tried[a]:
+                    tried[a] = True
+                    next_action = a
+                    break
+
+            if next_action is None:
+                # All actions tried at this depth — backtrack
+                self._dfs_stack.pop()
+                continue
+
+            # Simulate the action (oracle mode only)
+            if not self.use_oracle or self._oracle_adapter is None:
+                return None
+
+            try:
+                # Check if this action leads to danger
+                player_entity = self._oracle_adapter.player
+                if player_entity is not None:
+                    grid_size = self._oracle_adapter.grid_size
+                    scale = 64.0 / float(grid_size) if grid_size > 0 else 1.0
+                    cur_pos = (int(player_entity.x * scale), int(player_entity.y * scale))
+
+                    # Predict next position
+                    from arcengine import GameAction as _GA
+                    dx, dy = 0, 0
+                    mv_step = 5
+                    if next_action == _GA.ACTION1: dy = -mv_step
+                    elif next_action == _GA.ACTION2: dy = mv_step
+                    elif next_action == _GA.ACTION3: dx = -mv_step
+                    elif next_action == _GA.ACTION4: dx = mv_step
+
+                    next_pos = (cur_pos[0] + dx, cur_pos[1] + dy)
+
+                    # Skip if leads to danger wall
+                    if next_pos in self._danger_walls:
+                        continue
+
+                    # Skip if already visited
+                    state_hash = f"{next_pos[0]},{next_pos[1]}"
+                    if state_hash in self._dfs_visited:
+                        continue
+
+                    self._dfs_visited.add(state_hash)
+
+                    # Build new action sequence
+                    new_seq = action_seq + [(next_action, f"dfs_d{depth}")]
+                    new_available = [
+                        GameAction.ACTION1, GameAction.ACTION2,
+                        GameAction.ACTION3, GameAction.ACTION4,
+                    ]
+                    self._dfs_stack.append(
+                        (depth + 1, new_seq, {a: False for a in new_available})
+                    )
+
+                    # Check if this sequence reaches a goal
+                    goals = []
+                    if hasattr(self._oracle_adapter, 'game'):
+                        game = self._oracle_adapter.game
+                        if hasattr(game, 'current_level'):
+                            cl = game.current_level
+                            if hasattr(cl, 'get_sprites_by_tag'):
+                                try:
+                                    goals = cl.get_sprites_by_tag('goal')
+                                except Exception:
+                                    pass
+
+                    if goals:
+                        for g in goals:
+                            gx = int(getattr(g, 'x', 0) * scale)
+                            gy = int(getattr(g, 'y', 0) * scale)
+                            if abs(gx - next_pos[0]) < mv_step and abs(gy - next_pos[1]) < mv_step:
+                                # Goal reached!
+                                print(
+                                    f"    [DFS-BACKTRACK] Found plan: "
+                                    f"{len(new_seq)} actions, {iterations} iterations"
+                                )
+                                self._dfs_stack.clear()
+                                self._dfs_visited.clear()
+                                return new_seq
+
+            except (AttributeError, Exception):
+                continue
+
+        # DFS exhausted without finding goal
+        print(
+            f"    [DFS-BACKTRACK] No plan found after {iterations} iterations, "
+            f"stack depth={len(self._dfs_stack)}"
+        )
+        self._dfs_stack.clear()
+        self._dfs_visited.clear()
+        return None
+
+    def _compute_state_hash(self) -> Optional[str]:
+        """Compute a hash of the current game state for DFS visited tracking.
+
+        Returns:
+            State hash string, or None if state cannot be determined.
+        """
+        if self.use_oracle and self._oracle_adapter is not None:
+            try:
+                player = self._oracle_adapter.player
+                if player is not None:
+                    return f"o:{int(player.x)},{int(player.y)}"
+            except (AttributeError, Exception):
+                pass
+
+        if self._grid_perception is not None:
+            pos = self._grid_perception.get_player_pixel_pos()
+            if pos is not None:
+                return f"g:{pos[0]},{pos[1]}"
+
+        return None
 
     def _plan_level(self) -> None:
         """Plan the current level using game introspection + route optimization.
@@ -2218,6 +2556,16 @@ class PlannerAgent:
                 and not isinstance(self._oracle_adapter, LS20Adapter)):
             max_attempts = 30
         if self._plan_attempt >= max_attempts:
+            # P0-4: Try DFS backtracking before giving up
+            if (self._rhae_backtrack_count > 0
+                    or self._current_strategy_idx >= len(self._level_plan_strategies) - 1):
+                dfs_plan = self._dfs_backtrack_plan()
+                if dfs_plan is not None:
+                    self._plan = dfs_plan
+                    self._plan_idx = 0
+                    self._plan_failed = False
+                    return
+
             print(
                 f"    [CIRCUIT BREAKER] {self._plan_attempt} plan attempts "
                 f"exhausted, switching to fallback"
@@ -2431,6 +2779,12 @@ class PlannerAgent:
                 self._plan = game_specific_plan
                 self._plan_idx = 0
                 self._plan_failed = False
+                # Clear any pending click solution so it doesn't interrupt
+                self._click_solution = None
+                self._click_solution_idx = 0
+                self._click_solve_attempted = False
+                if hasattr(self, '_solution_wait_counter'):
+                    self._solution_wait_counter = 0
                 level_idx = adapter.level_index
                 baseline = (
                     self.level_baselines[level_idx]
@@ -2447,8 +2801,8 @@ class PlannerAgent:
                 )
                 return
             elif game_specific_plan is not None and len(game_specific_plan) == 0:
-                # Empty plan means already solved
-                return
+                # Empty plan means solver failed - fall through to generic BFS
+                pass
             # If solver returned None, fall through to generic BFS
 
         level_idx = adapter.level_index
@@ -2555,7 +2909,7 @@ class PlannerAgent:
         )
 
         # For click games, click data must be in 64-grid (observation) coordinates.
-        if self._action_type in ("click", "keyboard_click"):
+        if self._action_type in ("click", "keyboard+click"):
             for g in goal_entities:
                 gx = int(g.x * scale)
                 gy = int(g.y * scale)
@@ -4027,6 +4381,66 @@ class PlannerAgent:
         )
         return expected_targets
 
+    def _game_to_display_coords(
+        self,
+        game: Any,
+        x: int,
+        y: int,
+        w: int = 1,
+        h: int = 1,
+    ) -> tuple[int, int]:
+        """Convert game coordinates to display coordinates (0-63).
+
+        Uses the game's camera to compute the correct display position,
+        accounting for non-square cameras, camera offsets, and padding.
+
+        Args:
+            game: The game object (must have a ``camera`` attribute).
+            x: Game x coordinate.
+            y: Game y coordinate.
+            w: Sprite width in game units (default 1).
+            h: Sprite height in game units (default 1).
+
+        Returns:
+            (display_x, display_y) in 0-63, targeting the center.
+        """
+        cam = getattr(game, "camera", None)
+        if cam is None:
+            # Fallback: simple linear scaling using adapter grid_size
+            gs = self._oracle_adapter.grid_size or 32 if self._oracle_adapter else 32
+            sc = 64.0 / float(gs) if gs > 0 else 2.0
+            dx = int(x * sc + sc / 2)
+            dy = int(y * sc + sc / 2)
+            return (max(0, min(63, dx)), max(0, min(63, dy)))
+
+        cam_w = int(getattr(cam, "width", 64))
+        cam_h = int(getattr(cam, "height", 64))
+        cam_x = int(getattr(cam, "x", 0))
+        cam_y = int(getattr(cam, "y", 0))
+
+        # Scale: display pixels per game pixel (integer)
+        scale_w = int(64 / cam_w) if cam_w > 0 else 1
+        scale_h = int(64 / cam_h) if cam_h > 0 else 1
+        scale = max(1, min(scale_w, scale_h))
+
+        # Padding to center the game view in the 64x64 display
+        x_pad = (64 - cam_w * scale) // 2
+        y_pad = (64 - cam_h * scale) // 2
+
+        # Sprite center in game coordinates
+        center_gx = x + w // 2
+        center_gy = y + h // 2
+
+        # Convert to display coordinates
+        disp_x = (center_gx - cam_x) * scale + x_pad
+        disp_y = (center_gy - cam_y) * scale + y_pad
+
+        # Clamp to valid display range
+        disp_x = max(0, min(63, disp_x))
+        disp_y = max(0, min(63, disp_y))
+
+        return (disp_x, disp_y)
+
     def _solve_click_puzzle(self) -> Optional[list[dict]]:
         """Analytically solve click puzzles by reading game state.
 
@@ -4055,9 +4469,6 @@ class PlannerAgent:
         if game is None:
             return None
 
-        gs = self._oracle_adapter.grid_size or 32
-        sc = 64.0 / float(gs) if gs > 0 else 2.0
-
         # =========================================================
         # SIMPLE STRATEGY: click_target_tag from config
         # =========================================================
@@ -4072,8 +4483,9 @@ class PlannerAgent:
                     for s in target_sprites:
                         sx = int(getattr(s, 'x', 0))
                         sy = int(getattr(s, 'y', 0))
-                        dx = int(sx * sc + sc / 2)
-                        dy = int(sy * sc + sc / 2)
+                        sw = int(getattr(s, 'width', 1))
+                        sh = int(getattr(s, 'height', 1))
+                        dx, dy = self._game_to_display_coords(game, sx, sy, sw, sh)
                         if 0 <= dx < 64 and 0 <= dy < 64:
                             solution.append({"x": dx, "y": dy})
                     if solution:
@@ -4300,6 +4712,13 @@ class PlannerAgent:
                             break
 
                     # Step 4: Build solution from clicks_needed
+                    # Compute scale factor from camera (game coords → display coords)
+                    cam = getattr(game, "camera", None)
+                    if cam is not None:
+                        cam_w = int(getattr(cam, "width", 16))
+                        sc = 64.0 / max(1, cam_w)
+                    else:
+                        sc = 4.0  # default for ft09-like games (16x16 grid → 64x64 display)
                     solution: list[dict] = []
                     for (hx, hy), n_clicks in sorted(clicks_needed.items()):
                         if n_clicks == 0:
@@ -4399,8 +4818,7 @@ class PlannerAgent:
             clicks_needed = (best_target - sc_color) % num_colors
             if clicks_needed == 0:
                 continue  # Already correct color
-            dx = int(sx * sc + sc / 2)
-            dy = int(sy * sc + sc / 2)
+            dx, dy = self._game_to_display_coords(game, sx, sy)
             if 0 <= dx < 64 and 0 <= dy < 64:
                 # FIX: Only add click ONCE per sprite!
                 # The game will handle color cycling on each click.
@@ -4546,14 +4964,14 @@ class PlannerAgent:
                 try:
                     valid = game._get_valid_clickable_actions()
                     if valid:
-                        gs = self._oracle_adapter.grid_size or 32
-                        sc = 64.0 / float(gs) if gs > 0 else 2.0
                         for sprite in valid:
                             sx = getattr(sprite, 'x', None)
                             sy = getattr(sprite, 'y', None)
                             if sx is not None and sy is not None:
-                                dx = int(sx * sc + sc / 2)
-                                dy = int(sy * sc + sc / 2)
+                                sw = int(getattr(sprite, 'width', 1))
+                                sh = int(getattr(sprite, 'height', 1))
+                                dx, dy = self._game_to_display_coords(
+                                    game, int(sx), int(sy), sw, sh)
                                 if 0 <= dx < 64 and 0 <= dy < 64:
                                     clickable.append((dx, dy))
                 except (AttributeError, TypeError, Exception):
@@ -4564,13 +4982,21 @@ class PlannerAgent:
                 and not isinstance(self._oracle_adapter, LS20Adapter)):
             goal_entities = self._oracle_adapter.goals
             if goal_entities:
-                gs = self._oracle_adapter.grid_size or 32
-                sc = 64.0 / float(gs) if gs > 0 else 2.0
-                clickable = [
-                    (int(g.x * sc + sc / 2), int(g.y * sc + sc / 2))
-                    for g in goal_entities
-                    if hasattr(g, 'x') and hasattr(g, 'y')
-                ]
+                game = getattr(self._oracle_adapter, 'game', None)
+                for g in goal_entities:
+                    if hasattr(g, 'x') and hasattr(g, 'y'):
+                        gw = int(getattr(g, 'width', 1))
+                        gh = int(getattr(g, 'height', 1))
+                        if game is not None:
+                            dx, dy = self._game_to_display_coords(
+                                game, int(g.x), int(g.y), gw, gh)
+                        else:
+                            gs = self._oracle_adapter.grid_size or 32
+                            sc = 64.0 / float(gs) if gs > 0 else 2.0
+                            dx = int(g.x * sc + sc / 2)
+                            dy = int(g.y * sc + sc / 2)
+                        if 0 <= dx < 64 and 0 <= dy < 64:
+                            clickable.append((dx, dy))
 
         # Strategy C: Grid perception
         if not clickable and grid is not None and self._grid_perception is not None:
@@ -4736,6 +5162,7 @@ class PlannerAgent:
         self._plan_failed = False
         self._using_fallback = False
         self._fallback = None
+        self._plan_exhaustion_count = 0
         self.danger_memory.clear_history()
 
         # Clear danger walls on level change (danger positions from previous
@@ -4758,6 +5185,17 @@ class PlannerAgent:
             self._click_stagnation = 0
         if hasattr(self, '_click_grid_states'):
             self._click_grid_states.clear()
+
+        # P0-2/P0-3: Reset frame filter and RHAE circuit breaker state
+        self._prev_grid = None
+        self._static_frame_skip_count = 0
+        self._rhae_efficiency_history.clear()
+        self._rhae_backtrack_count = 0
+        self._current_strategy_idx = 0
+
+        # P0-4: Reset DFS backtracking state
+        self._dfs_stack.clear()
+        self._dfs_visited.clear()
 
     def _action_to_int(self, action) -> int:
         """Convert GameAction to integer ID.

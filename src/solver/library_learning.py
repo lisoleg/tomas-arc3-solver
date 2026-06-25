@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from pathlib import Path
 from typing import Any
@@ -143,6 +144,20 @@ class LibraryLearning:
         self.persistence_path: str = config.get("persistence_path", "library.json")
         self.max_abstractions: int = config.get("max_abstractions", 200)
         self._pattern_counts: dict[str, int] = {}
+
+        # P1-5: Adaptive Sleep-Step Budget parameters
+        # B = B_base + α * MDL(prog) + β * log2(freq(prog) + 1)
+        # Higher MDL programs and more frequent patterns get larger budgets,
+        # allowing the system to invest more search effort where it matters.
+        self._budget_base: int = config.get("budget_base", 10)
+        self._budget_alpha: float = config.get("budget_alpha", 0.5)  # MDL weight
+        self._budget_beta: float = config.get("budget_beta", 2.0)  # frequency weight
+
+        # P1-6: AST Width Control parameters
+        # W(d) = W_max * exp(-λ*d) — shallower depths get more candidates
+        self._ast_width_max: int = config.get("ast_width_max", 100)
+        self._ast_lambda: float = config.get("ast_lambda", 0.5)  # decay rate
+
         self.load()
 
     def extract_patterns(
@@ -325,6 +340,12 @@ class LibraryLearning:
     ) -> list[tuple[str, ProgramNode]]:
         """Recursively extract sub-expressions from ProgramNode AST.
 
+        P1-6: AST Width Control — limits the number of sub-expressions
+        extracted at each depth level using an exponential decay function:
+            W(d) = W_max * exp(-λ * d)
+        Shallower depths (more important patterns) get wider extraction,
+        while deeper depths (less likely to be useful) are pruned aggressively.
+
         Traverses the program tree and extracts all chain-composition
         subtrees (the most common composition type in ARC solving).
         Each subtree is assigned a canonical hash for cross-program
@@ -339,11 +360,19 @@ class LibraryLearning:
             a JSON string of the subtree structure for dedup.
         """
         result: list[tuple[str, ProgramNode]] = []
+        # P1-6: Track extraction count per depth for width control
+        depth_counts: dict[int, int] = {}
 
         def _extract(node: ProgramNode, depth: int) -> None:
-            """Recursively extract chain subtrees."""
+            """Recursively extract chain subtrees with width control."""
             if depth > max_ast_depth:
                 return
+
+            # P1-6: Check width budget for this depth
+            width_limit = self._ast_width_at_depth(depth)
+            current_count = depth_counts.get(depth, 0)
+            if current_count >= width_limit:
+                return  # Width budget exhausted for this depth
 
             # Extract chain subtrees (most common composition type)
             if node.combo_type == "chain" and node.children:
@@ -354,6 +383,7 @@ class LibraryLearning:
                 except Exception:
                     canonical_hash = repr(node.to_dict())
                 result.append((canonical_hash, node.clone()))
+                depth_counts[depth] = current_count + 1
 
             # Recurse into children
             for child in node.children:
@@ -361,6 +391,23 @@ class LibraryLearning:
 
         _extract(program, 0)
         return result
+
+    def _ast_width_at_depth(self, depth: int) -> int:
+        """P1-6: Compute AST extraction width limit at a given depth.
+
+        Uses exponential decay: W(d) = W_max * exp(-λ * d)
+        At depth 0: W = W_max (full width for root-level patterns)
+        At depth 1: W = W_max * exp(-λ) (reduced)
+        At depth 2+: progressively narrower (prune unlikely patterns)
+
+        Args:
+            depth: AST depth level (0 = root).
+
+        Returns:
+            Maximum number of sub-expressions to extract at this depth.
+        """
+        width = int(self._ast_width_max * math.exp(-self._ast_lambda * depth))
+        return max(1, width)  # Always allow at least 1
 
     def compute_mdl_gain(
         self,
@@ -484,13 +531,24 @@ class LibraryLearning:
         # 4. Sort by MDL gain descending
         gains.sort(key=lambda x: x[0], reverse=True)
 
-        # 5. Register top max_new as new DSLElement primitives
+        # P1-5: Adaptive Sleep-Step Budget — compute dynamic max_new
+        # B = B_base + α * MDL(prog) + β * log2(freq(prog) + 1)
+        # Higher MDL and more frequent programs get larger budgets,
+        # investing search effort where it yields the most compression.
+        adaptive_max_new = self._compute_adaptive_budget(
+            solved_programs, gains
+        )
+
+        # Use the smaller of adaptive budget and explicit max_new parameter
+        effective_max_new = min(adaptive_max_new, max_new)
+
+        # 5. Register top effective_max_new as new DSLElement primitives
         new_primitives: list[DSLElement] = []
         
         # TOSAS v3.1: Composite patterns for structural primality check
         composite_patterns = getattr(self, "composite_patterns", None)
         
-        for gain, hash_str, subtree, freq in gains[:max_new]:
+        for gain, hash_str, subtree, freq in gains[:effective_max_new]:
             # TOSAS v3.1: Primality Check — reject "composite" Macros
             if not is_prime_like(subtree, self.get_abstractions(), composite_patterns):
                 # Composite Macro: can be expressed by existing primitives
@@ -526,6 +584,109 @@ class LibraryLearning:
             new_primitives.append(elem)
 
         return new_primitives
+
+    def _compute_adaptive_budget(
+        self,
+        solved_programs: list[ProgramNode],
+        gains: list[tuple[int, str, ProgramNode, int]],
+    ) -> int:
+        """P1-5: Compute adaptive Sleep-Step budget.
+
+        Budget formula:
+            B = B_base + α * MDL(prog) + β * log2(freq(prog) + 1)
+
+        Where:
+        - B_base: minimum budget (always register at least this many)
+        - α * MDL(prog): programs with higher description length get more
+          budget (more complex patterns need more search effort)
+        - β * log2(freq + 1): frequently occurring patterns get logarithmic
+          bonus (diminishing returns for very high frequencies)
+
+        Args:
+            solved_programs: List of solved ProgramNodes.
+            gains: List of (gain, hash, subtree, freq) tuples.
+
+        Returns:
+            Adaptive budget (number of new primitives to register).
+        """
+        if not gains:
+            return self._budget_base
+
+        # Compute average MDL across solved programs
+        total_mdl = 0
+        program_count = 0
+        for prog in solved_programs:
+            try:
+                total_mdl += prog.compute_mdl()
+                program_count += 1
+            except Exception:
+                continue
+
+        avg_mdl = total_mdl / max(program_count, 1)
+
+        # Compute average frequency of top candidates
+        avg_freq = sum(g[3] for g in gains[:10]) / max(min(len(gains), 10), 1)
+
+        # B = B_base + α * MDL + β * log2(freq + 1)
+        budget = (
+            self._budget_base
+            + self._budget_alpha * avg_mdl
+            + self._budget_beta * math.log2(avg_freq + 1)
+        )
+
+        # Clamp to reasonable range
+        return max(1, min(int(budget), self.max_abstractions))
+
+    def sleep_step_warmup(self, warmup_tasks: int = 25) -> None:
+        """Sleep-Step warmup: run on public tasks to build library.json.
+
+        Processes warmup_tasks number of public ARC tasks to extract
+        common patterns and populate the abstraction library.
+        Uses TOSAS primality filter to only keep prime-like patterns.
+
+        Args:
+            warmup_tasks: Number of public tasks to process.
+        """
+        import os
+        import json
+        from pathlib import Path
+
+        print(f"[Sleep-Step] Warming up with {warmup_tasks} public tasks...")
+
+        # Try to load public tasks from data directory
+        data_dir = Path("data")
+        task_files = sorted(data_dir.glob("**/*.json"))[:warmup_tasks]
+
+        if not task_files:
+            print("[Sleep-Step] No public tasks found, skipping warmup")
+            return
+
+        patterns_found = 0
+        for tf in task_files:
+            try:
+                with open(tf, "r", encoding="utf-8") as f:
+                    task_data = json.load(f)
+
+                train = task_data.get("train", [])
+                for pair in train:
+                    inp = pair.get("input", [])
+                    out = pair.get("output", [])
+                    if inp and out:
+                        # Extract patterns from input-output pairs
+                        import numpy as np
+                        inp_arr = np.array(inp, dtype=np.int8)
+                        out_arr = np.array(out, dtype=np.int8)
+
+                        # TOSAS primality filter: only keep prime-like patterns
+                        if self.is_prime_like(inp_arr):
+                            self.add_pattern(inp_arr, out_arr)
+                            patterns_found += 1
+            except Exception:
+                continue
+
+        # Save library
+        self.save_library("library.json")
+        print(f"[Sleep-Step] Warmup complete: {patterns_found} patterns added to library.json")
 
     @staticmethod
     def _make_learned_delegate(subtree: ProgramNode) -> Any:
