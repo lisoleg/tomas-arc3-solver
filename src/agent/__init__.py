@@ -33,6 +33,7 @@ from .oracle_adapters import (
     get_universal_adapter,
 )
 from .universal_oracle_adapter import UniversalOracleAdapter
+from .universal_solver_pipeline import UniversalSolverPipeline
 from .self_learning import (
     AfterActionReview,
     CognitiveRecursiveDynamics,
@@ -77,6 +78,7 @@ __all__ = [
     "TR87Adapter",
     "FT09Adapter",
     "UniversalOracleAdapter",
+    "UniversalSolverPipeline",
     "ADAPTER_REGISTRY",
     "get_oracle_adapter",
     "get_universal_adapter",

@@ -178,6 +178,10 @@ class UniversalOracleAdapter(OracleAdapter):
         self._is_click_game: bool = False
         self._grid_size_value: int = 64
 
+        # Action detection cache
+        self._available_action_ids: list[int] = []
+        self._step_size_value: int = step  # Override with _detect_step_size()
+
         # All discovered tags (for supplementary wall detection)
         self._all_tags: set[str] = set()
 
@@ -379,6 +383,8 @@ class UniversalOracleAdapter(OracleAdapter):
 
         self._collect_all_tags()
         self._detect_grid_size()
+        self._available_action_ids = self._detect_available_actions()
+        self._step_size_value = self._detect_step_size()
         self._detect_game_type()
         self._discovered = True
 
@@ -865,16 +871,49 @@ class UniversalOracleAdapter(OracleAdapter):
 
         Player detection priority:
         1. Frame tracking: the sprite that moved between frames
-        2. Single sprite not at (0,0) with unique tags
-        3. First element of a list with '_parts' in attr name
-        4. The only single sprite (if exactly one exists)
-        5. First element of the smallest non-wall list
+        2. Common player attribute names (_player, _controlled, etc.)
+        3. Single sprite not at (0,0) with unique tags
+        4. First element of a list with '_parts' in attr name
+        5. The only single sprite (if exactly one exists)
+        6. First element of the smallest non-wall list
+        7. For click games: player may not exist (no movement needed)
         """
         # 1. Frame tracking (if already initialized)
         if self._player_found_via_tracking and self._player_attr is not None:
             return
 
-        # 2. Single sprite not at (0,0) with unique tags
+        # 2. Common player attribute names
+        common_player_attrs = [
+            '_player', '_controlled', '_active_sprite',
+            'player', 'controlled_sprite', 'active_sprite',
+            'plnqvukupu',  # sc25 player
+            'qnnpcoyzd',   # dc22 player
+            'gudziatsk',   # ls20 player
+            'wbmdvjhthc',  # wa30 player (tag-based, also an attr)
+            'qftsebtxuc',  # g50t player (tag-based)
+        ]
+        for attr_name in common_player_attrs:
+            val = getattr(self.game, attr_name, None)
+            if val is not None and not isinstance(val, (list, dict, set, tuple)):
+                if self._has_xy(val):
+                    self._player_attr = attr_name
+                    self._player_is_list = False
+                    return
+            # Also check if it's a list with 1-3 sprites
+            if isinstance(val, list) and len(val) > 0 and len(val) <= 3:
+                if self._has_xy(val[0]):
+                    self._player_attr = attr_name
+                    self._player_is_list = True
+                    self._player_list_idx = 0
+                    return
+
+        # 2b. Check for click games: player may not exist
+        if self._is_click_game:
+            # In click-only games (actions = [6]), there may be no player
+            # sprite at all. Return without setting player_attr (None).
+            return
+
+        # 3. Single sprite not at (0,0) with unique tags
         for ss in self._single_sprites:
             if ss.x != 0 or ss.y != 0:
                 # Check if tags are unique (not shared with wall lists)
@@ -890,7 +929,7 @@ class UniversalOracleAdapter(OracleAdapter):
                         self._player_is_list = False
                         return
 
-        # 3. List with '_parts' in attr name (like TR87's qvtymdcqear_parts)
+        # 4. List with '_parts' in attr name (like TR87's qvtymdcqear_parts)
         for sl in self._sprite_lists:
             if '_parts' in sl.attr_name.lower() and sl.attr_name not in self._wall_attrs:
                 self._player_attr = sl.attr_name
@@ -898,14 +937,14 @@ class UniversalOracleAdapter(OracleAdapter):
                 self._player_list_idx = 0
                 return
 
-        # 4. Only single sprite
+        # 5. Only single sprite
         if len(self._single_sprites) == 1:
             ss = self._single_sprites[0]
             self._player_attr = ss.attr_name
             self._player_is_list = False
             return
 
-        # 5. Smallest non-wall list (likely player parts)
+        # 6. Smallest non-wall list (likely player parts)
         non_wall_lists = [
             sl for sl in self._sprite_lists
             if sl.attr_name not in self._wall_attrs and sl.count <= 3
@@ -918,7 +957,7 @@ class UniversalOracleAdapter(OracleAdapter):
             self._player_list_idx = 0
             return
 
-        # 6. Any single sprite (even at origin)
+        # 7. Any single sprite (even at origin)
         if self._single_sprites:
             self._player_attr = self._single_sprites[0].attr_name
             self._player_is_list = False
@@ -927,10 +966,13 @@ class UniversalOracleAdapter(OracleAdapter):
         """Classify goal entities using heuristics.
 
         Goal detection priority:
-        1. Small sprite lists (1-GOAL_LIST_MAX_SIZE) not walls
-        2. Lists with click-related tags ('sys_click', 'click')
-        3. Lists with goal-related tag keywords
-        4. Single sprites with click tags (excluding player)
+        1. sys_click tagged sprites (in click games, these are the targets)
+        2. Common goal attribute names (_exit, _goal, _target, etc.)
+        3. Small sprite lists (1-GOAL_LIST_MAX_SIZE) not walls
+        4. Lists with click-related tags ('sys_click', 'click')
+        5. Lists with goal-related tag keywords
+        6. Single sprites with click tags (excluding player)
+        7. In keyboard games: small sprites far from player are likely goals
         """
         used_attrs: set[str] = set(self._wall_attrs)
         if self._player_attr is not None:
@@ -938,7 +980,37 @@ class UniversalOracleAdapter(OracleAdapter):
         # Exclude switchers (classified before goals)
         used_attrs.update(self._switcher_attrs)
 
-        # 1. Small non-wall, non-switcher lists
+        # 1. sys_click tagged sprites (click games — these ARE the targets)
+        for sl in self._sprite_lists:
+            if sl.attr_name in used_attrs:
+                continue
+            for tag in sl.sample_tags:
+                if tag.lower() == 'sys_click' or tag == 'sys_click':
+                    self._goal_attrs.append(sl.attr_name)
+                    used_attrs.add(sl.attr_name)
+                    break
+
+        # 2. Common goal attribute names
+        common_goal_attrs = [
+            '_exit', '_goal', '_target', '_destination',
+            'exit', 'goal', 'target', 'destination',
+            'hfuqkxulm',   # dc22 target
+            '0015msvpvzxhqf',  # tu93 exit
+            'gilbljmfbc',  # g50t goal
+        ]
+        for attr_name in common_goal_attrs:
+            val = getattr(self.game, attr_name, None)
+            if val is not None:
+                if isinstance(val, list) and len(val) > 0:
+                    if attr_name not in used_attrs:
+                        self._goal_attrs.append(attr_name)
+                        used_attrs.add(attr_name)
+                elif self._has_xy(val):
+                    if attr_name not in used_attrs:
+                        self._goal_attrs.append(attr_name)
+                        used_attrs.add(attr_name)
+
+        # 3. Small non-wall, non-switcher lists
         for sl in self._sprite_lists:
             if sl.attr_name in used_attrs:
                 continue
@@ -946,7 +1018,7 @@ class UniversalOracleAdapter(OracleAdapter):
                 self._goal_attrs.append(sl.attr_name)
                 used_attrs.add(sl.attr_name)
 
-        # 2. Lists with click-related tags
+        # 4. Lists with click-related tags
         for sl in self._sprite_lists:
             if sl.attr_name in used_attrs:
                 continue
@@ -957,7 +1029,7 @@ class UniversalOracleAdapter(OracleAdapter):
                     used_attrs.add(sl.attr_name)
                     break
 
-        # 3. Lists with goal-related tag keywords
+        # 5. Lists with goal-related tag keywords
         for sl in self._sprite_lists:
             if sl.attr_name in used_attrs:
                 continue
@@ -968,7 +1040,7 @@ class UniversalOracleAdapter(OracleAdapter):
                     used_attrs.add(sl.attr_name)
                     break
 
-        # 4. Single sprites with click tags (excluding player)
+        # 6. Single sprites with click tags (excluding player)
         for ss in self._single_sprites:
             if ss.attr_name == self._player_attr:
                 continue
@@ -978,6 +1050,25 @@ class UniversalOracleAdapter(OracleAdapter):
                     # Store as a goal attr (read from single sprite)
                     self._goal_attrs.append(ss.attr_name)
                     break
+
+        # 7. In keyboard games: sprites far from player that are small
+        if not self._is_click_game and self._player_attr is not None:
+            try:
+                player_entity = self._read_player()
+                if player_entity is not None:
+                    player_pos = (player_entity.x, player_entity.y)
+                    for ss in self._single_sprites:
+                        if ss.attr_name in used_attrs:
+                            continue
+                        if ss.attr_name == self._player_attr:
+                            continue
+                        dist = abs(ss.x - player_pos[0]) + abs(ss.y - player_pos[1])
+                        # Small sprites far from player could be goals
+                        if dist > 6 and 1 <= ss.x <= 60 and 1 <= ss.y <= 60:
+                            self._goal_attrs.append(ss.attr_name)
+                            used_attrs.add(ss.attr_name)
+            except Exception:
+                pass
 
     def _classify_switchers(self) -> None:
         """Classify switcher entities using heuristics.
@@ -1124,14 +1215,188 @@ class UniversalOracleAdapter(OracleAdapter):
         else:
             self._grid_size_value = 64
 
+    def _detect_available_actions(self) -> list[int]:
+        """Detect available action IDs from game introspection.
+
+        Extracts action IDs by calling multiple detection methods:
+        1. _get_valid_actions() — primary, works for most games
+        2. _get_valid_clickable_actions() — fallback for multi-step click games
+        3. game.actions attribute — fallback for grid-based click games
+
+        This is critical for game type detection: click-only games
+        typically only have ACTION6 (id=6), while keyboard games have
+        ACTION1-4 (id=1-4). Some games (s5i5/ft09) return None from
+        _get_valid_actions but have clickable_actions or actions attrs.
+
+        Returns:
+            List of unique available action IDs (ints), or empty list if
+            all detection methods fail.
+        """
+        action_ids: list[int] = []
+        seen_ids: set[int] = set()
+
+        def _extract_action_id(ai: Any) -> Optional[int]:
+            """Extract int action ID from an ActionInput, handling GameAction enum."""
+            aid = getattr(ai, 'id', None)
+            if aid is None:
+                return None
+            # GameAction is a regular Enum (not IntEnum).
+            # int(GameAction.ACTION6) raises TypeError;
+            # use .value attribute instead.
+            if hasattr(aid, 'value'):
+                try:
+                    return int(aid.value)
+                except (TypeError, ValueError):
+                    return None
+            else:
+                try:
+                    return int(aid)
+                except (TypeError, ValueError):
+                    return None
+
+        # Method 1: _get_valid_actions (primary)
+        try:
+            actions = self.game._get_valid_actions()
+            if actions is not None:
+                for ai in actions:
+                    aid_val = _extract_action_id(ai)
+                    if aid_val is not None and aid_val not in seen_ids:
+                        seen_ids.add(aid_val)
+                        action_ids.append(aid_val)
+        except (AttributeError, TypeError, Exception):
+            pass
+
+        # Method 2: _get_valid_clickable_actions (fallback for multi-step click games)
+        if not action_ids:
+            try:
+                click_actions = self.game._get_valid_clickable_actions()
+                if click_actions is not None and len(click_actions) > 0:
+                    for ai in click_actions:
+                        aid_val = _extract_action_id(ai)
+                        if aid_val is not None and aid_val not in seen_ids:
+                            seen_ids.add(aid_val)
+                            action_ids.append(aid_val)
+            except (AttributeError, TypeError, Exception):
+                pass
+
+        # Method 3: game.actions attribute (fallback for grid-based click games)
+        if not action_ids:
+            try:
+                actions_attr = self.game.actions
+                if actions_attr is not None and len(actions_attr) > 0:
+                    for ai in actions_attr:
+                        aid_val = _extract_action_id(ai)
+                        if aid_val is not None and aid_val not in seen_ids:
+                            seen_ids.add(aid_val)
+                            action_ids.append(aid_val)
+            except (AttributeError, TypeError, Exception):
+                pass
+
+        return sorted(action_ids)
+
+    def _detect_step_size(self) -> int:
+        """Detect the game's step size from game attributes.
+
+        Scans game attributes and its module for common step-size
+        variable names used in ARC-AGI-3 games. The step size determines
+        how many pixels a keyboard action moves the player per step.
+
+        Known obfuscated step-size variable names:
+            - celomdfhbh (used by several games)
+            - MOVE_STEP
+            - step_size, _step_size
+            - hwthhtvyki (used by tu93)
+            - jarvstobjt (used by g50t)
+            - ndiyvmxxey (used by dc22)
+
+        Returns:
+            Detected step size, or 5 (default most common).
+        """
+        import sys as _sys
+
+        # Priority list of known step-size attribute names (obfuscated + common)
+        step_attr_names = [
+            'celomdfhbh', 'MOVE_STEP', 'step_size', '_step_size',
+            'hwthhtvyki', 'jarvstobjt', 'ndiyvmxxey',
+            'gisrhqpee',  # LS20 step
+        ]
+
+        # 1. Check game instance attributes
+        for attr_name in step_attr_names:
+            val = getattr(self.game, attr_name, None)
+            # bool is subclass of int in Python; filter it out.
+            if isinstance(val, int) and not isinstance(val, bool) and val > 0 and val <= 64:
+                return val
+
+        # 2. Check game module-level constants
+        try:
+            game_module = _sys.modules.get(type(self.game).__module__, None)
+            if game_module is not None:
+                for attr_name in step_attr_names:
+                    val = getattr(game_module, attr_name, None)
+                    # bool is subclass of int in Python; filter it out.
+                    if isinstance(val, int) and not isinstance(val, bool) and val > 0 and val <= 64:
+                        return val
+        except Exception:
+            pass
+
+        # 3. Heuristic: scan all game int attrs for likely step values
+        common_steps = {1, 2, 3, 4, 5, 6, 8, 10, 16, 32}
+        try:
+            for attr_name in dir(self.game):
+                if attr_name.startswith('__'):
+                    continue
+                try:
+                    val = getattr(self.game, attr_name)
+                except Exception:
+                    continue
+                if isinstance(val, int) and not isinstance(val, bool) and val in common_steps:
+                    # Lower values are more likely step sizes than grid dims
+                    if val <= 6:
+                        return val
+        except Exception:
+            pass
+
+        # Default: 5 is the most empirically common step size
+        return 5
+
     def _detect_game_type(self) -> None:
         """Detect if this is a click-based or keyboard-based game.
 
-        A game is classified as click-based if:
-        1. No wall lists are found, AND
-        2. Goal sprites have click-related tags, OR
-        3. There are very few walls and many clickable-looking sprites.
+        Uses multiple signals:
+        1. Available action IDs from _get_valid_actions():
+           - Only ACTION6 (id=6) → click-only game
+           - ACTION1-4 (ids 1-4) → keyboard game
+           - Both → keyboard+click hybrid
+        2. Heuristic signals (wall presence, click tags) as fallback
         """
+        # Signal 1: Action-based detection (most reliable)
+        action_ids = self._detect_available_actions()
+        has_keyboard = any(aid in {1, 2, 3, 4} for aid in action_ids)
+        has_click = 6 in action_ids
+
+        if action_ids:
+            if has_click and not has_keyboard:
+                # Only ACTION6 → click-only game
+                self._is_click_game = True
+                return
+            elif has_keyboard:
+                # Has keyboard actions → keyboard game (may also have click)
+                self._is_click_game = False
+                return
+
+        # Signal 2: Check if game has _get_valid_clickable_actions() method
+        # Games like s5i5/ft09/cn04 have this method even when
+        # _get_valid_actions() returns None, indicating click-based games
+        if not action_ids:
+            has_clickable_method = hasattr(self.game, '_get_valid_clickable_actions')
+            has_placeble_method = hasattr(self.game, '_get_valid_placeble_actions')
+            # If both clickable & placeble methods exist → click game
+            if has_clickable_method or has_placeble_method:
+                self._is_click_game = True
+                return
+
+        # Signal 3: Heuristic fallback (original logic)
         has_walls = len(self._wall_attrs) > 0 or len(self._wall_tag_sprites) > 0
         has_click_tags = False
 
@@ -1262,9 +1527,11 @@ class UniversalOracleAdapter(OracleAdapter):
             sprite: The sprite object with x, y attributes.
 
         Returns:
-            GameEntity, or None if conversion fails.
+            GameEntity with width/height, or None if conversion fails.
         """
         try:
+            w = int(getattr(sprite, 'width', 1))
+            h = int(getattr(sprite, 'height', 1))
             return GameEntity(
                 x=int(sprite.x),
                 y=int(sprite.y),
@@ -1272,6 +1539,8 @@ class UniversalOracleAdapter(OracleAdapter):
                 name=getattr(sprite, 'name', ''),
                 grid_x=int(sprite.x),
                 grid_y=int(sprite.y),
+                width=w,
+                height=h,
             )
         except (AttributeError, TypeError, ValueError):
             return None

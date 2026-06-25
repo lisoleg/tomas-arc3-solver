@@ -59,6 +59,8 @@ class GameEntity:
         grid_x: Grid-aligned x position (may differ from x if grid
             origin is not 0).
         grid_y: Grid-aligned y position.
+        width: Sprite width in pixels (default 1 for minimal sprites).
+        height: Sprite height in pixels (default 1 for minimal sprites).
     """
 
     x: int
@@ -67,6 +69,8 @@ class GameEntity:
     name: str = ""
     grid_x: int = 0
     grid_y: int = 0
+    width: int = 1
+    height: int = 1
 
 
 # ============================================================================
@@ -179,9 +183,11 @@ class OracleAdapter:
             step: Override step size for grid alignment.
 
         Returns:
-            GameEntity with position and tag information.
+            GameEntity with position, tag, and size information.
         """
         s = step if step is not None else self.step
+        w = int(getattr(sprite, 'width', 1))
+        h = int(getattr(sprite, 'height', 1))
         return GameEntity(
             x=sprite.x,
             y=sprite.y,
@@ -189,6 +195,8 @@ class OracleAdapter:
             name=sprite.name if hasattr(sprite, 'name') else "",
             grid_x=sprite.x,
             grid_y=sprite.y,
+            width=w,
+            height=h,
         )
 
     def _get_sprite_list(self, attr_name: str) -> list:
@@ -238,6 +246,8 @@ class LS20Adapter(OracleAdapter):
         if hasattr(self.game, 'gudziatsk'):
             p = self.game.gudziatsk
             step = getattr(self.game, 'gisrhqpee', 5)
+            w = int(getattr(p, 'width', 1))
+            h = int(getattr(p, 'height', 1))
             return GameEntity(
                 x=p.x,
                 y=p.y,
@@ -245,6 +255,8 @@ class LS20Adapter(OracleAdapter):
                 name=getattr(p, 'name', ''),
                 grid_x=p.x,
                 grid_y=p.y,
+                width=w,
+                height=h,
             )
         return None
 

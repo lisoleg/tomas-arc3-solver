@@ -1553,37 +1553,352 @@ def solve_s5i5(game: Any, level_idx: int) -> list | None:
 # TN36 Solver: Engine-delegated click game
 # ============================================================================
 
-def solve_tn36(game: Any, level_idx: int) -> list | None:
-    """Solve TN36: Click game with engine-delegated logic.
+def _tn36_internal_state_hash(game: Any) -> str:
+    """TN36-specific state hash that captures the deeply nested win condition.
 
-    Game mechanics:
+    The win condition checks:
+        htntnzkbzu.x == aqszntqeae.x AND htntnzkbzu.y == aqszntqeae.y
+        AND htntnzkbzu.scale == aqszntqeae.scale AND htntnzkbzu.rotation == aqszntqeae.rotation
+        AND htntnzkbzu.sjmtdfxdrc == aqszntqeae.sjmtdfxdrc
+
+    This requires hashing properties 3 levels deep:
+        game.fdksqlmpki.bzirenxmrg.htntnzkbzu
+        game.fdksqlmpki.bzirenxmrg.aqszntqeae
+    """
+    import hashlib
+
+    fdksqlmpki = getattr(game, "fdksqlmpki", None)
+    if fdksqlmpki is None:
+        return hashlib.md5("no_fdksqlmpki".encode()).hexdigest()
+
+    parts = []
+
+    # Program index and step counter
+    jwmpcflifn = getattr(fdksqlmpki, "jwmpcflifn", 0)
+    parts.append(f"prog:{jwmpcflifn}")
+
+    lmkazecqdh_obj = getattr(game, "lmkazecqdh", None)
+    if lmkazecqdh_obj is not None:
+        step_count = getattr(lmkazecqdh_obj, "lmkazecqdh", 0)
+        parts.append(f"step:{step_count}")
+
+    # Animation queue state
+    pxbksnibsu = getattr(fdksqlmpki, "pxbksnibsu", [])
+    parts.append(f"anim:{len(pxbksnibsu)}")
+
+    # bzirenxmrg (the one that must be solved for win)
+    bzirenxmrg = getattr(fdksqlmpki, "bzirenxmrg", None)
+    if bzirenxmrg is not None:
+        htntnzkbzu = getattr(bzirenxmrg, "htntnzkbzu", None)
+        if htntnzkbzu is not None:
+            parts.append(f"cur_sel:x={getattr(htntnzkbzu, 'x', 0)},y={getattr(htntnzkbzu, 'y', 0)}")
+            parts.append(f"cur_sel:scale={getattr(htntnzkbzu, 'sjqqopsqvr', getattr(htntnzkbzu, 'scale', 1))}")
+            parts.append(f"cur_sel:rot={getattr(htntnzkbzu, 'daiyaakser', getattr(htntnzkbzu, 'rotation', 0))}")
+            sjmtdfxdrc = getattr(htntnzkbzu, "ubescnrjpf", None)
+            if sjmtdfxdrc is None:
+                try:
+                    sjmtdfxdrc = int(htntnzkbzu.axbjgpzkyi.pixels[1, 1])
+                except Exception:
+                    sjmtdfxdrc = 0
+            parts.append(f"cur_sel:color={sjmtdfxdrc}")
+            parts.append(f"cur_sel:vis={getattr(htntnzkbzu, 'byqkqlmkfo', True)}")
+            parts.append(f"cur_sel:timer={getattr(htntnzkbzu, 'xfbffsrbdz', 0)}")
+
+        aqszntqeae = getattr(bzirenxmrg, "aqszntqeae", None)
+        if aqszntqeae is not None:
+            parts.append(f"target:x={getattr(aqszntqeae, 'x', 0)},y={getattr(aqszntqeae, 'y', 0)}")
+            parts.append(f"target:scale={getattr(aqszntqeae, 'scale', 1)}")
+            parts.append(f"target:rot={getattr(aqszntqeae, 'rotation', 0)}")
+            try:
+                t_color = int(aqszntqeae.axbjgpzkyi.pixels[1, 1])
+            except Exception:
+                t_color = 0
+            parts.append(f"target:color={t_color}")
+            parts.append(f"target:vis={getattr(aqszntqeae, 'is_visible', True)}")
+
+        # Control panel state
+        fsdcrzcexp = getattr(bzirenxmrg, "fsdcrzcexp", [])
+        oocupkguhu = getattr(bzirenxmrg, "oocupkguhu", 0)
+        parts.append(f"ctrl:prog_len={len(fsdcrzcexp)},step={oocupkguhu}")
+
+        # Saved initial state (fwrnsvyvrz etc)
+        parts.append(f"saved:x={getattr(bzirenxmrg, 'fwrnsvyvrz', 0)},y={getattr(bzirenxmrg, 'bmhxacplut', 0)}")
+        parts.append(f"saved:rot={getattr(bzirenxmrg, 'qixyeojolu', 0)},scale={getattr(bzirenxmrg, 'fpofcohbab', 1)}")
+        parts.append(f"saved:color={getattr(bzirenxmrg, 'nzmblccilq', 0)}")
+
+    # mvqheosngn (first state machine - also needs tracking)
+    mvqheosngn = getattr(fdksqlmpki, "mvqheosngn", None)
+    if mvqheosngn is not None:
+        htnt = getattr(mvqheosngn, "htntnzkbzu", None)
+        if htnt is not None:
+            parts.append(f"mv_sel:x={getattr(htnt, 'x', 0)},y={getattr(htnt, 'y', 0)}")
+            parts.append(f"mv_sel:scale={getattr(htnt, 'sjqqopsqvr', getattr(htnt, 'scale', 1))}")
+            parts.append(f"mv_sel:rot={getattr(htnt, 'daiyaakser', getattr(htnt, 'rotation', 0))}")
+            mv_color = getattr(htnt, "ubescnrjpf", None)
+            if mv_color is None:
+                try:
+                    mv_color = int(htnt.axbjgpzkyi.pixels[1, 1])
+                except Exception:
+                    mv_color = 0
+            parts.append(f"mv_sel:color={mv_color}")
+            parts.append(f"mv_sel:vis={getattr(htnt, 'byqkqlmkfo', True)}")
+            parts.append(f"mv_sel:timer={getattr(htnt, 'xfbffsrbdz', 0)}")
+
+        aqs = getattr(mvqheosngn, "aqszntqeae", None)
+        if aqs is not None:
+            parts.append(f"mv_tgt:x={getattr(aqs, 'x', 0)},y={getattr(aqs, 'y', 0)}")
+            parts.append(f"mv_tgt:scale={getattr(aqs, 'scale', 1)}")
+            parts.append(f"mv_tgt:rot={getattr(aqs, 'rotation', 0)}")
+            try:
+                mv_t_color = int(aqs.axbjgpzkyi.pixels[1, 1])
+            except Exception:
+                mv_t_color = 0
+            parts.append(f"mv_tgt:color={mv_t_color}")
+
+        parts.append(f"mv_ctrl:prog_step={getattr(mvqheosngn, 'oocupkguhu', 0)}")
+        parts.append(f"mv_saved:x={getattr(mvqheosngn, 'fwrnsvyvrz', 0)},y={getattr(mvqheosngn, 'bmhxacplut', 0)}")
+
+    # Program progress (phmchnuhkr)
+    phmchnuhkr = getattr(fdksqlmpki, "phmchnuhkr", [])
+    if phmchnuhkr:
+        prog_str = "|".join(str(p) for p in phmchnuhkr)
+        parts.append(f"prog_progress:{hashlib.md5(prog_str.encode()).hexdigest()[:8]}")
+
+    return hashlib.md5("|".join(parts).encode()).hexdigest()
+
+
+def _tn36_progress_score(game: Any) -> int:
+    """Score tn36 state by distance to win condition.
+
+    Lower score = closer to solved. 0 = solved.
+    """
+    fdksqlmpki = getattr(game, "fdksqlmpki", None)
+    if fdksqlmpki is None:
+        return 100
+
+    bzirenxmrg = getattr(fdksqlmpki, "bzirenxmrg", None)
+    if bzirenxmrg is None:
+        return 100
+
+    htntnzkbzu = getattr(bzirenxmrg, "htntnzkbzu", None)
+    aqszntqeae = getattr(bzirenxmrg, "aqszntqeae", None)
+
+    if htntnzkbzu is None or aqszntqeae is None:
+        return 100
+
+    # Win condition: x, y, scale, rotation, sjmtdfxdrc all match
+    score = 0
+    cur_x = getattr(htntnzkbzu, 'x', 0)
+    cur_y = getattr(htntnzkbzu, 'y', 0)
+    tgt_x = getattr(aqszntqeae, 'x', 0)
+    tgt_y = getattr(aqszntqeae, 'y', 0)
+    score += abs(cur_x - tgt_x) + abs(cur_y - tgt_y)
+
+    cur_scale = getattr(htntnzkbzu, 'sjqqopsqvr', getattr(htntnzkbzu, 'scale', 1))
+    tgt_scale = getattr(aqszntqeae, 'scale', 1)
+    score += abs(cur_scale - tgt_scale) * 10
+
+    cur_rot = getattr(htntnzkbzu, 'daiyaakser', getattr(htntnzkbzu, 'rotation', 0))
+    tgt_rot = getattr(aqszntqeae, 'rotation', 0)
+    rot_diff = min(abs(cur_rot - tgt_rot), 360 - abs(cur_rot - tgt_rot))
+    score += rot_diff // 90 * 5
+
+    try:
+        cur_color = getattr(htntnzkbzu, "ubescnrjpf", None)
+        if cur_color is None:
+            cur_color = int(htntnzkbzu.axbjgpzkyi.pixels[1, 1])
+    except Exception:
+        cur_color = -1
+    try:
+        tgt_color = int(aqszntqeae.axbjgpzkyi.pixels[1, 1])
+    except Exception:
+        tgt_color = -1
+    if cur_color != tgt_color:
+        score += 20
+
+    # Visible penalty
+    if not getattr(htntnzkbzu, 'byqkqlmkfo', True):
+        score += 50
+
+    return score
+
+
+def solve_tn36(game: Any, level_idx: int) -> list | None:
+    """Solve TN36: Multi-state animation click game.
+
+    Game mechanics (deep analysis):
         - Actions: [6] (CLICK only)
-        - 30 sprites, 10 clickable (tag='Maidxz,sys_click')
-        - Win: internal state machine vklyonlcrw is True
+        - Two state machines (dimsufvezo): mvqheosngn (left) and bzirenxmrg (right)
+        - Each has htntnzkbzu (current selection) and aqszntqeae (target)
+        - Win: bzirenxmrg.htntnzkbzu matches aqszntqeae in x,y,scale,rotation,color
+        - Programs (ipbskwnukz): each qqifsatqdo button loads a program with
+          a sequence of actions (move, rotate, scale, recolor)
+        - After clicking a button, animation plays (pxbksnibsu), then new click accepted
+        - lmkazecqdh (timer): moves left each step, game over when background passes
+          submit sprite
 
     Strategy:
-        1. Get all clickable sprites (Maidxz or sys_click)
-        2. Sort by position
-        3. Click each one
-    """
-    from arcengine import GameAction
+        Simulation BFS with tn36-specific state hashing that captures the
+        deeply nested win condition state (3 levels deep). This prevents
+        hash collapse that doomed previous BFS attempts.
 
+        Uses deepcopy-based BFS (not replay-based) for efficiency — each
+        node stores the game deepcopy, avoiding O(path_len) replay per node.
+        tn36-specific hash for dedup.
+        Heuristic scoring based on distance to win condition.
+    """
+    from arcengine import GameAction, ActionInput
+
+    original_level = game._current_level_index
+    t0 = time.time()
+    max_time_budget = 30.0
+    max_depth = 50
+    max_nodes = 50000
+
+    # Phase 0: Quick check — already solved?
+    if _is_level_solved(game, original_level):
+        return []
+
+    # Phase 1: Get engine-valid click targets
+    initial_targets: list[tuple[int, int]] = []
+    seen_targets: set[tuple[int, int]] = set()
+
+    all_valid = _get_valid_action_inputs(game)
+    for ai in all_valid:
+        aid = ai.id if not hasattr(ai.id, 'value') else ai.id.value
+        if aid == 6:
+            data = ai.data if ai.data else {}
+            x = int(data.get('x', 0))
+            y = int(data.get('y', 0))
+            if (x, y) != (0, 0) and (x, y) not in seen_targets:
+                seen_targets.add((x, y))
+                initial_targets.append((x, y))
+
+    if not initial_targets:
+        clickables = _get_sprites_by_tag(game, "Maidxz")
+        if not clickables:
+            clickables = _get_sprites_by_tag(game, "sys_click")
+        if not clickables:
+            return None
+        for sprite in sorted(clickables, key=lambda s: (_sprite_pos(s)[1], _sprite_pos(s)[0])):
+            pos = _sprite_display_center(game, sprite)
+            if pos != (0, 0) and pos not in seen_targets:
+                seen_targets.add(pos)
+                initial_targets.append(pos)
+
+    if not initial_targets:
+        return None
+
+    # Phase 2: BFS using deepcopy (each node stores game state)
+    # This avoids O(path_len) replay per node, making BFS feasible.
+    initial_hash = _tn36_internal_state_hash(game)
+    initial_score = _tn36_progress_score(game)
+
+    # Queue entries: (score, counter, game_deepcopy, action_plan, state_hash)
+    counter = 0
+    pq: list[tuple[int, int, Any, list[tuple], str]] = []
+    heapq.heappush(pq, (initial_score, counter, copy.deepcopy(game), [], initial_hash))
+    visited: set[str] = {initial_hash}
+    total_nodes = 0
+
+    while pq:
+        if time.time() - t0 > max_time_budget:
+            break
+        if total_nodes > max_nodes:
+            break
+
+        score, cnt, g, path, prev_hash = heapq.heappop(pq)
+        total_nodes += 1
+
+        # Get dynamic engine click targets from current state
+        current_targets: list[tuple[int, int]] = []
+        current_seen: set[tuple[int, int]] = set()
+
+        try:
+            for ai_out in g._get_valid_actions():
+                aid_out = ai_out.id if not hasattr(ai_out.id, 'value') else ai_out.id.value
+                if aid_out == 6:
+                    data_out = ai_out.data if ai_out.data else {}
+                    x_out = int(data_out.get('x', 0))
+                    y_out = int(data_out.get('y', 0))
+                    if (x_out, y_out) != (0, 0) and (x_out, y_out) not in current_seen:
+                        current_seen.add((x_out, y_out))
+                        current_targets.append((x_out, y_out))
+        except Exception:
+            pass
+
+        try:
+            for ai_out in g._get_valid_clickable_actions():
+                aid_out = ai_out.id if not hasattr(ai_out.id, 'value') else ai_out.id.value
+                if aid_out == 6:
+                    data_out = ai_out.data if ai_out.data else {}
+                    x_out = int(data_out.get('x', 0))
+                    y_out = int(data_out.get('y', 0))
+                    if (x_out, y_out) != (0, 0) and (x_out, y_out) not in current_seen:
+                        current_seen.add((x_out, y_out))
+                        current_targets.append((x_out, y_out))
+        except Exception:
+            pass
+
+        # Fallback to initial targets if current targets empty
+        if not current_targets:
+            current_targets = initial_targets
+
+        # Expand: try each click target
+        for click_pos in current_targets:
+            g_copy = copy.deepcopy(g)
+            ai = ActionInput(id=GameAction.ACTION6, data={"x": click_pos[0], "y": click_pos[1]})
+            result = _perform_action_safe(g_copy, ai)
+
+            if not result:
+                continue
+
+            step_tuple = (GameAction.ACTION6, {"x": click_pos[0], "y": click_pos[1]})
+            new_path = path + [step_tuple]
+
+            if _is_level_solved(g_copy, original_level):
+                return new_path
+
+            state_h = _tn36_internal_state_hash(g_copy)
+            if state_h in visited:
+                continue
+            visited.add(state_h)
+
+            if len(new_path) < max_depth:
+                new_score = len(new_path) + _tn36_progress_score(g_copy)
+                counter += 1
+                heapq.heappush(pq, (new_score, counter, g_copy, new_path, state_h))
+
+    # Phase 3: Fallback — try simple sequential clicks
+    all_valid_fallback = _get_valid_action_inputs(game)
+    click_actions_fallback = []
+    for ai_fb in all_valid_fallback:
+        aid_fb = ai_fb.id if not hasattr(ai_fb.id, 'value') else ai_fb.id.value
+        if aid_fb == 6:
+            data_fb = ai_fb.data if ai_fb.data else {}
+            x_fb = int(data_fb.get('x', 0))
+            y_fb = int(data_fb.get('y', 0))
+            if (x_fb, y_fb) != (0, 0):
+                click_actions_fallback.append((x_fb, y_fb))
+
+    if click_actions_fallback:
+        click_actions_fallback.sort(key=lambda pos: (pos[1], pos[0]))
+        plan = []
+        for pos in click_actions_fallback:
+            plan.append((GameAction.ACTION6, pos))
+        return plan if plan else None
+
+    # Fallback: use Maidxz/sys_click sprites
     clickables = _get_sprites_by_tag(game, "Maidxz")
     if not clickables:
         clickables = _get_sprites_by_tag(game, "sys_click")
-
     if not clickables:
         return None
-
-    # Sort by position (left-to-right, top-to-bottom)
-    clickables_sorted = sorted(clickables,
-                               key=lambda s: (_sprite_pos(s)[1], _sprite_pos(s)[0]))
-
+    clickables_sorted = sorted(clickables, key=lambda s: (_sprite_pos(s)[1], _sprite_pos(s)[0]))
     plan = []
     for sprite in clickables_sorted:
         pos = _sprite_display_center(game, sprite)
         plan.append((GameAction.ACTION6, pos))
-
     return plan if plan else None
 
 
@@ -2243,6 +2558,120 @@ def solve_generic_bfs(
 
     return None
 
+def _recurse_game_attrs(
+    obj: Any,
+    parts: list[str],
+    max_depth: int = 3,
+    prefix: str = "",
+    visited_objs: set[int] | None = None,
+) -> None:
+    """Recursively capture game state attributes up to max_depth levels deep.
+
+    This is critical for games like tn36 where the win condition state is
+    stored 3 levels deep (game.fdksqlmpki.bzirenxmrg.htntnzkbzu.x).
+
+    Args:
+        obj: The object to recurse into.
+        parts: List to append hash parts to.
+        max_depth: Maximum recursion depth (default 3).
+        prefix: Dot-separated prefix for attribute names.
+        visited_objs: Set of already-visited object IDs to prevent cycles.
+    """
+    import hashlib
+
+    if visited_objs is None:
+        visited_objs = set()
+
+    if max_depth <= 0:
+        return
+
+    obj_id = id(obj)
+    if obj_id in visited_objs:
+        return
+    visited_objs.add(obj_id)
+
+    # Skip known large/cyclic objects
+    SKIP_ATTRS = {
+        'camera', 'current_level', '_levels', '_clean_levels',
+        'nfhuopdjvk', 'ziyfqaqget', 'nfhuopdjvk',
+    }
+
+    try:
+        attr_keys = sorted(vars(obj).keys())
+    except TypeError:
+        # obj may not have vars() (e.g., slots-based)
+        attr_keys = sorted(dir(obj))
+
+    for attr_name in attr_keys:
+        if attr_name.startswith('_') or attr_name in SKIP_ATTRS:
+            continue
+
+        try:
+            attr_val = getattr(obj, attr_name, None)
+        except Exception:
+            continue
+
+        if attr_val is None or callable(attr_val):
+            continue
+
+        full_name = f"{prefix}{attr_name}" if prefix else attr_name
+
+        # Check if it's a numpy array
+        if isinstance(attr_val, np.ndarray):
+            if attr_val.size > 10:
+                parts.append(f"{full_name}:grid:{hashlib.md5(attr_val.tobytes()).hexdigest()[:12]}")
+            continue
+
+        # Check if it's a list — hash length and small int items
+        if isinstance(attr_val, list):
+            parts.append(f"{full_name}:list_len:{len(attr_val)}")
+            # For small lists of ints, include values
+            if len(attr_val) <= 20:
+                try:
+                    int_items = []
+                    for item in attr_val:
+                        if isinstance(item, (int, bool)) and not isinstance(item, bool):
+                            int_items.append(str(item))
+                        elif isinstance(item, bool):
+                            int_items.append(str(item))
+                    if int_items:
+                        parts.append(f"{full_name}:list_vals:{','.join(int_items)}")
+                except Exception:
+                    pass
+            continue
+
+        # Primitive types
+        if isinstance(attr_val, bool):
+            parts.append(f"{full_name}:{attr_val}")
+            continue
+        if isinstance(attr_val, int) and not isinstance(attr_val, bool) and abs(attr_val) < 1000:
+            parts.append(f"{full_name}:{attr_val}")
+            continue
+        if isinstance(attr_val, str) and len(attr_val) < 100:
+            parts.append(f"{full_name}:{attr_val}")
+            continue
+        if isinstance(attr_val, float) and abs(attr_val) < 1000:
+            parts.append(f"{full_name}:{round(attr_val, 2)}")
+            continue
+        if isinstance(attr_val, tuple) and len(attr_val) <= 10:
+            # Small tuples (like position coordinates)
+            try:
+                tup_str = ','.join(str(v) for v in attr_val)
+                parts.append(f"{full_name}:{tup_str}")
+            except Exception:
+                pass
+            continue
+
+        # Skip sprite-like objects (they're already in section 1)
+        if hasattr(attr_val, 'get_sprites') or hasattr(attr_val, '_sprites'):
+            continue
+
+        # Recurse into nested objects
+        if hasattr(attr_val, '__dict__') or hasattr(attr_val, '__slots__'):
+            _recurse_game_attrs(attr_val, parts, max_depth=max_depth - 1,
+                                prefix=f"{full_name}.", visited_objs=visited_objs)
+
+
 def _game_state_hash(game: Any) -> str:
     """Create a comprehensive hash of the game state for dedup.
 
@@ -2296,34 +2725,32 @@ def _game_state_hash(game: Any) -> str:
     # We need to hash these to detect state changes.
     # IMPORTANT: Use dir() not vars() because some attrs are member_descriptors
     # defined in parent classes (slots), which don't show up in vars().
+    # RECURSE up to 3 levels deep to capture deeply nested state
+    # (e.g., tn36's fdksqlmpki.bzirenxmrg.htntnzkbzu.x)
+    _recurse_game_attrs(game, parts, max_depth=3, prefix="", visited_objs=set())
+
+    # 4b. Top-level bool/int/str flags that indicate game progress (NOT just sprites)
+    # Many games store state in direct game-level attributes like vklyonlcrw (tn36),
+    # nkuphphdgrp, etc. Without these, BFS dedup collapses distinct states.
     for attr_name in sorted(vars(game).keys()):
         if attr_name.startswith('_'):
+            continue
+        if attr_name in ('camera', 'current_level'):  # Skip known large objects
             continue
         attr_val = getattr(game, attr_name, None)
         if attr_val is None or callable(attr_val):
             continue
-
-        # Check if it's a numpy array directly
+        # Skip already-processed numpy arrays and sprite-like objects
         if isinstance(attr_val, np.ndarray):
-            parts.append(f"{attr_name}:grid:{hashlib.md5(attr_val.tobytes()).hexdigest()[:12]}")
             continue
-
-        # Check nested objects for numpy arrays using dir()
-        if hasattr(attr_val, '__dict__') or hasattr(attr_val, '__slots__'):
-            for sub_name in dir(attr_val):
-                if sub_name.startswith('_'):
-                    continue
-                try:
-                    sub_val = getattr(attr_val, sub_name, None)
-                except Exception:
-                    continue
-                if sub_val is None or callable(sub_val):
-                    continue
-                if isinstance(sub_val, np.ndarray) and sub_val.size > 10:
-                    parts.append(f"{attr_name}.{sub_name}:grid:{hashlib.md5(sub_val.tobytes()).hexdigest()[:12]}")
-                # Also check bool/int flags that indicate game progress
-                elif isinstance(sub_val, bool) and sub_name in ('nkuphphdgrp', 'jrhqdvdwpsb', 'rqolqpqwo', 'level_complete'):
-                    parts.append(f"{attr_name}.{sub_name}:{sub_val}")
+        if hasattr(attr_val, 'get_sprites') or hasattr(attr_val, '_sprites'):
+            continue
+        if isinstance(attr_val, bool):
+            parts.append(f"{attr_name}:bool:{attr_val}")
+        elif isinstance(attr_val, int) and not isinstance(attr_val, bool) and abs(attr_val) < 1000:
+            parts.append(f"{attr_name}:int:{attr_val}")
+        elif isinstance(attr_val, str) and len(attr_val) < 100:
+            parts.append(f"{attr_name}:str:{attr_val}")
 
     # 5. Player position on board (for games where sprite != player)
     for attr_name in sorted(vars(game).keys()):
@@ -3292,8 +3719,15 @@ def solve_game(
 ) -> list[tuple] | None:
     """Dispatch to game-specific solver.
 
-    Tries optimized solvers first (beam search, IDFS), then game's
-    internal pathfinding, then heuristic solvers, then random walk.
+    Tries solvers in priority order:
+    Phase 0: Game-specific heuristic solver (SOLVERS dict — highest RHAE)
+    Phase 1: UniversalSolverPipeline (zero-config, works on Private Set)
+    Phase 2: BFS for small action spaces (shortest solution first)
+    Phase 3: Beam search (fast parallel exploration)
+    Phase 4: IDFS (thorough with snapshot/restore)
+    Phase 5: DFS fallback (deep search with state dedup)
+    Phase 6: Generic keyboard solver (internal pathfinding)
+    Phase 7: Random walk (last resort)
 
     **IMPORTANT**: Each phase works on a FRESH deepcopy of the original
     game to prevent state corruption between phases. The original game
@@ -3362,66 +3796,9 @@ def solve_game(
         idfs_time = 6.0
         idfs_depths = [4, 6, 10, 15]
 
-    # Phase 0: BFS for small action spaces (finds shortest solution first)
-    if n_actions <= 7:
-        try:
-            bfs_time = 20.0 if n_actions <= 4 else 15.0
-            bfs_depth = 40 if n_actions <= 4 else 30
-            bfs_nodes = 300000 if n_actions <= 4 else 200000
-            plan = solve_generic_bfs(game, max_depth=bfs_depth, max_nodes=bfs_nodes, max_time=bfs_time)
-            plan = _normalize_plan(plan)
-            if plan is not None and _verify_plan(plan):
-                return plan
-        except Exception:
-            pass
-
-    # Phase 1: Beam search (fast, parallel exploration - uses deepcopy internally)
-    try:
-        plan = solve_beam_search(game, max_depth=80, beam_width=beam_w, max_time=beam_time)
-        plan = _normalize_plan(plan)
-        if plan is not None and _verify_plan(plan):
-            return plan
-    except Exception:
-        pass
-
-    # Phase 2: Iterative deepening DFS (thorough, uses snapshot/restore)
-    # Work on a FRESH deepcopy so the original game is not corrupted
-    try:
-        game_copy = copy.deepcopy(game)
-        plan = solve_idfs(game_copy, max_depths=idfs_depths, max_time=idfs_time)
-        plan = _normalize_plan(plan)
-        if plan is not None and _verify_plan(plan):
-            return plan
-    except Exception:
-        pass
-
-    # Phase 3: Generic DFS (deepcopy backtracking - slow but thorough)
-    try:
-        game_copy = copy.deepcopy(game)
-        # Use generous depth limits - state dedup keeps search tractable
-        dfs_depth = 40 if n_actions <= 7 else 25
-        dfs_nodes = 200000 if n_actions <= 7 else 80000
-        dfs_time = 15.0 if n_actions <= 7 else 10.0
-        plan = solve_generic_dfs(game_copy, max_depth=dfs_depth, max_nodes=dfs_nodes, max_time=dfs_time)
-        plan = _normalize_plan(plan)
-        if plan is not None and _verify_plan(plan):
-            return plan
-    except Exception:
-        pass
-
-    # Phase 4: Try generic keyboard solver (uses game's internal pathfinding)
-    if n_actions > 2:
-        try:
-            game_copy = copy.deepcopy(game)
-            plan = solve_generic_keyboard(game_copy, max_iter=50, max_time=6.0)
-            plan = _normalize_plan(plan)
-            if plan is not None and _verify_plan(plan):
-                return plan
-        except Exception:
-            pass
-
-    # Phase 5: Game-specific heuristic solver
-    # Work on a FRESH deepcopy of the ORIGINAL game
+    # Phase 0: Game-specific heuristic solver (SOLVERS dict — highest RHAE)
+    # These use hardcoded tag names and game-specific logic for Public Set games.
+    # They produce higher RHAE than the generic path, so they should run first.
     solver = SOLVERS.get(base_id)
     if solver is not None:
         try:
@@ -3435,7 +3812,77 @@ def solve_game(
         except Exception:
             pass
 
-    # Phase 6: Random walk (last resort)
+    # Phase 1: Universal Solver Pipeline (zero-config, works on Private Set)
+    # Uses UniversalOracleAdapter for game introspection — no GAME_CONFIGS needed.
+    try:
+        from .universal_solver_pipeline import UniversalSolverPipeline
+        pipeline = UniversalSolverPipeline(game, game_id)
+        plan = pipeline.solve()
+        plan = _normalize_plan(plan)
+        if plan is not None and _verify_plan(plan):
+            return plan
+    except Exception:
+        pass
+
+    # Phase 2: BFS for small action spaces (finds shortest solution first)
+    if n_actions <= 7:
+        try:
+            bfs_time = 20.0 if n_actions <= 4 else 15.0
+            bfs_depth = 40 if n_actions <= 4 else 30
+            bfs_nodes = 300000 if n_actions <= 4 else 200000
+            plan = solve_generic_bfs(game, max_depth=bfs_depth, max_nodes=bfs_nodes, max_time=bfs_time)
+            plan = _normalize_plan(plan)
+            if plan is not None and _verify_plan(plan):
+                return plan
+        except Exception:
+            pass
+
+    # Phase 3: Beam search (fast, parallel exploration - uses deepcopy internally)
+    try:
+        plan = solve_beam_search(game, max_depth=80, beam_width=beam_w, max_time=beam_time)
+        plan = _normalize_plan(plan)
+        if plan is not None and _verify_plan(plan):
+            return plan
+    except Exception:
+        pass
+
+    # Phase 4: Iterative deepening DFS (thorough, uses snapshot/restore)
+    # Work on a FRESH deepcopy so the original game is not corrupted
+    try:
+        game_copy = copy.deepcopy(game)
+        plan = solve_idfs(game_copy, max_depths=idfs_depths, max_time=idfs_time)
+        plan = _normalize_plan(plan)
+        if plan is not None and _verify_plan(plan):
+            return plan
+    except Exception:
+        pass
+
+    # Phase 5: Generic DFS (deepcopy backtracking - slow but thorough)
+    try:
+        game_copy = copy.deepcopy(game)
+        # Use generous depth limits - state dedup keeps search tractable
+        dfs_depth = 40 if n_actions <= 7 else 25
+        dfs_nodes = 200000 if n_actions <= 7 else 80000
+        dfs_time = 15.0 if n_actions <= 7 else 10.0
+        plan = solve_generic_dfs(game_copy, max_depth=dfs_depth, max_nodes=dfs_nodes, max_time=dfs_time)
+        plan = _normalize_plan(plan)
+        if plan is not None and _verify_plan(plan):
+            return plan
+    except Exception:
+        pass
+
+    # Phase 6: Try generic keyboard solver (uses game's internal pathfinding)
+    if n_actions > 2:
+        try:
+            game_copy = copy.deepcopy(game)
+            plan = solve_generic_keyboard(game_copy, max_iter=50, max_time=6.0)
+            plan = _normalize_plan(plan)
+            if plan is not None and _verify_plan(plan):
+                return plan
+        except Exception:
+            pass
+
+    # Phase 7: Random walk (last resort)
     try:
         plan = solve_random_walk(game, max_steps=300, max_time=4.0, n_restarts=6)
         plan = _normalize_plan(plan)
@@ -3444,7 +3891,7 @@ def solve_game(
     except Exception:
         pass
 
-    # Phase 7: Return unverified plan if we have one (better than nothing)
+    # Phase 8: Return unverified plan if we have one (better than nothing)
     if plan:
         return plan
 
