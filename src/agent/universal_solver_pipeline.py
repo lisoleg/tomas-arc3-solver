@@ -1893,29 +1893,79 @@ class UniversalSolverPipeline:
         return plan
 
     def _score_game_state(self, game: Any) -> int:
-        """Heuristic scoring — lower is closer to solved."""
+        """Heuristic scoring — lower is closer to solved. Re-detects entities from current game."""
         if _is_level_solved(game, self._original_level):
             return 0
 
-        goals = self.adapter.goals
+        # Re-detect player from current game state
+        player_pos = None
+        all_sprites = _get_all_sprites(game)
+        player_tags = {"sys_player", "player"}
+        for s in all_sprites:
+            tags = getattr(s, "tags", [])
+            if isinstance(tags, (list, tuple)):
+                for t in tags:
+                    if t in player_tags:
+                        player_pos = _sprite_pos(s)
+                        break
+            if player_pos:
+                break
+
+        # Fallback: use adapter's player_tag for detection
+        if player_pos is None and hasattr(self.adapter, '_player_tag') and self.adapter._player_tag:
+            player_sprites = _get_sprites_by_tag(game, self.adapter._player_tag)
+            if player_sprites:
+                player_pos = _sprite_pos(player_sprites[0])
+
+        # Fallback: largest sprite as player heuristic
+        if player_pos is None:
+            largest = None
+            for s in all_sprites:
+                w = int(getattr(s, "width", 0))
+                h = int(getattr(s, "height", 0))
+                area = w * h
+                if largest is None or area > largest[1]:
+                    largest = (_sprite_pos(s), area)
+            if largest:
+                player_pos = largest[0]
+
+        # Detect goals from current game state
+        goal_positions = []
+        goal_tags = {"sys_goal", "goal", "exit"}
+        for tag in goal_tags:
+            tag_sprites = _get_sprites_by_tag(game, tag)
+            for s in tag_sprites:
+                goal_positions.append(_sprite_pos(s))
+
+        # Fallback: use adapter's initial goal positions
+        if not goal_positions:
+            adapter_goals = self.adapter.goals
+            if adapter_goals:
+                goal_positions = [(g.x, g.y) for g in adapter_goals]
+
+        # Score computation
         score = 100
 
-        if goals:
-            player = self.adapter.player
-            if player is not None:
-                px, py = player.x, player.y
-                min_dist = min(abs(g.x - px) + abs(g.y - py) for g in goals)
-                score = min_dist
-            else:
-                all_sprites = _get_all_sprites(game)
-                covered = 0
-                for g in goals:
-                    gx, gy = g.x, g.y
-                    for s in all_sprites:
-                        if _sprite_pos(s) == (gx, gy):
-                            covered += 1
-                            break
-                score = (len(goals) - covered) * 10
+        if goal_positions and player_pos:
+            min_dist = min(abs(gx - player_pos[0]) + abs(gy - player_pos[1]) for gx, gy in goal_positions)
+            covered = 0
+            for gx, gy in goal_positions:
+                for s in all_sprites:
+                    sp = _sprite_pos(s)
+                    if sp == (gx, gy) and sp != player_pos:
+                        covered += 1
+                        break
+            score = min_dist - covered * 5
+        elif goal_positions:
+            covered = 0
+            for gx, gy in goal_positions:
+                for s in all_sprites:
+                    if _sprite_pos(s) == (gx, gy):
+                        covered += 1
+                        break
+            score = (len(goal_positions) - covered) * 10
+        else:
+            score = 100
 
         if game._current_level_index > self._original_level:
             score = max(0, score - 50)
