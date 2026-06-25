@@ -1787,9 +1787,12 @@ class UniversalSolverPipeline:
                 step_tuple = (aid, dict(ai.data) if ai.data else {})
                 new_path = path + [step_tuple]
 
-                # Replay to resulting state
-                sim2 = _replay_to_state(pristine, new_path)
-                if sim2 is None:
+                # 1-step simulation: deepcopy current sim + apply action
+                # (Much faster than full replay from pristine per candidate)
+                sim2 = copy.deepcopy(sim)
+                result = _perform_action_safe(sim2, ai)
+                if not result:
+                    # Action led to game_over — skip but record path
                     continue
 
                 # Check if solved
@@ -1869,8 +1872,11 @@ class UniversalSolverPipeline:
                 step_tuple = (aid, data)
                 new_path = path + [step_tuple]
 
-                sim2 = _replay_to_state(pristine, new_path)
-                if sim2 is None:
+                # 1-step simulation: deepcopy current sim + apply click
+                ai = ActionInput(id=aid, data=data)
+                sim2 = copy.deepcopy(sim)
+                result = _perform_action_safe(sim2, ai)
+                if not result:
                     continue
 
                 if _is_level_solved(sim2, original_level):
