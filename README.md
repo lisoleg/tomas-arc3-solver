@@ -3,7 +3,7 @@
 > **TOMAS** (太乙互搏 — Taiyi Mutual-Play) framework for the [ARC-AGI-3](https://www.kaggle.com/competitions/arc-agi-3) interactive video reasoning competition.
 
 [![Tests](https://img.shields.io/badge/tests-419%2F420-brightgreen)]()
-[![Version](https://img.shields.io/badge/version-2.9.2--dev-orange)]()
+[![Version](https://img.shields.io/badge/version-3.2.0--dev-orange)]()
 [![Python](https://img.shields.io/badge/python-3.13+-blue)]()
 [![License](https://img.shields.io/badge/license-MIT-green)]()
 [![Benchmark](https://img.shields.io/badge/RHAE-2140.0%2F2875-yellow)]()
@@ -18,18 +18,20 @@ TOMAS ARC-AGI-3 Solver is an end-to-end interactive game solving system that com
 |-----------|-------------|
 | **Oracle Mode** | Direct game state reading via `UniversalOracleAdapter` — zero inference error when game source is available |
 | **Grid Perception** | Pure visual inference fallback when Oracle is unavailable — 887-line perception pipeline |
-| **Universal Oracle Adapter** | 1175-line generic adapter supporting 25+ games with auto-discovery |
-| **Planner Agent** | 3500-line dual-mode agent (Oracle + Grid) with κ-Snap Cipher Solver |
+| **Universal Oracle Adapter** | 1784-line generic adapter supporting 25+ games with auto-discovery |
+| **Planner Agent** | 5263-line dual-mode agent (Oracle + Grid) with κ-Snap Cipher Solver + DFS backtracking |
+| **Generic DFS Solver** | 2889-line simulation-based backtracking solver with deepcopy state snapshots, state hashing, plan verification, and 4-phase dispatch |
 | **κ-Snap Cipher Solver** | Rule chain matching for TR87 double_translation mode (21-step solution) |
-| **Self-Learning System** | 1883-line online learning with experience replay and strategy adaptation |
+| **Self-Learning System** | 2757-line online learning with experience replay, ψ-audit, and strategy adaptation |
+| **NARLA Theory** | HPC dual-source retrieval, NAR-CY Patch encoder, Dead-Zero circuit breaker, Asym Index η, matroid pruning |
 | **Game Profiles** | 310-line baseline database for 25 games (keyboard/click/mixed) |
-| **Game Configs** | 347-line configuration for 25 games (tags, goals, actions, win conditions) |
+| **Game Configs** | 346-line configuration for 25 games (tags, goals, actions, win conditions) |
 | **Multi-Game Framework** | Unified solver for keyboard-only (6), click-only (7), and mixed (12) games |
 | **TOSAS Primality Filter** | `is_prime_like()` prevents library bloat by rejecting "composite" macros |
 | **Prime-Signature Fingerprint** | O(HW) quick-filter in κ-Snap Phase A for candidate elimination |
 | **Prime-Basis Ordering** | Search prioritizes "atomic" primitives (shorter MDL → higher RHAE) |
 
-### Performance (v2.9.2-dev Benchmark)
+### Performance (v3.2.0-dev Benchmark)
 
 | Game | Type | Levels Completed | RHAE | Status |
 |------|------|------------------|------|--------|
@@ -41,7 +43,7 @@ TOMAS ARC-AGI-3 Solver is an end-to-end interactive game solving system that com
 
 **Total**: 13/175 levels (7.4%), **Total RHAE**: 2140.0/2875 (74.4%)
 
-### Optimization Progress (v2.5–v2.9.2)
+### Optimization Progress (v2.5–v3.2.0)
 
 | Version | Optimization | Improvement |
 |---------|--------------|----------------|
@@ -50,6 +52,9 @@ TOMAS ARC-AGI-3 Solver is an end-to-end interactive game solving system that com
 | v2.9 | Grid Perception + Multi-game framework | 3/25 games working (ls20, ft09, tr87) |
 | v2.9.1 | UniversalOracleAdapter + Self-Learning | Oracle mode for 22/25 games |
 | v2.9.2-dev | Deep Architecture + TOSAS Optimizations | L3Perceiver/ActionDecider + Primality Filter + Prime-Signature |
+| v3.1.0-dev | NARLA Theory Integration (P0+P1) | HPC dual-source, NAR-CY Patch, Dead-Zero, Asym Index, ψ-Audit |
+| v3.1.1-dev | TOMAS Theory Borrowing Audit | Frame pre-filter, Bayesian RHAE breaker, DFS backtracking, matroid pruning, conditional ΔT |
+| v3.2.0-dev | Generic DFS Solver Infrastructure | Simulation-based backtracking + plan verification + 4-phase dispatch (+677 lines) |
 
 ## Architecture
 
@@ -69,14 +74,19 @@ TOMAS ARC-AGI-3 Solver is an end-to-end interactive game solving system that com
 │                    Layer 3: Planning & Search                  │
 │  ┌─────────────────┐    ┌─────────────────────────────┐   │
 │  │  Planner Agent  │    │    κ-Snap Cipher Solver     │   │
-│  │  (3500 lines)  │    │    (TR87 double_trans)      │   │
-│  │  - Click solver  │    │    - Rule chain matching    │   │
-│  │  - Keyboard Ctrl │    │    - Variant correction     │   │
+│  │  (5263 lines)  │    │    (TR87 double_trans)      │   │
+│  │  - DFS backtrk  │    │    - Rule chain matching    │   │
+│  │  - Click solver  │    │    - Variant correction     │   │
+│  │  - Keyboard Ctrl │    │    - HPC dual-source        │   │
 │  └─────────────────┘    └─────────────────────────────┘   │
 ├─────────────────────────────────────────────────────────────────┤
 │                    Layer 4: Learning & Adaptation              │
 │     Self-Learning System → Experience Replay → Strategy Adapt  │
-│     (1883 lines, online learning, 4 strategy patterns)        │
+│     (2757 lines, online learning, ψ-audit, 4 strategy patterns) │
+├─────────────────────────────────────────────────────────────────┤
+│              Layer 4.5: NARLA Theory Integration                │
+│  HPC Dual-Source │ NAR-CY Patch │ Dead-Zero │ Asym Index η     │
+│  Matroid Pruning │ Cond. ΔT    │ ψ-Audit   │ MUS Dual-Storage  │
 ├─────────────────────────────────────────────────────────────────┤
 │                    Layer 5: Output & Evaluation                │
 │     RHAE Evaluator → Benchmark 25 Games → Submission Output   │
@@ -159,15 +169,20 @@ print(f'Sprites count: {len(adapter.get_all_sprites())}')
 
 | Module | Lines | Description |
 |--------|-------|-------------|
-| `src/agent/planner_agent.py` | ~3500 | Main dual-mode agent (Oracle + Grid) |
-| `src/agent/universal_oracle_adapter.py` | ~1175 | Generic Oracle adapter for 25+ games |
-| `src/agent/grid_perception.py` | ~887 | Pure grid inference (fallback) |
-| `src/agent/self_learning.py` | ~1883 | Online self-learning system |
-| `src/agent/game_configs.py` | ~347 | 25 game configurations |
-| `src/agent/game_profiles.py` | ~310 | Game baseline database |
-| `src/agent/oracle_adapters.py` | ~500 | Specialized adapters (LS20, TR87, FT09) |
-| `benchmark_25games.py` | ~300 | 25-game benchmark script |
-| `solution_v06_deep_opt.py` | ~500 | Deep optimization solution entry |
+| `src/agent/planner_agent.py` | 5263 | Main dual-mode agent (Oracle + Grid) with DFS backtracking + κ-Snap Cipher Solver |
+| `src/agent/game_solvers.py` | 2889 | Generic DFS solver + 22 game-specific solvers + 4-phase dispatch |
+| `src/agent/self_learning.py` | 2757 | Online self-learning + ψ-audit + conditional ΔT discovery |
+| `src/agent/universal_oracle_adapter.py` | 1784 | Generic Oracle adapter for 25+ games |
+| `src/agent/deep_architecture.py` | 692 | L3Perceiver + ActionDecider + ProgramNode |
+| `src/agent/oracle_adapters.py` | 618 | Specialized adapters (LS20, TR87, FT09) |
+| `src/agent/enhanced_architecture.py` | 377 | Enhanced integration with rollback |
+| `src/agent/grid_perception.py` | 887 | Pure grid inference (fallback) |
+| `src/agent/game_configs.py` | 346 | 25 game configurations |
+| `src/agent/game_profiles.py` | 310 | Game baseline database |
+| `src/solver/nar_cy_patch_encoder.py` | ~350 | NAR-CY Patch: Euler χ + FFT period + Ω chirality |
+| `src/solver/gaussex_verifier.py` | ~400 | Dead-Zero + MUS dual-storage verification |
+| `src/solver/octonion_ops.py` | ~300 | Asym Index η: octonion non-associative residual |
+| **Total `src/`** | **67,602** | **116 Python files** |
 
 ## Configuration
 

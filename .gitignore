@@ -146,3 +146,25 @@ test_25games_quick.py
 # Solution versions (keep latest only)
 solution.py
 solution_v0[2-5]_*.py
+solution_v0[2-9].py
+
+# Debug/diagnostic scripts (v3.2.0-dev batch)
+_*.py
+_*.json
+debug2.py
+deep_game_probe.py
+diag[0-9]*.py
+diag_*.json
+diagnostic_focused.py
+game_analysis.txt
+quick_bench*.py
+quick_test*.py
+test_deepcopy.py
+test_fixes.py
+test_game_pathfinding.py
+test_generic_solver.py
+test_search_solver.py
+test_search_v2.py
+test_wa30*.py
+validate_p0_p1.py
+validation_results.json

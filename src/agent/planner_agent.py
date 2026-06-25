@@ -2040,6 +2040,7 @@ class PlannerAgent:
 
         state = latest_frame.state
         levels_completed = latest_frame.levels_completed
+        level_changed = levels_completed > self._levels_completed
 
         # === Extract grid and update perception ===
         # P0-2: Frame Pre-filtering — skip perception update for static frames

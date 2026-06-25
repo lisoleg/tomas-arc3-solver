@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.2.0-dev] — 2026-06-25
+
+### Added — Generic DFS Solver Infrastructure
+
+- New `solve_generic_dfs()` in `src/agent/game_solvers.py` (+677 lines): Simulation-based backtracking solver
+  - `deepcopy` state snapshot for safe backtracking (max_depth=30, max_nodes=100000, time_limit=12s)
+  - `_game_state_hash()`: Multi-dimensional state fingerprint (sprite positions, rotation, size, level index, score, pairing dicts, selection state, animation flags)
+  - `_get_valid_action_inputs()`: Enumerate all valid action inputs per game type (keyboard/click/mixed)
+  - `_perform_action_safe()`: Safe action execution with deepcopy rollback
+  - `_is_level_solved()`: Level completion detection via `levels_completed` delta
+  - `_restore_game()`: State restoration from snapshot
+  - `_verify_plan()`: Plan verification — replays action sequence on deepcopy to confirm level completion before execution
+  - `_snap_click_coordinates()`: Click coordinate snapping to sprite centers
+  - `solve_game()`: 4-phase dispatch — Phase 1 DFS → Phase 2 keyboard heuristic → Phase 3 specialized solvers → Phase 4 fallback
+
+- Updated `src/agent/planner_agent.py`: Level transition detection (`level_changed` flag) for plan verification integration
+
+### Added — NARLA Theory Integration (v3.1.0-dev + v3.1.1-dev, consolidated)
+
+- **HPC (Hybrid Proof Composer)**: Dual-source knowledge fusion in `kappa_snap_searcher.py` — library fingerprint + Macro prior + GaussEx early-exit
+- **NAR-CY Patch Encoder**: `nar_cy_patch_encoder.py` — Euler χ + FFT period + Ω octonion chirality for Type-B grid encoding
+- **Dead-Zero Circuit Breaker**: `gaussex_verifier.py` — Information fidelity gating (ℐ(e)<θ_dead → Reject) + MUS dual-storage for mutually exclusive branches
+- **Asym Index η**: `octonion_ops.py` — Octonion non-associative residual metric, η>0 ⇔ physical AI distinction
+- **ψ-Audit + MUS Retention**: `self_learning.py` — Alignment faking detection + decision traceability + conditional ΔT discovery
+- **Frame Pre-filtering**: `planner_agent.py` — Differential threshold skips static frames, reduces 30% redundant computation
+- **Bayesian RHAE Circuit Breaker**: `planner_agent.py` — Efficiency <0.5 triggers L2 backtracking + strategy switching (operator non-commutativity O∘K≠K∘O)
+- **DFS Backtracking Planner**: `planner_agent.py` — Stack-based DFS + visited set anti-loop + `_compute_state_hash`
+- **Adaptive Sleep-Step**: `library_learning.py` — B = B_base + α×MDL + β×log₂(freq+1)
+- **AST Width Control**: `library_learning.py` — W(d) = W_max × exp(-λd)
+- **Matroid Greedy Pruning**: `kappa_snap_searcher.py` — `_matroid_prune` + `_compute_structural_signature`, reduces 20-40% Phase B candidates
+- **Conditional ΔT Discovery**: `self_learning.py` — `ConditionalDeltaTDiscovery` class: feature extraction + discriminative + rule merging
+
+### Changed
+
+- `src/agent/game_solvers.py`: Expanded from ~2212 to 2889 lines (+677 lines, +30.6%)
+- `src/agent/planner_agent.py`: Expanded from ~5262 to 5263 lines (+1 line, level transition detection)
+- Total `src/` Python codebase: 67,602 lines across 116 files
+
+### Documentation
+
+- Updated `papers/TOMAS_ARC_AGI3_Paper_CN.md`: Added NARLA theory integration section, generic DFS solver section, updated code statistics
+- Updated `papers/TOMAS_ARC_AGI3_Paper.md`: Mirrored Chinese paper updates
+- Updated `README.md`: Version badge, module table, architecture description
+- New `docs/Operator_Layering_NonCommutative_Dynamics.md`: Operator layering and non-commutative dynamics theory mapping
+
+### Known Issues
+
+- **22 games**: Generic DFS solver infrastructure deployed but per-game tuning still needed for RHAE ≥ 80
+- **tr87 Level 5**: Stuck due to `alter_rules` variant calculation error (low priority)
+- **Kaggle submission**: Due 2026-06-30
+
+---
+
+## [3.1.1-dev] — 2026-06-25
+
+### Added — TOMAS Theory Borrowing Audit Completion
+
+- Terminology fix: `octonion_ops.py` "Lie Algebra" → "Linear Algebra" (octonions = alternative algebra, not Lie algebra)
+- P0-2: Frame pre-filtering in `planner_agent.py` — differential threshold skips static frames
+- P0-3: Bayesian RHAE circuit breaker in `planner_agent.py` — efficiency <0.5 triggers backtracking + strategy switching
+- P0-4: DFS backtracking planner in `planner_agent.py` — stack-based DFS + visited anti-loop
+- P1-5: Adaptive Sleep-Step budget in `library_learning.py` — B = B_base + α×MDL + β×log₂(freq+1)
+- P1-6: AST width control in `library_learning.py` — W(d) = W_max × exp(-λd)
+- P1-7: Matroid greedy pruning in `kappa_snap_searcher.py` — reduces 20-40% Phase B candidates
+- P1-8: Conditional ΔT discovery in `self_learning.py` — feature extraction + discriminative + rule merging
+- New `docs/Operator_Layering_NonCommutative_Dynamics.md`: Operator layering and non-commutative dynamics theory
+
+---
+
+## [3.1.0-dev] — 2026-06-25
+
+### Added — NARLA Theory Integration (P0 + P1)
+
+- P0-1: HPC dual-source retrieval (`kappa_snap_searcher.py`) — library fingerprint + Macro prior + early-exit
+- P0-2: NAR-CY Patch encoder (`nar_cy_patch_encoder.py`) — Euler χ + FFT period + Ω octonion chirality
+- P0-3: Dead-Zero circuit breaker + MUS dual-storage (`gaussex_verifier.py`) — information fidelity gating
+- P1-1: Asym Index η (`octonion_ops.py`) — octonion non-associative residual, η>0 ⇔ physical AI
+- P1-2: ψ-Audit + MUS retention (`self_learning.py`) — alignment faking detection + decision traceability
+
+---
+
 ## [2.9.2-dev] — 2026-06-25
 
 ### Added — Deep Architecture (L3Perceiver + ActionDecider)

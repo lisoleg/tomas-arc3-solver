@@ -2165,6 +2165,519 @@ def solve_sp80(game: Any, level_idx: int) -> list | None:
 # ============================================================================
 
 # Registry of game solvers
+# ============================================================================
+# Generic Simulation-Based Solver (replaces heuristic solvers for most games)
+# ============================================================================
+
+def _game_state_hash(game: Any) -> str:
+    """Create a hash of the game state for dedup.
+
+    Includes sprite positions, rotation, AND game-level state like
+    selection, pairing. Excludes step counters and action counts
+    (they change every step and prevent dedup).
+    """
+    import hashlib
+
+    cl = game.current_level
+    sprites = cl.get_sprites() if cl else []
+    parts = []
+    for s in sorted(sprites, key=lambda x: (x.x, x.y, getattr(x, "name", ""))):
+        parts.append(f"{getattr(s,'name','')}:{s.x},{s.y},{getattr(s,'rotation',0)},{getattr(s,'width','')},{getattr(s,'height','')}")
+    parts.append(f"L{game._current_level_index}")
+    parts.append(f"S{game._score}")
+
+    # Include game-level state: pairing, selection, etc.
+    for attr in ["nsevyuople", "zmqreragji"]:
+        val = getattr(game, attr, None)
+        if val:
+            for k, v in val.items():
+                parts.append(f"P{k.x},{k.y}->{v.x},{v.y}")
+
+    # Include selection state (used by click games like r11l)
+    # This is the "currently selected sprite" - important for game logic
+    for attr in ["wiayqaumjug", "selected", "_selected"]:
+        val = getattr(game, attr, None)
+        if val is not None:
+            if hasattr(val, "x"):
+                parts.append(f"SEL:{val.x},{val.y}")
+            elif isinstance(val, int):
+                parts.append(f"SEL:{val}")
+
+    # Include animation/movement state (affects what actions are valid)
+    for attr in ["yfbjozweime", "jttetcghmsb", "npvvaucvsot"]:
+        val = getattr(game, attr, None)
+        if val is not None:
+            parts.append(f"{attr}:{val}")
+
+    return hashlib.md5("|".join(parts).encode()).hexdigest()
+
+
+def _get_valid_action_inputs(game: Any) -> list:
+    """Get valid actions as list of ActionInput objects."""
+    try:
+        return list(game._get_valid_actions())
+    except Exception:
+        return []
+
+
+def _perform_action_safe(game: Any, ai) -> bool:
+    """Perform action on game, return True if action was valid (not game over)."""
+    from arcengine import GameState
+
+    try:
+        game.perform_action(ai)
+        return game._state != GameState.GAME_OVER
+    except Exception:
+        return False
+
+
+def _is_level_solved(game: Any, original_level: int) -> bool:
+    """Check if the level was solved (level index increased or game won)."""
+    from arcengine import GameState
+
+    return (
+        game._state == GameState.WIN
+        or game._current_level_index > original_level
+    )
+
+
+def _restore_game(game: Any, saved: Any) -> None:
+    """Restore game state from a deepcopy snapshot."""
+    for attr in vars(saved):
+        setattr(game, attr, getattr(saved, attr))
+
+
+def solve_generic_dfs(
+    game: Any,
+    max_depth: int = 15,
+    max_nodes: int = 30000,
+    max_time: float = 10.0,
+) -> list[tuple] | None:
+    """Generic DFS solver using deepcopy for each branch.
+
+    Works for click-only games and simple keyboard games with small
+    action spaces. Uses state deduplication to avoid revisiting.
+
+    Important: does NOT skip actions that don't change the visible state,
+    because some games use clicks for internal selection state that isn't
+    reflected in sprite positions. Instead, limits consecutive no-change
+    actions to prevent infinite loops.
+
+    Args:
+        game: The game object (will be modified during search).
+        max_depth: Maximum search depth (number of actions).
+        max_nodes: Maximum states to explore.
+        max_time: Time limit in seconds.
+
+    Returns:
+        List of (GameAction, data) tuples, or None if no solution found.
+    """
+    import copy as _copy
+    import time as _time
+    from arcengine import ActionInput, GameState
+
+    visited: set[str] = set()
+    t0 = _time.time()
+    original_level = game._current_level_index
+    max_no_change = 3  # max consecutive actions that don't change state
+
+    def search(g: Any, depth: int, path: list[tuple], no_change: int) -> list[tuple] | None:
+        if _time.time() - t0 > max_time:
+            return None
+        if len(path) >= max_depth:
+            return None
+        if len(visited) > max_nodes:
+            return None
+        if no_change >= max_no_change:
+            return None  # too many consecutive no-change actions
+
+        state_h = _game_state_hash(g)
+        if state_h in visited:
+            return None
+        visited.add(state_h)
+
+        actions = _get_valid_action_inputs(g)
+        # Prioritize actions that change state (try clicks last for kb+click games)
+        # Also try actions in a smart order: non-empty data first (clicks often matter)
+        actions_sorted = sorted(actions, key=lambda a: -(len(a.data) if a.data else 0))
+
+        for ai in actions_sorted:
+            g_copy = _copy.deepcopy(g)
+
+            try:
+                g_copy.perform_action(ai)
+            except Exception:
+                continue
+
+            if _is_level_solved(g_copy, original_level):
+                return path + [(ai.id, dict(ai.data) if ai.data else {})]
+
+            if g_copy._state == GameState.GAME_OVER:
+                continue
+
+            new_hash = _game_state_hash(g_copy)
+            if new_hash == state_h:
+                # State didn't change - still explore but with limited depth
+                result = search(g_copy, depth + 1, path + [(ai.id, dict(ai.data) if ai.data else {})], no_change + 1)
+                if result:
+                    return result
+            else:
+                result = search(g_copy, depth + 1, path + [(ai.id, dict(ai.data) if ai.data else {})], 0)
+                if result:
+                    return result
+
+        return None
+
+    return search(game, 0, [], 0)
+
+
+def _find_pathfinding_methods(game: Any) -> dict[str, Any]:
+    """Scan game object for internal BFS pathfinding methods.
+
+    Pathfinding methods are detected by signature: they take a Sprite
+    and return list[tuple[int,int]] | None.
+
+    Returns:
+        Dict mapping method name to method reference.
+    """
+    import inspect
+
+    methods = {}
+    for name in dir(game):
+        if name.startswith("_") or name.startswith("on_"):
+            continue
+        attr = getattr(game, name, None)
+        if not callable(attr):
+            continue
+        try:
+            sig = inspect.signature(attr)
+            params = list(sig.parameters.values())
+            # Look for methods that take a Sprite and return optional list[tuple]
+            if len(params) >= 1 and "Sprite" in str(params[0].annotation):
+                ret_str = str(sig.return_annotation)
+                if "tuple" in ret_str.lower() or ("list" in ret_str.lower() and "None" in ret_str):
+                    methods[name] = attr
+        except (ValueError, TypeError):
+            pass
+    return methods
+
+
+def solve_generic_keyboard(
+    game: Any,
+    max_iter: int = 40,
+    max_time: float = 8.0,
+) -> list[tuple] | None:
+    """Generic keyboard game solver using game's internal pathfinding.
+
+    Strategy:
+    1. Detect pathfinding methods on the game object
+    2. Detect pairing state (nsevyuople/zmqreragji or similar dicts)
+    3. Alternate: navigate to object → pair → navigate to target → unpair
+    4. Use deepcopy for simulation and verification
+
+    Args:
+        game: The game object (will NOT be modified - uses deepcopy).
+        max_iter: Maximum iterations of pair/deliver cycle.
+        max_time: Time limit in seconds.
+
+    Returns:
+        List of (GameAction, data) tuples, or None if no solution found.
+    """
+    import copy as _copy
+    import time as _time
+    from arcengine import GameAction, ActionInput, GameState
+
+    # Find pathfinding methods
+    pf_methods = _find_pathfinding_methods(game)
+    if not pf_methods:
+        return None
+
+    pf_names = sorted(pf_methods.keys())
+
+    sim = _copy.deepcopy(game)
+    original_level = sim._current_level_index
+    all_actions: list[tuple] = []
+    t0 = _time.time()
+
+    # Detect step size
+    step = 4
+    import sys as _sys
+    for const_name in ["celomdfhbh", "step_size", "_step_size", "MOVE_STEP"]:
+        val = getattr(sim, const_name, None)
+        if isinstance(val, int) and val > 0:
+            step = val
+            break
+    game_module = _sys.modules.get(type(sim).__module__, None)
+    if game_module:
+        for const_name in ["celomdfhbh", "step_size", "MOVE_STEP"]:
+            val = getattr(game_module, const_name, None)
+            if isinstance(val, int) and val > 0:
+                step = val
+                break
+
+    # Detect pairing state attributes
+    pair_attr = None
+    for attr in ["nsevyuople", "paired", "_paired", "carrying"]:
+        if hasattr(sim, attr) and isinstance(getattr(sim, attr), dict):
+            pair_attr = attr
+            break
+
+    # Detect special action (pair/unpair button)
+    # Try ACTION5 first, then ACTION6, etc.
+    special_actions = [GameAction.ACTION5, GameAction.ACTION6, GameAction.ACTION7]
+
+    def path_to_actions(path: list[tuple[int, int]]) -> list:
+        actions = []
+        for i in range(1, len(path)):
+            dx = path[i][0] - path[i - 1][0]
+            dy = path[i][1] - path[i - 1][1]
+            if dx > 0:
+                actions.append(ActionInput(id=GameAction.ACTION4, data={}))
+            elif dx < 0:
+                actions.append(ActionInput(id=GameAction.ACTION3, data={}))
+            elif dy > 0:
+                actions.append(ActionInput(id=GameAction.ACTION2, data={}))
+            elif dy < 0:
+                actions.append(ActionInput(id=GameAction.ACTION1, data={}))
+        return actions
+
+    def get_player(sim_game):
+        """Find player sprite."""
+        sprites = sim_game.current_level.get_sprites() if sim_game.current_level else []
+        for s in sprites:
+            tags = getattr(s, "tags", [])
+            if any(t in tags for t in ["wbmdvjhthc", "player", "sys_player"]):
+                return s
+        return sprites[0] if sprites else None
+
+    def is_paired(sim_game, player):
+        """Check if player is currently paired with something."""
+        if pair_attr and player:
+            return player in getattr(sim_game, pair_attr, {})
+        return False
+
+    def try_special(sim_game, action_id):
+        """Try a special action and return True if it changed pairing state."""
+        before = is_paired(sim_game, get_player(sim_game))
+        sim_game.perform_action(ActionInput(id=action_id, data={}))
+        after = is_paired(sim_game, get_player(sim_game))
+        return before != after
+
+    # Try each pathfinding method to see which ones work
+    # Method that returns a path when not paired = "go to block"
+    # Method that returns a path when paired = "go to target"
+    go_to_block_methods = []
+    go_to_target_methods = []
+
+    player = get_player(sim)
+    if player is None:
+        return None
+
+    for name in pf_names:
+        method = pf_methods[name]
+        try:
+            path = method(player)
+            if path is not None and isinstance(path, list) and len(path) > 1:
+                go_to_block_methods.append(name)
+        except Exception:
+            pass
+
+    if not go_to_block_methods:
+        return None
+
+    # If we can pair, test which methods work when paired
+    if pair_attr:
+        # Try pairing first to discover target-finding methods
+        test_sim = _copy.deepcopy(sim)
+        test_player = get_player(test_sim)
+        # Navigate to block first
+        for name in go_to_block_methods:
+            method = getattr(test_sim, name)
+            try:
+                path = method(test_player)
+                if path and len(path) > 1:
+                    acts = path_to_actions(path)
+                    for a in acts:
+                        test_sim.perform_action(a)
+                    break
+            except Exception:
+                continue
+
+        # Try to pair
+        for sa in special_actions:
+            saved = _copy.deepcopy(test_sim)
+            if try_special(test_sim, sa):
+                # Found the pair action! Now test pathfinding methods
+                test_player2 = get_player(test_sim)
+                for name in pf_names:
+                    if name in go_to_block_methods:
+                        continue
+                    method = getattr(test_sim, name)
+                    try:
+                        path = method(test_player2)
+                        if path is not None and isinstance(path, list) and len(path) > 1:
+                            go_to_target_methods.append(name)
+                    except Exception:
+                        pass
+                # Also check if block methods work when paired
+                for name in go_to_block_methods:
+                    method = getattr(test_sim, name)
+                    try:
+                        path = method(test_player2)
+                        if path is not None and isinstance(path, list) and len(path) > 1:
+                            go_to_target_methods.append(name)
+                    except Exception:
+                        pass
+                break
+            else:
+                _restore_game(test_sim, saved)
+
+    # Main solve loop
+    pair_action = None
+    unpair_action = None
+
+    # Detect pair/unpair actions by testing
+    if pair_attr:
+        for sa in special_actions:
+            test_sim = _copy.deepcopy(sim)
+            # First navigate to a block
+            for name in go_to_block_methods:
+                method = getattr(test_sim, name)
+                tp = get_player(test_sim)
+                try:
+                    path = method(tp)
+                    if path and len(path) > 1:
+                        acts = path_to_actions(path)
+                        for a in acts:
+                            test_sim.perform_action(a)
+                        break
+                except Exception:
+                    continue
+
+            tp = get_player(test_sim)
+            saved = _copy.deepcopy(test_sim)
+            test_sim.perform_action(ActionInput(id=sa, data={}))
+            tp2 = get_player(test_sim)
+            if is_paired(test_sim, tp2) and not is_paired(saved, tp):
+                pair_action = sa
+                # Test unpair
+                test_sim.perform_action(ActionInput(id=sa, data={}))
+                tp3 = get_player(test_sim)
+                if not is_paired(test_sim, tp3):
+                    unpair_action = sa
+                break
+                _restore_game(test_sim, saved)
+
+    # Execute solve loop
+    for iteration in range(max_iter):
+        if _time.time() - t0 > max_time:
+            break
+
+        if _is_level_solved(sim, original_level):
+            return all_actions
+
+        player = get_player(sim)
+        if player is None:
+            break
+
+        paired = is_paired(sim, player)
+
+        if paired and go_to_target_methods:
+            # Navigate to target
+            for name in go_to_target_methods:
+                method = getattr(sim, name)
+                try:
+                    path = method(player)
+                except Exception:
+                    continue
+                if path is not None and isinstance(path, list) and len(path) > 1:
+                    acts = path_to_actions(path)
+                    for a in acts:
+                        sim.perform_action(a)
+                        all_actions.append((a.id, {}))
+                    break
+            # Unpair
+            if unpair_action:
+                sim.perform_action(ActionInput(id=unpair_action, data={}))
+                all_actions.append((unpair_action, {}))
+        elif not paired and go_to_block_methods:
+            # Navigate to block
+            path_found = False
+            for name in go_to_block_methods:
+                method = getattr(sim, name)
+                try:
+                    path = method(player)
+                except Exception:
+                    continue
+                if path is not None and isinstance(path, list) and len(path) > 1:
+                    acts = path_to_actions(path)
+                    for a in acts:
+                        sim.perform_action(a)
+                        all_actions.append((a.id, {}))
+                    path_found = True
+                    break
+
+            if not path_found:
+                break
+
+            # Refresh player
+            player = get_player(sim)
+
+            # Fix rotation if needed
+            if player and hasattr(player, "rotation"):
+                all_sprites = sim.current_level.get_sprites() if sim.current_level else []
+                for s in all_sprites:
+                    if s is player:
+                        continue
+                    dist = abs(s.x - player.x) + abs(s.y - player.y)
+                    if dist == step:
+                        dx = s.x - player.x
+                        dy = s.y - player.y
+                        needed = 0
+                        if dy < 0: needed = 0
+                        elif dy > 0: needed = 180
+                        elif dx > 0: needed = 90
+                        elif dx < 0: needed = 270
+
+                        if player.rotation != needed:
+                            # Back-and-forth to fix rotation
+                            if dx > 0:
+                                away, back = GameAction.ACTION3, GameAction.ACTION4
+                            elif dx < 0:
+                                away, back = GameAction.ACTION4, GameAction.ACTION3
+                            elif dy > 0:
+                                away, back = GameAction.ACTION1, GameAction.ACTION2
+                            elif dy < 0:
+                                away, back = GameAction.ACTION2, GameAction.ACTION1
+                            else:
+                                break
+
+                            saved = _copy.deepcopy(sim)
+                            sim.perform_action(ActionInput(id=away, data={}))
+                            all_actions.append((away, {}))
+                            sim.perform_action(ActionInput(id=back, data={}))
+                            all_actions.append((back, {}))
+                        break
+
+            # Pair
+            if pair_action:
+                sim.perform_action(ActionInput(id=pair_action, data={}))
+                all_actions.append((pair_action, {}))
+        else:
+            # No pathfinding worked - try all special actions as last resort
+            for sa in special_actions:
+                sim.perform_action(ActionInput(id=sa, data={}))
+                all_actions.append((sa, {}))
+                if _is_level_solved(sim, original_level):
+                    return all_actions
+            break
+
+    if _is_level_solved(sim, original_level):
+        return all_actions
+
+    return None
+
+
 SOLVERS: dict[str, callable] = {
     "tu93": solve_tu93,
     "wa30": solve_wa30,
@@ -2191,12 +2704,102 @@ SOLVERS: dict[str, callable] = {
 }
 
 
+def _snap_click_coordinates(
+    plan: list[tuple],
+    game: Any,
+) -> list[tuple]:
+    """Snap click coordinates to nearest valid clickable position.
+
+    Game solvers compute click positions from sprite coordinates, but the
+    actual valid click positions are determined by the game's camera
+    transform (scale, offset) and sprite rendering. This function corrects
+    solver-computed coordinates to the nearest valid click position.
+
+    Args:
+        plan: Action plan with (GameAction, click_data|None) tuples.
+        game: The env._game object.
+
+    Returns:
+        Corrected action plan with snapped click coordinates.
+    """
+    from arcengine import GameAction
+
+    # Collect all click actions that need correction
+    has_clicks = any(
+        a in (GameAction.ACTION6, GameAction.ACTION7) and d is not None
+        for a, d in plan
+    )
+    if not has_clicks:
+        return plan
+
+    # Get valid clickable actions from the game
+    valid_clicks: list[dict] = []
+    try:
+        if hasattr(game, '_get_valid_clickable_actions'):
+            for ai in game._get_valid_clickable_actions():
+                if ai.data:
+                    valid_clicks.append(ai.data)
+    except (AttributeError, Exception):
+        pass
+
+    if not valid_clicks:
+        return plan
+
+    # Build set of valid click positions
+    valid_positions: list[tuple[int, int]] = []
+    for vc in valid_clicks:
+        vx = vc.get('x', vc.get('X', 0))
+        vy = vc.get('y', vc.get('Y', 0))
+        valid_positions.append((int(vx), int(vy)))
+
+    if not valid_positions:
+        return plan
+
+    # Snap each click to nearest valid position
+    corrected_plan: list[tuple] = []
+    for action, click_data in plan:
+        if (action in (GameAction.ACTION6, GameAction.ACTION7)
+                and click_data is not None):
+            # Get solver-computed position
+            if isinstance(click_data, (tuple, list)):
+                sx, sy = int(click_data[0]), int(click_data[1])
+            elif isinstance(click_data, dict):
+                sx = int(click_data.get('x', click_data.get('X', 0)))
+                sy = int(click_data.get('y', click_data.get('Y', 0)))
+            else:
+                corrected_plan.append((action, click_data))
+                continue
+
+            # Find nearest valid position
+            best_dist = float('inf')
+            best_pos = (sx, sy)
+            for vx, vy in valid_positions:
+                dist = (sx - vx) ** 2 + (sy - vy) ** 2
+                if dist < best_dist:
+                    best_dist = dist
+                    best_pos = (vx, vy)
+
+            # Only snap if within reasonable distance (max 10 pixels)
+            if best_dist <= 100:  # 10 pixel radius
+                corrected_plan.append((action, (best_pos[0], best_pos[1])))
+            else:
+                corrected_plan.append((action, click_data))
+        else:
+            corrected_plan.append((action, click_data))
+
+    return corrected_plan
+
+
 def solve_game(
     game: Any,
     game_id: str,
     level_idx: int = 0,
 ) -> list[tuple] | None:
     """Dispatch to game-specific solver.
+
+    Tries generic simulation-based solvers first (DFS search for small
+    action spaces, game's internal pathfinding for keyboard games),
+    then falls back to heuristic solvers.
 
     Args:
         game: The env._game object.
@@ -2209,14 +2812,78 @@ def solve_game(
     """
     base_id = game_id.split("-")[0] if game_id else ""
 
-    solver = SOLVERS.get(base_id)
-    if solver is None:
-        return None
+    valid_actions = _get_valid_action_inputs(game)
+    n_actions = len(valid_actions)
+    original_level = game._current_level_index
 
+    def _normalize_plan(plan: list[tuple] | None) -> list[tuple] | None:
+        """Normalize click data to dict format."""
+        if not plan:
+            return None
+        normalized = []
+        for action, click_data in plan:
+            if click_data is not None and isinstance(click_data, (tuple, list)):
+                normalized.append((action, {"x": int(click_data[0]), "y": int(click_data[1])}))
+            else:
+                normalized.append((action, click_data))
+        return normalized
+
+    def _verify_plan(plan: list[tuple] | None) -> bool:
+        """Verify plan solves the level by replaying on a fresh deepcopy."""
+        if not plan:
+            return False
+        import copy as _vc
+        from arcengine import ActionInput
+        try:
+            sim = _vc.deepcopy(game)
+            for aid, data in plan[:300]:
+                ai = ActionInput(id=aid, data=data if data else {})
+                sim.perform_action(ai)
+                if _is_level_solved(sim, original_level):
+                    return True
+            return _is_level_solved(sim, original_level)
+        except Exception:
+            return False
+
+    # Phase 1: Try generic DFS solver for ALL games
     try:
-        return solver(game, level_idx)
-    except Exception as e:
-        print(f"    [GAME-SOLVER] {base_id} error: {e}")
-        import traceback
-        traceback.print_exc()
-        return None
+        import copy as _copy
+        sim = _copy.deepcopy(game)
+        dfs_depth = 30 if n_actions <= 4 else 20
+        dfs_nodes = 100000 if n_actions <= 4 else 50000
+        plan = solve_generic_dfs(sim, max_depth=dfs_depth, max_nodes=dfs_nodes, max_time=12.0)
+        plan = _normalize_plan(plan)
+        if plan is not None and _verify_plan(plan):
+            return plan
+    except Exception:
+        pass
+
+    # Phase 2: Try generic keyboard solver (uses game's internal pathfinding)
+    if n_actions > 2:
+        try:
+            plan = solve_generic_keyboard(game, max_iter=50, max_time=8.0)
+            plan = _normalize_plan(plan)
+            if plan is not None and _verify_plan(plan):
+                return plan
+        except Exception:
+            pass
+
+    # Phase 3: Fall back to heuristic solver
+    solver = SOLVERS.get(base_id)
+    if solver is not None:
+        try:
+            plan = solver(game, level_idx)
+            if plan is not None:
+                plan = _snap_click_coordinates(plan, game)
+                plan = _normalize_plan(plan)
+                if plan is not None and _verify_plan(plan):
+                    return plan
+        except Exception as e:
+            print(f"    [GAME-SOLVER] {base_id} error: {e}")
+
+    # Phase 4: Last resort - return unverified DFS/keyboard plan if we have one
+    # (better than nothing - the planner agent might still work with it)
+    if plan:
+        return plan
+
+    return None
