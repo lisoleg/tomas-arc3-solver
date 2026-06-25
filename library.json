@@ -1,3 +1,135 @@
 {
-  "abstractions": []
+  "_schema_version": "3.2.0",
+  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver",
+  "_tomas_framework": {
+    "version": "3.2.0-dev",
+    "core_modules": [
+      "kappa_snap_searcher",
+      "nar_conv",
+      "tomas_learner",
+      "library_manager",
+      "gaussex_verifier"
+    ],
+    "asym_index_enabled": true,
+    "narla_integration": true
+  },
+  "_note": "Macros are validated by ψ-Audit before activation. TOMAS fingerprints enable cross-game pattern matching.",
+  "abstractions": [
+    {
+      "name": "macro_push_sprite_to_target",
+      "dsl_sequence": [
+        {
+          "action": "UP"
+        },
+        {
+          "repeat": "UP",
+          "count": 3
+        },
+        {
+          "action": "RIGHT"
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 2
+        }
+      ],
+      "tomas_fingerprint": "a1b2c3d4e5f67890",
+      "source_tasks": [
+        "ls20_L0",
+        "ls20_L1"
+      ],
+      "avg_steps": 6.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "sprite_movement",
+        "navigation_pattern",
+        "simple_path",
+        "move_up",
+        "move_right"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.5
+    },
+    {
+      "name": "macro_click_all_toggles",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "position": [
+            10,
+            15
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            20,
+            15
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            30,
+            15
+          ]
+        }
+      ],
+      "tomas_fingerprint": "b2c3d4e5f6789012",
+      "source_tasks": [
+        "ft09_L0",
+        "ft09_L1"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "click_effect",
+        "click_switch",
+        "short_sequence"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.67
+    },
+    {
+      "name": "macro_navigate_keyboard",
+      "dsl_sequence": [
+        {
+          "repeat": "RIGHT",
+          "count": 5
+        },
+        {
+          "repeat": "DOWN",
+          "count": 3
+        },
+        {
+          "repeat": "LEFT",
+          "count": 2
+        }
+      ],
+      "tomas_fingerprint": "c3d4e5f67890123a",
+      "source_tasks": [
+        "tr87_L0",
+        "tr87_L1",
+        "tr87_L2"
+      ],
+      "avg_steps": 10.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "navigation_pattern",
+        "keyboard_only",
+        "medium_sequence",
+        "move_right",
+        "move_down",
+        "move_left"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.33
+    }
+  ]
 }

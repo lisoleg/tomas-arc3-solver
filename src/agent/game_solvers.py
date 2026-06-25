@@ -23,6 +23,9 @@ from typing import Any, Optional
 
 import numpy as np
 
+# TOMAS Sleep-Step Learning (for episode recording integration)
+from .tomas_learner import EpisodeTrace, ActionTrace
+
 
 # ============================================================================
 # Helper: Get sprites by tag name from game
@@ -2169,32 +2172,111 @@ def solve_sp80(game: Any, level_idx: int) -> list | None:
 # Generic Simulation-Based Solver (replaces heuristic solvers for most games)
 # ============================================================================
 
-def _game_state_hash(game: Any) -> str:
-    """Create a hash of the game state for dedup.
 
-    Includes sprite positions, rotation, AND game-level state like
-    selection, pairing. Excludes step counters and action counts
-    (they change every step and prevent dedup).
+def solve_generic_bfs(
+    game: Any,
+    max_depth: int = 40,
+    max_nodes: int = 500000,
+    max_time: float = 30.0,
+) -> list[tuple] | None:
+    """BFS solver - finds shortest solution path.
+
+    BFS is better than DFS for games where:
+    - The solution is relatively short (10-30 steps)
+    - Many paths lead to GAME_OVER quickly
+    - The action space is small (2-7 actions)
+
+    BFS explores all states at depth d before depth d+1, guaranteeing
+    the shortest solution is found first.
+
+    Args:
+        game: The game object (will NOT be modified - uses deepcopy).
+        max_depth: Maximum search depth.
+        max_nodes: Maximum total states to explore.
+        max_time: Time limit in seconds.
+
+    Returns:
+        List of (GameAction, data) tuples, or None if no solution found.
+    """
+    import time as _time
+    from collections import deque
+    from arcengine import GameState, ActionInput
+
+    t0 = _time.time()
+    original_level = game._current_level_index
+    total_nodes = 0
+
+    # BFS queue: (game_copy, path)
+    initial_hash = _game_state_hash(game)
+    queue: deque[tuple[Any, list[tuple], str]] = deque()
+    queue.append((copy.deepcopy(game), [], initial_hash))
+    visited: set[str] = {initial_hash}
+
+    while queue:
+        if _time.time() - t0 > max_time:
+            break
+        if total_nodes > max_nodes:
+            break
+
+        g, path, prev_hash = queue.popleft()
+        total_nodes += 1
+
+        actions = _get_valid_action_inputs(g)
+        if not actions:
+            continue
+
+        for ai in actions:
+            g_copy = copy.deepcopy(g)
+            if not _perform_action_safe(g_copy, ai):
+                continue  # GAME_OVER or invalid
+
+            if _is_level_solved(g_copy, original_level):
+                return path + [(ai.id, dict(ai.data) if ai.data else {})]
+
+            state_h = _game_state_hash(g_copy)
+            if state_h in visited:
+                continue
+            visited.add(state_h)
+
+            if len(path) + 1 < max_depth:
+                queue.append((g_copy, path + [(ai.id, dict(ai.data) if ai.data else {})], state_h))
+
+    return None
+
+def _game_state_hash(game: Any) -> str:
+    """Create a comprehensive hash of the game state for dedup.
+
+    Includes:
+    - Sprite positions, rotation, tags
+    - Level index and game score
+    - Game grid/observation data (64x64 numpy array)
+    - Game-specific internal state (board objects, pairing, selection)
+    - Action count (to detect progress)
+
+    This is critical: many ARC-AGI-3 games store state in internal board
+    objects, not in sprite positions. Without grid hashing, DFS/beam search
+    can't detect state changes and treats all actions as "no-change".
     """
     import hashlib
+    import numpy as np
 
+    parts = []
+
+    # 1. Sprite positions (standard)
     cl = game.current_level
     sprites = cl.get_sprites() if cl else []
-    parts = []
     for s in sorted(sprites, key=lambda x: (x.x, x.y, getattr(x, "name", ""))):
         parts.append(f"{getattr(s,'name','')}:{s.x},{s.y},{getattr(s,'rotation',0)},{getattr(s,'width','')},{getattr(s,'height','')}")
     parts.append(f"L{game._current_level_index}")
     parts.append(f"S{game._score}")
 
-    # Include game-level state: pairing, selection, etc.
+    # 2. Game-specific pairing/selection attrs
     for attr in ["nsevyuople", "zmqreragji"]:
         val = getattr(game, attr, None)
         if val:
             for k, v in val.items():
                 parts.append(f"P{k.x},{k.y}->{v.x},{v.y}")
 
-    # Include selection state (used by click games like r11l)
-    # This is the "currently selected sprite" - important for game logic
     for attr in ["wiayqaumjug", "selected", "_selected"]:
         val = getattr(game, attr, None)
         if val is not None:
@@ -2203,11 +2285,62 @@ def _game_state_hash(game: Any) -> str:
             elif isinstance(val, int):
                 parts.append(f"SEL:{val}")
 
-    # Include animation/movement state (affects what actions are valid)
+    # 3. Game-specific animation/movement state
     for attr in ["yfbjozweime", "jttetcghmsb", "npvvaucvsot"]:
         val = getattr(game, attr, None)
         if val is not None:
             parts.append(f"{attr}:{val}")
+
+    # 4. CRITICAL: Grid/observation data
+    # Many games store state in internal board objects with numpy arrays
+    # We need to hash these to detect state changes.
+    # IMPORTANT: Use dir() not vars() because some attrs are member_descriptors
+    # defined in parent classes (slots), which don't show up in vars().
+    for attr_name in sorted(vars(game).keys()):
+        if attr_name.startswith('_'):
+            continue
+        attr_val = getattr(game, attr_name, None)
+        if attr_val is None or callable(attr_val):
+            continue
+
+        # Check if it's a numpy array directly
+        if isinstance(attr_val, np.ndarray):
+            parts.append(f"{attr_name}:grid:{hashlib.md5(attr_val.tobytes()).hexdigest()[:12]}")
+            continue
+
+        # Check nested objects for numpy arrays using dir()
+        if hasattr(attr_val, '__dict__') or hasattr(attr_val, '__slots__'):
+            for sub_name in dir(attr_val):
+                if sub_name.startswith('_'):
+                    continue
+                try:
+                    sub_val = getattr(attr_val, sub_name, None)
+                except Exception:
+                    continue
+                if sub_val is None or callable(sub_val):
+                    continue
+                if isinstance(sub_val, np.ndarray) and sub_val.size > 10:
+                    parts.append(f"{attr_name}.{sub_name}:grid:{hashlib.md5(sub_val.tobytes()).hexdigest()[:12]}")
+                # Also check bool/int flags that indicate game progress
+                elif isinstance(sub_val, bool) and sub_name in ('nkuphphdgrp', 'jrhqdvdwpsb', 'rqolqpqwo', 'level_complete'):
+                    parts.append(f"{attr_name}.{sub_name}:{sub_val}")
+
+    # 5. Player position on board (for games where sprite != player)
+    for attr_name in sorted(vars(game).keys()):
+        if attr_name.startswith('_'):
+            continue
+        attr_val = getattr(game, attr_name, None)
+        if attr_val is None or callable(attr_val):
+            continue
+        if hasattr(attr_val, '__dict__') or hasattr(attr_val, '__slots__'):
+            for pos_attr in ['grid_x', 'grid_y', 'qumspquyus', 'x', 'y']:
+                pos_val = getattr(attr_val, pos_attr, None)
+                if pos_val is not None and isinstance(pos_val, (int, float, tuple)):
+                    # Only include if it's a reasonable coordinate
+                    if isinstance(pos_val, (int, float)) and 0 <= pos_val < 1000:
+                        parts.append(f"{attr_name}.{pos_attr}:{pos_val}")
+                    elif isinstance(pos_val, tuple) and len(pos_val) == 2:
+                        parts.append(f"{attr_name}.{pos_attr}:{pos_val}")
 
     return hashlib.md5("|".join(parts).encode()).hexdigest()
 
@@ -2221,12 +2354,33 @@ def _get_valid_action_inputs(game: Any) -> list:
 
 
 def _perform_action_safe(game: Any, ai) -> bool:
-    """Perform action on game, return True if action was valid (not game over)."""
+    """Perform action on game, return True if action was valid (not game over).
+
+    Handles the "Action took too many frames" ValueError that occurs in
+    animation-heavy games (like bp35). When this error occurs, the game
+    state has already been updated by step() calls, so we catch the error
+    and manually call complete_action() to finalize the state.
+    """
     from arcengine import GameState
 
     try:
         game.perform_action(ai)
         return game._state != GameState.GAME_OVER
+    except ValueError as e:
+        if "too many frames" in str(e).lower():
+            # Animation took too long, but game state was already updated.
+            # Manually complete the action to finalize state.
+            try:
+                game.complete_action()
+            except Exception:
+                pass
+            # Check if the game won or lost during the animation
+            if game._state == GameState.WIN:
+                return True
+            if game._state == GameState.GAME_OVER:
+                return False
+            return True  # State was updated, consider it valid
+        return False
     except Exception:
         return False
 
@@ -2304,9 +2458,7 @@ def solve_generic_dfs(
         for ai in actions_sorted:
             g_copy = _copy.deepcopy(g)
 
-            try:
-                g_copy.perform_action(ai)
-            except Exception:
+            if not _perform_action_safe(g_copy, ai):
                 continue
 
             if _is_level_solved(g_copy, original_level):
@@ -2459,7 +2611,7 @@ def solve_generic_keyboard(
     def try_special(sim_game, action_id):
         """Try a special action and return True if it changed pairing state."""
         before = is_paired(sim_game, get_player(sim_game))
-        sim_game.perform_action(ActionInput(id=action_id, data={}))
+        _perform_action_safe(sim_game, ActionInput(id=action_id, data={}))
         after = is_paired(sim_game, get_player(sim_game))
         return before != after
 
@@ -2790,6 +2942,349 @@ def _snap_click_coordinates(
     return corrected_plan
 
 
+# ============================================================================
+# Optimized Solvers: Beam Search + IDFS + Random Walk
+# ============================================================================
+
+def _snapshot_state(game: Any) -> dict:
+    """Create a fast snapshot of all game instance attributes.
+
+    Uses copy.deepcopy for each attribute value to ensure complete
+    independence. Returns a dict mapping attr_name -> deep_copied_value.
+    """
+    return {k: copy.deepcopy(v) for k, v in vars(game).items()}
+
+
+def _restore_state(game: Any, snapshot: dict) -> None:
+    """Restore game state from a snapshot created by _snapshot_state."""
+    for k, v in snapshot.items():
+        setattr(game, k, v)
+
+
+def _score_game_state(game: Any, original_level: int) -> float:
+    """Heuristic score for game state - higher is better.
+
+    Measures progress toward level completion using multiple signals:
+    - Level progression (huge bonus)
+    - Game score increase
+    - Sprite count change (fewer sprites often = progress in match games)
+    - Grid pixel diversity (some games simplify grid as you progress)
+    - State novelty (non-default state values)
+    """
+    score = float(getattr(game, '_score', 0))
+
+    # Mega bonus for level progression
+    if game._current_level_index > original_level:
+        score += 100000
+
+    # Check for various game-specific progress indicators
+    cl = getattr(game, 'current_level', None)
+    if cl:
+        sprites = cl.get_sprites() if hasattr(cl, 'get_sprites') else []
+        n_sprites = len(sprites)
+
+        # Fewer sprites can indicate matching/removal progress
+        score += (20 - min(n_sprites, 20)) * 5
+
+        # Check for matched/paired sprites (common in ARC games)
+        for attr_name in ['okpvcjupabr', 'matched', 'paired', 'completed']:
+            val = getattr(game, attr_name, None)
+            if val is not None:
+                if isinstance(val, (set, list, dict)):
+                    score += len(val) * 50
+                elif isinstance(val, int) and val > 0:
+                    score += val * 10
+
+        # Check for level completion flag
+        for attr_name in ['rqolqpqwo', 'level_complete', '_level_solved']:
+            val = getattr(game, attr_name, None)
+            if val is True or (isinstance(val, int) and val > 0):
+                score += 5000
+
+    # Check game-specific progress attrs (selection, pairing, etc.)
+    for attr_name in ['nsevyuople', 'zmqreragji', 'pigtralzpb']:
+        val = getattr(game, attr_name, None)
+        if val and isinstance(val, dict):
+            score += len(val) * 3
+
+    return score
+
+
+def solve_beam_search(
+    game: Any,
+    max_depth: int = 80,
+    beam_width: int = 10,
+    max_time: float = 8.0,
+) -> list[tuple] | None:
+    """Beam search solver: explores multiple paths simultaneously.
+
+    Much faster than DFS for large action spaces because it doesn't
+    backtrack. Uses state novelty and game score to prioritize exploration.
+
+    Args:
+        game: The game object (will NOT be modified - uses deepcopy).
+        max_depth: Maximum number of actions.
+        beam_width: Number of parallel states to maintain.
+        max_time: Time limit in seconds.
+
+    Returns:
+        List of (GameAction, data) tuples, or None if no solution found.
+    """
+    import time as _time
+    from arcengine import GameState, ActionInput
+
+    t0 = _time.time()
+    original_level = game._current_level_index
+    seen_hashes: set[str] = set()
+
+    # Initial beam: single state (deepcopy of game)
+    initial_hash = _game_state_hash(game)
+    seen_hashes.add(initial_hash)
+    beam: list[tuple[Any, list[tuple]]] = [(copy.deepcopy(game), [])]
+
+    for depth in range(max_depth):
+        if _time.time() - t0 > max_time:
+            break
+        if not beam:
+            break
+
+        candidates: list[tuple[float, Any, list[tuple]]] = []
+
+        for g, path in beam:
+            actions = _get_valid_action_inputs(g)
+            if not actions:
+                continue
+
+            for ai in actions:
+                g_copy = copy.deepcopy(g)
+                if not _perform_action_safe(g_copy, ai):
+                    continue
+
+                step = (ai.id, dict(ai.data) if ai.data else {})
+
+                if _is_level_solved(g_copy, original_level):
+                    return path + [step]
+
+                if g_copy._state == GameState.GAME_OVER:
+                    continue
+
+                state_h = _game_state_hash(g_copy)
+                if state_h in seen_hashes:
+                    continue
+                seen_hashes.add(state_h)
+
+                # Score: prefer higher game score, shorter paths
+                score = _score_game_state(g_copy, original_level) - len(path) * 0.1
+                candidates.append((score, g_copy, path + [step]))
+
+        if not candidates:
+            break
+
+        # Keep top beam_width candidates
+        candidates.sort(key=lambda x: -x[0])
+        beam = [(g, p) for _, g, p in candidates[:beam_width]]
+
+    return None
+
+
+def solve_idfs(
+    game: Any,
+    max_depths: list[int] | None = None,
+    max_time: float = 10.0,
+    max_nodes: int = 80000,
+) -> list[tuple] | None:
+    """Iterative deepening DFS with snapshot/restore.
+
+    Tries increasing depth limits: 5, 8, 12, 18, 25, 35.
+    Uses _snapshot_state/_restore_state instead of deepcopy per action,
+    which is significantly faster.
+
+    Args:
+        game: The game object (will be modified during search, restored after).
+        max_depths: List of depth limits to try (default: [5,8,12,18,25,35]).
+        max_time: Total time limit across all depths.
+        max_nodes: Max visited states per depth.
+
+    Returns:
+        List of (GameAction, data) tuples, or None if no solution found.
+    """
+    import time as _time
+    from arcengine import GameState, ActionInput
+
+    if max_depths is None:
+        max_depths = [5, 8, 12, 18, 25, 35]
+
+    t0 = _time.time()
+    original_level = game._current_level_index
+    original_snapshot = _snapshot_state(game)
+
+    for max_depth in max_depths:
+        if _time.time() - t0 > max_time:
+            break
+
+        visited: set[str] = set()
+        result = _idfs_search(
+            game, 0, max_depth, [], 0,
+            visited, original_level, t0, max_time, max_nodes
+        )
+
+        # Restore game state after each depth attempt
+        _restore_state(game, original_snapshot)
+
+        if result:
+            return result
+
+    return None
+
+
+def _idfs_search(
+    game: Any,
+    depth: int,
+    max_depth: int,
+    path: list[tuple],
+    no_change: int,
+    visited: set[str],
+    original_level: int,
+    t0: float,
+    max_time: float,
+    max_nodes: int,
+) -> list[tuple] | None:
+    """Recursive DFS helper for solve_idfs. Uses snapshot/restore."""
+    import time as _time
+    from arcengine import GameState
+
+    if _time.time() - t0 > max_time:
+        return None
+    if depth >= max_depth:
+        return None
+    if no_change >= 3:
+        return None
+    if len(visited) > max_nodes:
+        return None
+
+    state_h = _game_state_hash(game)
+    if state_h in visited:
+        return None
+    visited.add(state_h)
+
+    actions = _get_valid_action_inputs(game)
+    if not actions:
+        return None
+
+    # Sort: try click actions first (they often change state more)
+    actions_sorted = sorted(actions, key=lambda a: -(len(a.data) if a.data else 0))
+
+    for ai in actions_sorted:
+        snapshot = _snapshot_state(game)
+
+        if not _perform_action_safe(game, ai):
+            _restore_state(game, snapshot)
+            continue
+
+        step = (ai.id, dict(ai.data) if ai.data else {})
+
+        if _is_level_solved(game, original_level):
+            _restore_state(game, snapshot)
+            return path + [step]
+
+        if game._state == GameState.GAME_OVER:
+            _restore_state(game, snapshot)
+            continue
+
+        new_hash = _game_state_hash(game)
+        new_no_change = no_change + 1 if new_hash == state_h else 0
+
+        result = _idfs_search(
+            game, depth + 1, max_depth, path + [step], new_no_change,
+            visited, original_level, t0, max_time, max_nodes
+        )
+
+        if result:
+            _restore_state(game, snapshot)
+            return result
+
+        _restore_state(game, snapshot)
+
+    return None
+
+
+def solve_random_walk(
+    game: Any,
+    max_steps: int = 300,
+    max_time: float = 5.0,
+    n_restarts: int = 8,
+) -> list[tuple] | None:
+    """Random walk solver with restarts.
+
+    Tries random action sequences. Surprisingly effective for games
+    where the solution is short and any path works.
+
+    Args:
+        game: The game object (will NOT be modified - uses deepcopy).
+        max_steps: Max actions per restart.
+        max_time: Total time limit.
+        n_restarts: Number of random restarts.
+
+    Returns:
+        List of (GameAction, data) tuples, or None.
+    """
+    import random
+    import time as _time
+    from arcengine import GameState
+
+    t0 = _time.time()
+    original_level = game._current_level_index
+
+    for restart in range(n_restarts):
+        if _time.time() - t0 > max_time:
+            break
+
+        g = copy.deepcopy(game)
+        path: list[tuple] = []
+        visited: set[str] = set()
+
+        for step in range(max_steps):
+            if _time.time() - t0 > max_time:
+                break
+
+            actions = _get_valid_action_inputs(g)
+            if not actions:
+                break
+
+            # Prefer unvisited states
+            unvisited = []
+            for ai in actions:
+                snap = _snapshot_state(g)
+                if not _perform_action_safe(g, ai):
+                    _restore_state(g, snap)
+                    continue
+                h = _game_state_hash(g)
+                _restore_state(g, snap)
+                if h not in visited:
+                    unvisited.append((ai, h))
+
+            if unvisited:
+                ai, new_h = random.choice(unvisited)
+            else:
+                ai = random.choice(actions)
+                new_h = None
+
+            if not _perform_action_safe(g, ai):
+                break
+
+            path.append((ai.id, dict(ai.data) if ai.data else {}))
+            if new_h:
+                visited.add(new_h)
+
+            if _is_level_solved(g, original_level):
+                return path
+
+            if g._state == GameState.GAME_OVER:
+                break
+
+    return None
+
+
 def solve_game(
     game: Any,
     game_id: str,
@@ -2797,9 +3292,12 @@ def solve_game(
 ) -> list[tuple] | None:
     """Dispatch to game-specific solver.
 
-    Tries generic simulation-based solvers first (DFS search for small
-    action spaces, game's internal pathfinding for keyboard games),
-    then falls back to heuristic solvers.
+    Tries optimized solvers first (beam search, IDFS), then game's
+    internal pathfinding, then heuristic solvers, then random walk.
+
+    **IMPORTANT**: Each phase works on a FRESH deepcopy of the original
+    game to prevent state corruption between phases. The original game
+    object is never modified.
 
     Args:
         game: The env._game object.
@@ -2812,9 +3310,12 @@ def solve_game(
     """
     base_id = game_id.split("-")[0] if game_id else ""
 
+    # Save pristine copy for verification - NEVER modified
+    pristine_game = copy.deepcopy(game)
+    original_level = game._current_level_index
+
     valid_actions = _get_valid_action_inputs(game)
     n_actions = len(valid_actions)
-    original_level = game._current_level_index
 
     def _normalize_plan(plan: list[tuple] | None) -> list[tuple] | None:
         """Normalize click data to dict format."""
@@ -2829,13 +3330,12 @@ def solve_game(
         return normalized
 
     def _verify_plan(plan: list[tuple] | None) -> bool:
-        """Verify plan solves the level by replaying on a fresh deepcopy."""
+        """Verify plan solves the level by replaying on the PRISTINE deepcopy."""
         if not plan:
             return False
-        import copy as _vc
         from arcengine import ActionInput
         try:
-            sim = _vc.deepcopy(game)
+            sim = copy.deepcopy(pristine_game)
             for aid, data in plan[:300]:
                 ai = ActionInput(id=aid, data=data if data else {})
                 sim.perform_action(ai)
@@ -2845,44 +3345,106 @@ def solve_game(
         except Exception:
             return False
 
-    # Phase 1: Try generic DFS solver for ALL games
-    try:
-        import copy as _copy
-        sim = _copy.deepcopy(game)
-        dfs_depth = 30 if n_actions <= 4 else 20
-        dfs_nodes = 100000 if n_actions <= 4 else 50000
-        plan = solve_generic_dfs(sim, max_depth=dfs_depth, max_nodes=dfs_nodes, max_time=12.0)
-        plan = _normalize_plan(plan)
-        if plan is not None and _verify_plan(plan):
-            return plan
-    except Exception:
-        pass
+    # Adaptive parameters based on action space size
+    if n_actions <= 4:
+        beam_w = 12
+        beam_time = 6.0
+        idfs_time = 10.0
+        idfs_depths = [5, 8, 12, 18, 25, 35]
+    elif n_actions <= 7:
+        beam_w = 10
+        beam_time = 6.0
+        idfs_time = 8.0
+        idfs_depths = [5, 8, 12, 18, 25]
+    else:
+        beam_w = 8
+        beam_time = 5.0
+        idfs_time = 6.0
+        idfs_depths = [4, 6, 10, 15]
 
-    # Phase 2: Try generic keyboard solver (uses game's internal pathfinding)
-    if n_actions > 2:
+    # Phase 0: BFS for small action spaces (finds shortest solution first)
+    if n_actions <= 7:
         try:
-            plan = solve_generic_keyboard(game, max_iter=50, max_time=8.0)
+            bfs_time = 20.0 if n_actions <= 4 else 15.0
+            bfs_depth = 40 if n_actions <= 4 else 30
+            bfs_nodes = 300000 if n_actions <= 4 else 200000
+            plan = solve_generic_bfs(game, max_depth=bfs_depth, max_nodes=bfs_nodes, max_time=bfs_time)
             plan = _normalize_plan(plan)
             if plan is not None and _verify_plan(plan):
                 return plan
         except Exception:
             pass
 
-    # Phase 3: Fall back to heuristic solver
+    # Phase 1: Beam search (fast, parallel exploration - uses deepcopy internally)
+    try:
+        plan = solve_beam_search(game, max_depth=80, beam_width=beam_w, max_time=beam_time)
+        plan = _normalize_plan(plan)
+        if plan is not None and _verify_plan(plan):
+            return plan
+    except Exception:
+        pass
+
+    # Phase 2: Iterative deepening DFS (thorough, uses snapshot/restore)
+    # Work on a FRESH deepcopy so the original game is not corrupted
+    try:
+        game_copy = copy.deepcopy(game)
+        plan = solve_idfs(game_copy, max_depths=idfs_depths, max_time=idfs_time)
+        plan = _normalize_plan(plan)
+        if plan is not None and _verify_plan(plan):
+            return plan
+    except Exception:
+        pass
+
+    # Phase 3: Generic DFS (deepcopy backtracking - slow but thorough)
+    try:
+        game_copy = copy.deepcopy(game)
+        # Use generous depth limits - state dedup keeps search tractable
+        dfs_depth = 40 if n_actions <= 7 else 25
+        dfs_nodes = 200000 if n_actions <= 7 else 80000
+        dfs_time = 15.0 if n_actions <= 7 else 10.0
+        plan = solve_generic_dfs(game_copy, max_depth=dfs_depth, max_nodes=dfs_nodes, max_time=dfs_time)
+        plan = _normalize_plan(plan)
+        if plan is not None and _verify_plan(plan):
+            return plan
+    except Exception:
+        pass
+
+    # Phase 4: Try generic keyboard solver (uses game's internal pathfinding)
+    if n_actions > 2:
+        try:
+            game_copy = copy.deepcopy(game)
+            plan = solve_generic_keyboard(game_copy, max_iter=50, max_time=6.0)
+            plan = _normalize_plan(plan)
+            if plan is not None and _verify_plan(plan):
+                return plan
+        except Exception:
+            pass
+
+    # Phase 5: Game-specific heuristic solver
+    # Work on a FRESH deepcopy of the ORIGINAL game
     solver = SOLVERS.get(base_id)
     if solver is not None:
         try:
-            plan = solver(game, level_idx)
+            game_copy = copy.deepcopy(game)
+            plan = solver(game_copy, level_idx)
             if plan is not None:
-                plan = _snap_click_coordinates(plan, game)
+                plan = _snap_click_coordinates(plan, game_copy)
                 plan = _normalize_plan(plan)
                 if plan is not None and _verify_plan(plan):
                     return plan
-        except Exception as e:
-            print(f"    [GAME-SOLVER] {base_id} error: {e}")
+        except Exception:
+            pass
 
-    # Phase 4: Last resort - return unverified DFS/keyboard plan if we have one
-    # (better than nothing - the planner agent might still work with it)
+    # Phase 6: Random walk (last resort)
+    try:
+        plan = solve_random_walk(game, max_steps=300, max_time=4.0, n_restarts=6)
+        plan = _normalize_plan(plan)
+        if plan is not None and _verify_plan(plan):
+            return plan
+    except Exception:
+        pass
+
+    # Phase 7: Return unverified plan if we have one (better than nothing)
     if plan:
         return plan
 

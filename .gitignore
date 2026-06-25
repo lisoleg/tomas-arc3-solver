@@ -149,7 +149,10 @@ solution_v0[2-5]_*.py
 solution_v0[2-9].py
 
 # Debug/diagnostic scripts (v3.2.0-dev batch)
-_*.py
+# Note: Use [a-z]*_*.py pattern to avoid matching __init__.py
+_debug*.py
+_diag*.py
+_test_*.py
 _*.json
 debug2.py
 deep_game_probe.py

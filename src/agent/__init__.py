@@ -50,6 +50,15 @@ from .self_learning import (
     ConditionalDeltaTDiscovery,
     ConditionalRule,
 )
+from .tomas_learner import (
+    TOMASLearner,
+    CausalPatternExtractor,
+    DSLMacroAbstractor,
+    LibraryManager,
+    MacroCandidate,
+    ActionTrace,
+    EpisodeTrace,
+)
 
 __all__ = [
     # Core agents
@@ -90,4 +99,12 @@ __all__ = [
     # P1-8: Conditional ΔT Discovery
     "ConditionalDeltaTDiscovery",
     "ConditionalRule",
+    # TOMAS Sleep-Step Learning
+    "TOMASLearner",
+    "CausalPatternExtractor",
+    "DSLMacroAbstractor",
+    "LibraryManager",
+    "MacroCandidate",
+    "ActionTrace",
+    "EpisodeTrace",
 ]

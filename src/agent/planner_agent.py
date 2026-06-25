@@ -57,8 +57,15 @@ from .oracle_adapters import (
     auto_detect_adapter,
 )
 
-# Game-specific solvers for all 25 games
+        # Game-specific solvers for all 25 games
 from .game_solvers import solve_game as _solve_game_specific
+
+# TOMAS Sleep-Step Learning System (record → sleep → audit → consolidate)
+from .tomas_learner import (
+    TOMASLearner,
+    EpisodeTrace,
+    ActionTrace,
+)
 
 
 # ============================================================================
@@ -1743,6 +1750,11 @@ class PlannerAgent:
         self.q_learner = QLearner()
         self.danger_memory = DangerMemory()
         self.macro_library = MacroLibrary()
+
+        # TOMAS Sleep-Step Learning (record → sleep → audit → consolidate)
+        self._tomas_learner = TOMASLearner()
+        self._current_episode: Optional[EpisodeTrace] = None
+        self._episode_action_traces: list[ActionTrace] = []
 
         # Fallback agent (for when planning fails)
         self._fallback: Optional[DopamineExplorer] = None
