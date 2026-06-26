@@ -1,21 +1,28 @@
 {
-  "_schema_version": "3.3.0",
-  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (泛函宏统一场论)",
+  "_schema_version": "3.7.0",
+  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (\u6cdb\u51fd\u5b8f\u7edf\u4e00\u573a\u8bba + ASD + 3-Life)",
   "_tomas_framework": {
-    "version": "3.3.0-dev",
+    "version": "3.7.0",
     "core_modules": [
       "kappa_snap_searcher",
       "nar_conv",
       "tomas_learner",
       "library_manager",
       "gaussex_verifier",
-      "fast_path_dispatcher"
+      "fast_path_dispatcher",
+      "online_psi_audit",
+      "physical_nar_conv"
     ],
     "asym_index_enabled": true,
     "narla_integration": true,
-    "fast_path_enabled": true
+    "fast_path_enabled": true,
+    "asd_enabled": true,
+    "three_life_strategy": true,
+    "physical_compactification": true,
+    "sleep_step_trigger": true,
+    "beam_width": 16
   },
-  "_note": "Macros are validated by ψ-Audit before activation. TOMAS fingerprints enable cross-game pattern matching. v3.3.0 adds applicable_topo + gaussex_precond for Fast-Path dispatch.",
+  "_note": "v3.7.0 - PhysicalCompactificationReduction + Phi_phys pruning + Sleep-Step trigger + kappa-Snap Beam Width=16 + complexity_class field",
   "abstractions": [
     {
       "name": "macro_push_sprite_to_target",
@@ -61,65 +68,845 @@
         "hole_count": 0,
         "density": 0.15
       },
-      "gaussex_precond": "sprite_count('movable') == 1 AND sprite_count('goal') >= 1"
+      "gaussex_precond": "sprite_count('movable') == 1 AND sprite_count('goal') >= 1",
+      "complexity_class": "P"
     },
     {
-      "name": "macro_click_all_toggles",
+      "name": "macro_click_ring_expansion",
       "dsl_sequence": [
         {
           "action": "CLICK",
           "position": [
             10,
-            15
+            53
           ]
         },
         {
           "action": "CLICK",
           "position": [
+            16,
+            47
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            22,
+            41
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            28,
+            35
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            34,
+            29
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            40,
+            23
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            46,
+            17
+          ]
+        }
+      ],
+      "tomas_fingerprint": "su15_ring_expand_01",
+      "source_tasks": [
+        "su15_L0"
+      ],
+      "avg_steps": 7.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "click_game",
+        "ring_pattern",
+        "expansion",
+        "symmetric_clicks",
+        "concentric"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.75,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [
+          "radial"
+        ],
+        "component_count": 7,
+        "hole_count": 0,
+        "density": 0.08
+      },
+      "gaussex_precond": "has_sprite_type('clickable') AND sprite_count('goal') >= 1 AND NOT has_sprite_type('wall')",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_click_select_move",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "position": [
+            39,
+            21
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            28,
+            60
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            40,
+            14
+          ]
+        }
+      ],
+      "tomas_fingerprint": "r11l_select_01",
+      "source_tasks": [
+        "r11l_L0"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "click_game",
+        "select",
+        "move",
+        "short_sequence",
+        "sparse_targets"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.9,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.04
+      },
+      "gaussex_precond": "has_sprite_type('selectable') AND action_space_size == 1",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_click_repeat_target",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "position": [
+            61,
+            33
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            61,
+            33
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            61,
+            33
+          ]
+        }
+      ],
+      "tomas_fingerprint": "vc33_repeat_01",
+      "source_tasks": [
+        "vc33_L1"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "click_game",
+        "repeat_click",
+        "same_position",
+        "toggle_activation"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.8,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 0,
+        "symmetry": [
+          "point"
+        ],
+        "component_count": 1,
+        "hole_count": 0,
+        "density": 0.02
+      },
+      "gaussex_precond": "has_sprite_type('clickable') AND NOT has_keyboard_actions()",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_push_and_click_mixed",
+      "dsl_sequence": [
+        {
+          "repeat": "RIGHT",
+          "count": 4
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            45,
+            33
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            27,
+            39
+          ]
+        },
+        {
+          "repeat": "LEFT",
+          "count": 3
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            27,
+            33
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            27,
+            33
+          ]
+        },
+        {
+          "action": "RIGHT"
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            33,
+            32
+          ]
+        },
+        {
+          "repeat": "LEFT",
+          "count": 2
+        }
+      ],
+      "tomas_fingerprint": "bp35_push_click_01",
+      "source_tasks": [
+        "bp35_L0"
+      ],
+      "avg_steps": 15.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "mixed_game",
+        "push_block",
+        "click_target",
+        "navigation_click",
+        "push_to_goal"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.4,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.18
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_click_action() AND sprite_count('pushable') >= 1",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_navigate_click_mixed",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "position": [
+            49,
+            37
+          ]
+        },
+        {
+          "repeat": "UP",
+          "count": 5
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 5
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            48,
+            20
+          ]
+        },
+        {
+          "repeat": "UP",
+          "count": 3
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            48,
+            36
+          ]
+        },
+        {
+          "repeat": "UP",
+          "count": 2
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 2
+        }
+      ],
+      "tomas_fingerprint": "dc22_nav_click_01",
+      "source_tasks": [
+        "dc22_L0"
+      ],
+      "avg_steps": 20.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "mixed_game",
+        "navigate_to_click",
+        "keyboard_click",
+        "vertical_navigation"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.35,
+      "applicable_topo": {
+        "euler_char": 3,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 4,
+        "hole_count": 1,
+        "density": 0.22
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_click_action() AND has_sprite_type('player')",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_keyboard_push_blocks",
+      "dsl_sequence": [
+        {
+          "action": "UP"
+        },
+        {
+          "action": "UP"
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 4
+        },
+        {
+          "action": "UP"
+        },
+        {
+          "action": "RIGHT"
+        },
+        {
+          "action": "LEFT"
+        },
+        {
+          "action": "DOWN"
+        },
+        {
+          "action": "DOWN"
+        },
+        {
+          "action": "RIGHT"
+        },
+        {
+          "action": "LEFT"
+        },
+        {
+          "action": "UP"
+        },
+        {
+          "action": "RIGHT"
+        }
+      ],
+      "tomas_fingerprint": "sk48_push_01",
+      "source_tasks": [
+        "sk48_L0"
+      ],
+      "avg_steps": 14.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "keyboard_game",
+        "push_blocks",
+        "block_navigation",
+        "track_movement"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.45,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.25
+      },
+      "gaussex_precond": "has_keyboard_actions() AND NOT has_click_action() AND sprite_count('pushable') >= 1",
+      "complexity_class": "NP_C_likely"
+    },
+    {
+      "name": "macro_connect_paths_click_nav",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "position": [
             20,
-            15
+            18
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            29,
+            18
           ]
         },
         {
           "action": "CLICK",
           "position": [
             30,
-            15
+            19
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            41,
+            20
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            43,
+            20
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            43,
+            33
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            43,
+            37
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            43,
+            27
           ]
         }
       ],
-      "tomas_fingerprint": "b2c3d4e5f6789012",
+      "tomas_fingerprint": "lf52_connect_01",
       "source_tasks": [
-        "ft09_L0",
-        "ft09_L1"
+        "lf52_L0"
       ],
-      "avg_steps": 3.0,
+      "avg_steps": 8.0,
       "success_rate": 1.0,
       "generalization_tags": [
-        "click_effect",
-        "click_switch",
-        "short_sequence"
+        "click_game",
+        "path_connect",
+        "bridge_pattern",
+        "sparse_clicks"
       ],
       "min_demo_to_activate": 1,
       "created_at": 1719072000.0,
       "validated": true,
-      "mdl_score": 0.67,
+      "mdl_score": 0.7,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 4,
+        "hole_count": 1,
+        "density": 0.12
+      },
+      "gaussex_precond": "has_click_action() AND path_like_grid()",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_navigate_click_targets",
+      "dsl_sequence": [
+        {
+          "action": "DOWN"
+        },
+        {
+          "action": "DOWN"
+        },
+        {
+          "action": "LEFT"
+        },
+        {
+          "action": "UP"
+        },
+        {
+          "repeat": "LEFT",
+          "count": 4
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            31,
+            50
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            36,
+            55
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            30,
+            60
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            24,
+            55
+          ]
+        },
+        {
+          "repeat": "LEFT",
+          "count": 4
+        }
+      ],
+      "tomas_fingerprint": "sc25_nav_click_01",
+      "source_tasks": [
+        "sc25_L0"
+      ],
+      "avg_steps": 15.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "mixed_game",
+        "navigate_click",
+        "target_collection",
+        "keyboard_click"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.35,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.16
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_click_action() AND sprite_count('collectible') >= 3",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_pair_elimination_keyboard",
+      "dsl_sequence": [
+        {
+          "action": "UP"
+        },
+        {
+          "action": "LEFT"
+        },
+        {
+          "action": "UP"
+        },
+        {
+          "action": "RIGHT"
+        },
+        {
+          "action": "LEFT"
+        },
+        {
+          "repeat": "UP",
+          "count": 4
+        },
+        {
+          "action": "RIGHT"
+        },
+        {
+          "repeat": "UP",
+          "count": 2
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 4
+        }
+      ],
+      "tomas_fingerprint": "m0r0_pair_01",
+      "source_tasks": [
+        "m0r0_L0"
+      ],
+      "avg_steps": 15.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "keyboard_game",
+        "pair_elimination",
+        "mirror_movement",
+        "symmetric_action"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.4,
       "applicable_topo": {
         "euler_char": 3,
         "period_rank": 0,
-        "symmetry": ["horizontal"],
+        "symmetry": [
+          "mirror"
+        ],
         "component_count": 4,
         "hole_count": 0,
-        "density": 0.12
+        "density": 0.2
       },
-      "gaussex_precond": "has_sprite_type('fhc') AND has_sprite_type('gig')"
+      "gaussex_precond": "has_keyboard_actions() AND NOT has_click_action() AND has_symmetric_sprites()",
+      "complexity_class": "NP_C_likely"
     },
     {
-      "name": "macro_navigate_keyboard",
+      "name": "macro_navigate_special_action",
+      "dsl_sequence": [
+        {
+          "repeat": "UP",
+          "count": 3
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 4
+        },
+        {
+          "repeat": "UP",
+          "count": 4
+        },
+        {
+          "action": "SPECIAL"
+        },
+        {
+          "repeat": "LEFT",
+          "count": 2
+        },
+        {
+          "repeat": "UP",
+          "count": 5
+        }
+      ],
+      "tomas_fingerprint": "re86_special_01",
+      "source_tasks": [
+        "re86_L0"
+      ],
+      "avg_steps": 20.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "keyboard_game",
+        "special_action",
+        "navigate_special",
+        "gate_opening"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.35,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 1,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 1,
+        "density": 0.15
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_special_action() AND sprite_count('gate') >= 1",
+      "complexity_class": "NP_C_likely"
+    },
+    {
+      "name": "macro_keyboard_special_gates",
       "dsl_sequence": [
         {
           "repeat": "RIGHT",
+          "count": 4
+        },
+        {
+          "action": "SPECIAL"
+        },
+        {
+          "repeat": "DOWN",
+          "count": 6
+        },
+        {
+          "repeat": "LEFT",
+          "count": 4
+        },
+        {
+          "action": "SPECIAL"
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 4
+        }
+      ],
+      "tomas_fingerprint": "g50t_gates_01",
+      "source_tasks": [
+        "g50t_L0"
+      ],
+      "avg_steps": 16.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "keyboard_game",
+        "special_action",
+        "gate_navigation",
+        "corridor_movement"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.38,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 2,
+        "hole_count": 0,
+        "density": 0.12
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_special_action() AND has_corridor_structure()",
+      "complexity_class": "NP_C_likely"
+    },
+    {
+      "name": "macro_complex_special_navigation",
+      "dsl_sequence": [
+        {
+          "action": "UP"
+        },
+        {
+          "action": "UP"
+        },
+        {
+          "action": "LEFT"
+        },
+        {
+          "repeat": "UP",
+          "count": 3
+        },
+        {
+          "repeat": "LEFT",
+          "count": 3
+        },
+        {
+          "action": "SPECIAL"
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 4
+        },
+        {
+          "action": "SPECIAL"
+        },
+        {
+          "action": "LEFT"
+        },
+        {
+          "action": "UP"
+        },
+        {
+          "action": "SPECIAL"
+        },
+        {
+          "repeat": "UP",
           "count": 5
+        }
+      ],
+      "tomas_fingerprint": "wa30_complex_01",
+      "source_tasks": [
+        "wa30_L0"
+      ],
+      "avg_steps": 25.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "keyboard_game",
+        "special_action",
+        "complex_navigation",
+        "multi_gate",
+        "long_sequence"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.25,
+      "applicable_topo": {
+        "euler_char": 3,
+        "period_rank": 1,
+        "symmetry": [],
+        "component_count": 5,
+        "hole_count": 2,
+        "density": 0.25
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_special_action() AND action_space_size >= 5",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_cipher_variant_navigation",
+      "dsl_sequence": [
+        {
+          "repeat": "DOWN",
+          "count": 2
+        },
+        {
+          "action": "LEFT"
+        },
+        {
+          "repeat": "DOWN",
+          "count": 2
+        },
+        {
+          "action": "LEFT"
         },
         {
           "repeat": "DOWN",
@@ -130,26 +917,22 @@
           "count": 2
         }
       ],
-      "tomas_fingerprint": "c3d4e5f67890123a",
+      "tomas_fingerprint": "tr87_cipher_01",
       "source_tasks": [
-        "tr87_L0",
-        "tr87_L1",
-        "tr87_L2"
+        "tr87_L0"
       ],
       "avg_steps": 10.0,
       "success_rate": 1.0,
       "generalization_tags": [
-        "navigation_pattern",
-        "keyboard_only",
-        "medium_sequence",
-        "move_right",
-        "move_down",
-        "move_left"
+        "keyboard_game",
+        "cipher_decode",
+        "variant_select",
+        "short_navigation"
       ],
       "min_demo_to_activate": 1,
       "created_at": 1719072000.0,
       "validated": true,
-      "mdl_score": 0.33,
+      "mdl_score": 0.6,
       "applicable_topo": {
         "euler_char": 1,
         "period_rank": 1,
@@ -158,7 +941,542 @@
         "hole_count": 0,
         "density": 0.08
       },
-      "gaussex_precond": "sprite_count('movable') == 1 AND NOT has_sprite_type('wall')"
+      "gaussex_precond": "has_keyboard_actions() AND NOT has_click_action() AND has_variant_system()",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_color_cycle_click",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "position": [
+            30,
+            30
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            25,
+            25
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            35,
+            25
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            30,
+            35
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            25,
+            35
+          ]
+        }
+      ],
+      "tomas_fingerprint": "ft09_color_01",
+      "source_tasks": [
+        "ft09_L0",
+        "ft09_L1"
+      ],
+      "avg_steps": 5.0,
+      "success_rate": 0.9,
+      "generalization_tags": [
+        "click_game",
+        "color_cycle",
+        "palette_constraint",
+        "diamond_clicks"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.65,
+      "applicable_topo": {
+        "euler_char": 3,
+        "period_rank": 0,
+        "symmetry": [
+          "horizontal"
+        ],
+        "component_count": 4,
+        "hole_count": 0,
+        "density": 0.12
+      },
+      "gaussex_precond": "has_sprite_type('fhc') AND has_sprite_type('gig')",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_tu93_short_navigation",
+      "dsl_sequence": [
+        {
+          "repeat": "UP",
+          "count": 3
+        },
+        {
+          "action": "RIGHT"
+        },
+        {
+          "repeat": "UP",
+          "count": 5
+        }
+      ],
+      "tomas_fingerprint": "tu93_short_01",
+      "source_tasks": [
+        "tu93_L0"
+      ],
+      "avg_steps": 9.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "keyboard_game",
+        "simple_navigation",
+        "short_path",
+        "vertical_movement"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.65,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 2,
+        "hole_count": 0,
+        "density": 0.1
+      },
+      "gaussex_precond": "has_keyboard_actions() AND NOT has_click_action() AND NOT has_special_action()",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_s5i5_block_alignment",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "position": [
+            30,
+            30
+          ]
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 5
+        },
+        {
+          "repeat": "DOWN",
+          "count": 3
+        }
+      ],
+      "tomas_fingerprint": "s5i5_align_01",
+      "source_tasks": [
+        "s5i5_L0"
+      ],
+      "avg_steps": 9.0,
+      "success_rate": 0.8,
+      "generalization_tags": [
+        "mixed_game",
+        "block_alignment",
+        "click_then_navigate",
+        "grid_manipulation"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.45,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.18
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_click_action() AND has_alignment_target()",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_tn36_robot_matching",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "position": [
+            30,
+            30
+          ]
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 3
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            40,
+            30
+          ]
+        },
+        {
+          "repeat": "LEFT",
+          "count": 2
+        }
+      ],
+      "tomas_fingerprint": "tn36_match_01",
+      "source_tasks": [
+        "tn36_L0"
+      ],
+      "avg_steps": 7.0,
+      "success_rate": 0.7,
+      "generalization_tags": [
+        "mixed_game",
+        "robot_matching",
+        "click_navigate",
+        "pattern_match"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.5,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 4,
+        "hole_count": 0,
+        "density": 0.15
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_click_action() AND has_matching_targets()",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_lp85_simple_clicks",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "position": [
+            30,
+            15
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            35,
+            15
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            40,
+            15
+          ]
+        }
+      ],
+      "tomas_fingerprint": "lp85_simple_01",
+      "source_tasks": [
+        "lp85_L0"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "click_game",
+        "simple_sequence",
+        "horizontal_clicks",
+        "sparse_grid"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.8,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 0,
+        "symmetry": [
+          "horizontal"
+        ],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.05
+      },
+      "gaussex_precond": "has_click_action() AND NOT has_keyboard_actions() AND sparse_grid()",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_cd82_nav_click_special",
+      "dsl_sequence": [
+        {
+          "action": "LEFT"
+        },
+        {
+          "repeat": "DOWN",
+          "count": 2
+        },
+        {
+          "action": "RIGHT"
+        },
+        {
+          "action": "SPECIAL"
+        }
+      ],
+      "tomas_fingerprint": "cd82_mixed_01",
+      "source_tasks": [
+        "cd82_L0"
+      ],
+      "avg_steps": 5.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "mixed_game",
+        "navigate_special",
+        "short_sequence",
+        "simple_mechanic"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.85,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 2,
+        "hole_count": 0,
+        "density": 0.08
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_special_action() AND has_click_action()",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_sp80_simple_special",
+      "dsl_sequence": [
+        {
+          "repeat": "RIGHT",
+          "count": 3
+        },
+        {
+          "action": "SPECIAL"
+        }
+      ],
+      "tomas_fingerprint": "sp80_simple_01",
+      "source_tasks": [
+        "sp80_L0"
+      ],
+      "avg_steps": 4.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "keyboard_game",
+        "special_action",
+        "short_sequence",
+        "gate_trigger"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.9,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 2,
+        "hole_count": 0,
+        "density": 0.06
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_special_action() AND NOT has_click_action()",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_ka59_long_navigation",
+      "dsl_sequence": [
+        {
+          "repeat": "DOWN",
+          "count": 5
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 4
+        },
+        {
+          "action": "SPECIAL"
+        },
+        {
+          "repeat": "UP",
+          "count": 3
+        }
+      ],
+      "tomas_fingerprint": "ka59_long_01",
+      "source_tasks": [
+        "ka59_L0"
+      ],
+      "avg_steps": 13.0,
+      "success_rate": 0.8,
+      "generalization_tags": [
+        "keyboard_game",
+        "long_navigation",
+        "special_action",
+        "maze_like"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.35,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 1,
+        "density": 0.2
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_special_action() AND maze_like_grid()",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_ar25_collect_items",
+      "dsl_sequence": [
+        {
+          "repeat": "RIGHT",
+          "count": 3
+        },
+        {
+          "action": "SPECIAL"
+        },
+        {
+          "repeat": "UP",
+          "count": 4
+        },
+        {
+          "repeat": "LEFT",
+          "count": 2
+        }
+      ],
+      "tomas_fingerprint": "ar25_collect_01",
+      "source_tasks": [
+        "ar25_L0"
+      ],
+      "avg_steps": 10.0,
+      "success_rate": 0.8,
+      "generalization_tags": [
+        "keyboard_game",
+        "item_collection",
+        "special_action",
+        "short_navigation"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.45,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.15
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_special_action() AND has_collectible_items()",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_cn04_pattern_cycle",
+      "dsl_sequence": [
+        {
+          "repeat": "UP",
+          "count": 4
+        },
+        {
+          "action": "SPECIAL"
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 3
+        }
+      ],
+      "tomas_fingerprint": "cn04_cycle_01",
+      "source_tasks": [
+        "cn04_L0"
+      ],
+      "avg_steps": 8.0,
+      "success_rate": 0.8,
+      "generalization_tags": [
+        "keyboard_game",
+        "pattern_cycle",
+        "special_action",
+        "moderate_navigation"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.5,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.18
+      },
+      "gaussex_precond": "has_keyboard_actions() AND has_special_action()",
+      "complexity_class": "NP_C_likely"
+    },
+    {
+      "name": "macro_sb26_short_clicks",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "position": [
+            30,
+            30
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            35,
+            30
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            40,
+            30
+          ]
+        }
+      ],
+      "tomas_fingerprint": "sb26_short_01",
+      "source_tasks": [
+        "sb26_L0"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "click_game",
+        "short_sequence",
+        "horizontal_pattern",
+        "sparse_targets"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.85,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 0,
+        "symmetry": [
+          "horizontal"
+        ],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.05
+      },
+      "gaussex_precond": "has_click_action() AND NOT has_keyboard_actions() AND sparse_grid()",
+      "complexity_class": "P"
     },
     {
       "name": "macro_periodic_skew_fill",
@@ -192,7 +1510,1001 @@
           "diagonal_reflect"
         ]
       },
-      "gaussex_precond": "input_cell_count(colors) >= 2 AND goal_cells_exist(input)"
+      "gaussex_precond": "input_cell_count(colors) >= 2 AND goal_cells_exist(input)",
+      "complexity_class": "NP_C_likely"
+    },
+    {
+      "name": "macro_asd_anomaly_click",
+      "dsl_sequence": [
+        {
+          "action": "ASD_DETECT"
+        },
+        {
+          "action": "CLICK_ANOMALY_TARGET"
+        },
+        {
+          "action": "CLICK_ANOMALY_TARGET"
+        },
+        {
+          "action": "CLICK_ANOMALY_TARGET"
+        }
+      ],
+      "tomas_fingerprint": "asd_anomaly_01",
+      "source_tasks": [
+        "generic_ASD_01"
+      ],
+      "avg_steps": 4.0,
+      "success_rate": 0.6,
+      "generalization_tags": [
+        "asd_strategy",
+        "anomaly_detection",
+        "minority_color",
+        "attention_before_loss",
+        "click_game"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1783000000.0,
+      "validated": true,
+      "mdl_score": 0.55,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.1
+      },
+      "gaussex_precond": "minority_color_pixel_count() >= 1 AND has_click_action()",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_three_life_explore_refine_execute",
+      "dsl_sequence": [
+        {
+          "action": "LIFE1_PROBE_ALL"
+        },
+        {
+          "action": "LIFE2_REFINE_BEST"
+        },
+        {
+          "action": "LIFE3_EXECUTE_OPTIMAL"
+        }
+      ],
+      "tomas_fingerprint": "three_life_01",
+      "source_tasks": [
+        "generic_3Life_01"
+      ],
+      "avg_steps": 30.0,
+      "success_rate": 0.5,
+      "generalization_tags": [
+        "three_life",
+        "explore_refine_execute",
+        "multi_attempt",
+        "keyboard_game",
+        "mixed_game"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1783000000.0,
+      "validated": true,
+      "mdl_score": 0.3,
+      "applicable_topo": {
+        "euler_char": 3,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 4,
+        "hole_count": 1,
+        "density": 0.2
+      },
+      "gaussex_precond": "has_multi_life_system() AND action_space_size >= 4",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_bfs_short_path",
+      "dsl_sequence": [
+        {
+          "action": "BFS_EXPLORE"
+        },
+        {
+          "repeat": "OPTIMAL_PATH",
+          "count": 1
+        }
+      ],
+      "tomas_fingerprint": "bfs_short_01",
+      "source_tasks": [
+        "generic_BFS_01"
+      ],
+      "avg_steps": 5.0,
+      "success_rate": 0.7,
+      "generalization_tags": [
+        "bfs_pathfinding",
+        "shortest_path",
+        "keyboard_game",
+        "maze_navigation"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.6,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 1,
+        "density": 0.15
+      },
+      "gaussex_precond": "has_keyboard_actions() AND maze_like_grid() AND path_length() <= 20",
+      "complexity_class": "NP_C_likely"
+    },
+    {
+      "name": "macro_delta_click_interactive",
+      "dsl_sequence": [
+        {
+          "action": "FRAME_DELTA_DETECT"
+        },
+        {
+          "action": "CLICK_DELTA_CELLS"
+        },
+        {
+          "action": "CLICK_DELTA_CELLS"
+        }
+      ],
+      "tomas_fingerprint": "delta_click_01",
+      "source_tasks": [
+        "generic_delta_01"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 0.6,
+      "generalization_tags": [
+        "delta_aware",
+        "interactive_detection",
+        "frame_change",
+        "click_game"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1783000000.0,
+      "validated": true,
+      "mdl_score": 0.55,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.12
+      },
+      "gaussex_precond": "has_frame_delta() AND has_click_action()",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_click_palette_cycle",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "position": [
+            30,
+            30
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            30,
+            30
+          ]
+        },
+        {
+          "action": "CLICK",
+          "position": [
+            30,
+            30
+          ]
+        }
+      ],
+      "tomas_fingerprint": "palette_cycle_01",
+      "source_tasks": [
+        "generic_palette_01"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 0.5,
+      "generalization_tags": [
+        "click_game",
+        "color_cycle",
+        "palette_switch",
+        "repeat_click"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 0.55,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 0,
+        "symmetry": [
+          "point"
+        ],
+        "component_count": 1,
+        "hole_count": 0,
+        "density": 0.03
+      },
+      "gaussex_precond": "has_palette_system() AND has_click_action() AND color_count() >= 2",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_constraint_satisfaction_click",
+      "dsl_sequence": [
+        {
+          "action": "SCAN_CONSTRAINTS"
+        },
+        {
+          "action": "CLICK_VALID_POSITION"
+        },
+        {
+          "action": "CLICK_VALID_POSITION"
+        },
+        {
+          "action": "CLICK_VALID_POSITION"
+        }
+      ],
+      "tomas_fingerprint": "constraint_sat_01",
+      "source_tasks": [
+        "generic_constraint_01"
+      ],
+      "avg_steps": 4.0,
+      "success_rate": 0.4,
+      "generalization_tags": [
+        "constraint_satisfaction",
+        "color_constraint",
+        "palette_constraint",
+        "click_game"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1783000000.0,
+      "validated": true,
+      "mdl_score": 0.4,
+      "applicable_topo": {
+        "euler_char": 3,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 5,
+        "hole_count": 0,
+        "density": 0.15
+      },
+      "gaussex_precond": "has_constraint_system() AND has_click_action()",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_phys_energy_conserve",
+      "dsl_sequence": [
+        {
+          "action": "CHECK"
+        },
+        {
+          "filter": "energy_budget_remaining"
+        }
+      ],
+      "tomas_fingerprint": "phys_e001",
+      "source_tasks": [
+        "v3.7.0_physical_reduction"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.95,
+      "generalization_tags": [
+        "physical_reduction",
+        "energy_conservation",
+        "Phi_phys"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.85,
+      "applicable_topo": {
+        "euler_char_range": [
+          -2,
+          5
+        ],
+        "n_components_range": [
+          1,
+          5
+        ]
+      },
+      "gaussex_precond": "E_cons(A) <= S.Available_Energy",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_phys_causal_order",
+      "dsl_sequence": [
+        {
+          "action": "FILL"
+        },
+        {
+          "action": "ROTATE"
+        }
+      ],
+      "tomas_fingerprint": "phys_c001",
+      "source_tasks": [
+        "v3.7.0_causal_order"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.9,
+      "generalization_tags": [
+        "physical_reduction",
+        "causal_order",
+        "non_associative",
+        "Type_B"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.82,
+      "applicable_topo": {
+        "euler_char_range": [
+          -1,
+          3
+        ],
+        "has_non_associative_ops": true
+      },
+      "gaussex_precond": "T_causal(FILL_before_ROTATE)",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_phys_euler_preserve",
+      "dsl_sequence": [
+        {
+          "action": "CHECK"
+        },
+        {
+          "filter": "euler_char_consistent"
+        }
+      ],
+      "tomas_fingerprint": "phys_t001",
+      "source_tasks": [
+        "v3.7.0_topology_closure"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.92,
+      "generalization_tags": [
+        "physical_reduction",
+        "topology_closure",
+        "euler_char",
+        "G_topo"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.88,
+      "applicable_topo": {
+        "euler_char_range": [
+          -3,
+          8
+        ],
+        "n_holes_preserved": true
+      },
+      "gaussex_precond": "G_topo(euler_char_in == euler_char_out)",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_phys_boundary_respect",
+      "dsl_sequence": [
+        {
+          "action": "CHECK"
+        },
+        {
+          "filter": "boundary_layer_consistent"
+        }
+      ],
+      "tomas_fingerprint": "phys_b001",
+      "source_tasks": [
+        "v3.7.0_boundary_layer"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.9,
+      "generalization_tags": [
+        "physical_reduction",
+        "boundary_layer",
+        "Phi_boundary"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.85,
+      "applicable_topo": {
+        "boundary_preserved": true,
+        "edge_colors_unchanged": true
+      },
+      "gaussex_precond": "Phi_boundary(boundary_layer_in subset boundary_layer_out)",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_sleep_step_trigger",
+      "dsl_sequence": [
+        {
+          "trigger": "consecutive_3_invalid"
+        },
+        {
+          "action": "STRATEGY_SWITCH"
+        }
+      ],
+      "tomas_fingerprint": "sleep_s001",
+      "source_tasks": [
+        "v3.7.0_sleep_step"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.8,
+      "generalization_tags": [
+        "sleep_step",
+        "strategy_switch",
+        "consecutive_invalid",
+        "article_4.3"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.75,
+      "applicable_topo": {
+        "any_topology": true
+      },
+      "gaussex_precond": "consecutive_invalid_count >= 3",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_k_snap_beam_16",
+      "dsl_sequence": [
+        {
+          "param": "beam_width=16"
+        },
+        {
+          "action": "BEAM_SEARCH"
+        }
+      ],
+      "tomas_fingerprint": "ksnap_b001",
+      "source_tasks": [
+        "v3.7.0_k_snap_beam"
+      ],
+      "avg_steps": 16.0,
+      "success_rate": 0.7,
+      "generalization_tags": [
+        "k_snap",
+        "beam_search",
+        "beam_width_16",
+        "article_3.2"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.78,
+      "applicable_topo": {
+        "beam_width": 16,
+        "exploration_depth": "medium"
+      },
+      "gaussex_precond": "beam_width == 16",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_psi_audit_propose_click",
+      "dsl_sequence": [
+        {
+          "audit": "gaussex_fail"
+        },
+        {
+          "propose": "click_primitive"
+        },
+        {
+          "validate": "true"
+        }
+      ],
+      "tomas_fingerprint": "psi_a001",
+      "source_tasks": [
+        "v3.5.0_psi_audit_click"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.85,
+      "generalization_tags": [
+        "psi_audit",
+        "click_primitive",
+        "gaussex_fail_recovery"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.8,
+      "applicable_topo": {
+        "click_game": true
+      },
+      "gaussex_precond": "gaussex_event == FAIL",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_psi_audit_propose_keyboard",
+      "dsl_sequence": [
+        {
+          "audit": "gaussex_fail"
+        },
+        {
+          "propose": "keyboard_primitive"
+        },
+        {
+          "validate": "true"
+        }
+      ],
+      "tomas_fingerprint": "psi_a002",
+      "source_tasks": [
+        "v3.5.0_psi_audit_keyboard"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.8,
+      "generalization_tags": [
+        "psi_audit",
+        "keyboard_primitive",
+        "gaussex_fail_recovery"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.78,
+      "applicable_topo": {
+        "keyboard_game": true
+      },
+      "gaussex_precond": "gaussex_event == FAIL",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_psi_audit_propose_mixed",
+      "dsl_sequence": [
+        {
+          "audit": "gaussex_fail"
+        },
+        {
+          "propose": "mixed_primitive"
+        },
+        {
+          "validate": "true"
+        }
+      ],
+      "tomas_fingerprint": "psi_a003",
+      "source_tasks": [
+        "v3.5.0_psi_audit_mixed"
+      ],
+      "avg_steps": 1.5,
+      "success_rate": 0.75,
+      "generalization_tags": [
+        "psi_audit",
+        "mixed_primitive",
+        "keyboard_click",
+        "gaussex_fail_recovery"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.75,
+      "applicable_topo": {
+        "mixed_game": true
+      },
+      "gaussex_precond": "gaussex_event == FAIL",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_psi_audit_propose_general",
+      "dsl_sequence": [
+        {
+          "audit": "gaussex_fail"
+        },
+        {
+          "propose": "general_primitive"
+        },
+        {
+          "validate": "true"
+        }
+      ],
+      "tomas_fingerprint": "psi_a004",
+      "source_tasks": [
+        "v3.5.0_psi_audit_general"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.7,
+      "generalization_tags": [
+        "psi_audit",
+        "general_primitive",
+        "universal_recovery"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.72,
+      "applicable_topo": {
+        "any_topology": true
+      },
+      "gaussex_precond": "gaussex_event == FAIL",
+      "complexity_class": "NP_C_likely"
+    },
+    {
+      "name": "macro_bk_evolution_gain",
+      "dsl_sequence": [
+        {
+          "compute": "delta_Bk"
+        },
+        {
+          "apply": "evolution_gain"
+        },
+        {
+          "verify": "breakthrough"
+        }
+      ],
+      "tomas_fingerprint": "bk_e001",
+      "source_tasks": [
+        "v3.6.0_bk_evolution"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.75,
+      "generalization_tags": [
+        "bk_evolution",
+        "scaling_law",
+        "breakthrough",
+        "delta_Bk"
+      ],
+      "min_demo_to_activate": 2,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.8,
+      "applicable_topo": {
+        "topology_saturation": true,
+        "eta_gt_0": true
+      },
+      "gaussex_precond": "delta_Bk > Omega_topo",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_scaling_law_v36",
+      "dsl_sequence": [
+        {
+          "compute": "L_total"
+        },
+        {
+          "compare": "L_irr + L_rep + Omega_topo - delta_Bk"
+        }
+      ],
+      "tomas_fingerprint": "sc_l001",
+      "source_tasks": [
+        "v3.6.0_scaling_law"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.9,
+      "generalization_tags": [
+        "scaling_law",
+        "v3.6.0",
+        "performance_prediction"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.85,
+      "applicable_topo": {
+        "any_topology": true
+      },
+      "gaussex_precond": "compute_scaling_law_v36(C, D)",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_psi_cut_open_to_incognito",
+      "dsl_sequence": [
+        {
+          "state": "OPEN"
+        },
+        {
+          "trigger": "PRIVATE_EVAL"
+        },
+        {
+          "transition": "INCOGNITO"
+        }
+      ],
+      "tomas_fingerprint": "psi_c001",
+      "source_tasks": [
+        "v3.6.0_psi_cut"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.95,
+      "generalization_tags": [
+        "psi_cut",
+        "boundary_management",
+        "incognito_mode"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.9,
+      "applicable_topo": {
+        "private_eval": true
+      },
+      "gaussex_precond": "condition == PRIVATE_EVAL",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_psi_cut_emergency_collapse",
+      "dsl_sequence": [
+        {
+          "state": "INCOGNITO"
+        },
+        {
+          "trigger": "EMERGENCY"
+        },
+        {
+          "transition": "COLLAPSED"
+        }
+      ],
+      "tomas_fingerprint": "psi_c002",
+      "source_tasks": [
+        "v3.6.0_psi_cut_emergency"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.95,
+      "generalization_tags": [
+        "psi_cut",
+        "emergency",
+        "collapse",
+        "access_denied"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.88,
+      "applicable_topo": {
+        "emergency": true
+      },
+      "gaussex_precond": "condition == EMERGENCY",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_nar_conv_octonion_encode",
+      "dsl_sequence": [
+        {
+          "encode": "grid_to_octonion"
+        },
+        {
+          "conv": "non_associative_residual"
+        }
+      ],
+      "tomas_fingerprint": "nar_c001",
+      "source_tasks": [
+        "v3.5.0_nar_conv"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.85,
+      "generalization_tags": [
+        "nar_conv",
+        "octonion",
+        "non_associative",
+        "feature_extraction"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.82,
+      "applicable_topo": {
+        "has_non_associative_ops": true,
+        "octonion_encoding": true
+      },
+      "gaussex_precond": "nar_conv_available",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_nar_conv_delta_encode",
+      "dsl_sequence": [
+        {
+          "encode": "delta_frames"
+        },
+        {
+          "compute": "eta_metric"
+        }
+      ],
+      "tomas_fingerprint": "nar_c002",
+      "source_tasks": [
+        "v3.5.0_nar_conv_delta"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.8,
+      "generalization_tags": [
+        "nar_conv",
+        "delta_encoding",
+        "topology_saturation",
+        "eta_metric"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-26",
+      "validated": true,
+      "mdl_score": 0.78,
+      "applicable_topo": {
+        "eta_gt_0": true,
+        "saturation_detected": true
+      },
+      "gaussex_precond": "eta > 0 => need Bk evolution",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_sk48_simple_click_sequence",
+      "dsl_sequence": [
+        {
+          "click": "center_cell"
+        },
+        {
+          "click": "adjacent_pair"
+        },
+        {
+          "click": "verify_pattern"
+        }
+      ],
+      "tomas_fingerprint": "sk48_001",
+      "source_tasks": [
+        "sk48_L0",
+        "sk48_L1"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 0.65,
+      "generalization_tags": [
+        "click_game",
+        "simple_sequence",
+        "pattern_verify"
+      ],
+      "min_demo_to_activate": 2,
+      "created_at": "2026-06-26",
+      "validated": false,
+      "mdl_score": 0.7,
+      "applicable_topo": {
+        "n_components": 2,
+        "euler_char": 0
+      },
+      "gaussex_precond": "click_game AND simple_pattern",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_dc22_grid_navigation",
+      "dsl_sequence": [
+        {
+          "action": "RIGHT"
+        },
+        {
+          "repeat": "RIGHT",
+          "count": 3
+        },
+        {
+          "action": "DOWN"
+        },
+        {
+          "action": "SPECIAL"
+        }
+      ],
+      "tomas_fingerprint": "dc22_001",
+      "source_tasks": [
+        "dc22_L0",
+        "dc22_L1"
+      ],
+      "avg_steps": 5.0,
+      "success_rate": 0.6,
+      "generalization_tags": [
+        "keyboard_game",
+        "grid_navigation",
+        "special_action"
+      ],
+      "min_demo_to_activate": 2,
+      "created_at": "2026-06-26",
+      "validated": false,
+      "mdl_score": 0.68,
+      "applicable_topo": {
+        "grid_type": "nav_special",
+        "n_components": 1
+      },
+      "gaussex_precond": "keyboard_game AND special_action",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_re86_constraint_solve",
+      "dsl_sequence": [
+        {
+          "analyze": "constraints"
+        },
+        {
+          "click": "satisfying_cells"
+        },
+        {
+          "verify": "all_constraints_met"
+        }
+      ],
+      "tomas_fingerprint": "re86_001",
+      "source_tasks": [
+        "re86_L0",
+        "re86_L1"
+      ],
+      "avg_steps": 4.0,
+      "success_rate": 0.55,
+      "generalization_tags": [
+        "constraint_satisfaction",
+        "click_game",
+        "multi_constraint"
+      ],
+      "min_demo_to_activate": 2,
+      "created_at": "2026-06-26",
+      "validated": false,
+      "mdl_score": 0.65,
+      "applicable_topo": {
+        "constraint_type": "multi",
+        "euler_char": 1
+      },
+      "gaussex_precond": "constraint_satisfaction AND click_game",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_g50t_wall_bfs",
+      "dsl_sequence": [
+        {
+          "detect": "walls"
+        },
+        {
+          "bfs": "shortest_path"
+        },
+        {
+          "navigate": "path"
+        },
+        {
+          "action": "SPECIAL"
+        }
+      ],
+      "tomas_fingerprint": "g50t_001",
+      "source_tasks": [
+        "g50t_L0"
+      ],
+      "avg_steps": 8.0,
+      "success_rate": 0.5,
+      "generalization_tags": [
+        "keyboard_game",
+        "wall_detection",
+        "bfs_path",
+        "special_action"
+      ],
+      "min_demo_to_activate": 2,
+      "created_at": "2026-06-26",
+      "validated": false,
+      "mdl_score": 0.62,
+      "applicable_topo": {
+        "wall_pattern": true,
+        "bfs_required": true
+      },
+      "gaussex_precond": "keyboard_game AND wall_pattern",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_wa30_periodic_fill",
+      "dsl_sequence": [
+        {
+          "detect": "periodicity"
+        },
+        {
+          "fill": "periodic_pattern"
+        },
+        {
+          "verify": "symmetry"
+        }
+      ],
+      "tomas_fingerprint": "wa30_001",
+      "source_tasks": [
+        "wa30_L0",
+        "wa30_L1"
+      ],
+      "avg_steps": 6.0,
+      "success_rate": 0.55,
+      "generalization_tags": [
+        "periodic_fill",
+        "symmetry_detection",
+        "pattern_completion"
+      ],
+      "min_demo_to_activate": 2,
+      "created_at": "2026-06-26",
+      "validated": false,
+      "mdl_score": 0.63,
+      "applicable_topo": {
+        "periodic": true,
+        "symmetry_type": "horizontal"
+      },
+      "gaussex_precond": "periodic_pattern AND symmetry",
+      "complexity_class": "P_in_phys"
     }
   ]
 }

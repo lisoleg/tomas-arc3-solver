@@ -1,0 +1,168 @@
+{
+  "ls20": {
+    "game_id": "ls20",
+    "levels_completed": 7,
+    "total_levels": 7,
+    "avg_rhae": 115.0,
+    "total_rhae": 805.0,
+    "total_steps": 325,
+    "game_over": false,
+    "per_level": [
+      {
+        "level": 0,
+        "status": "PASS",
+        "steps": 13,
+        "baseline": 22,
+        "rhae": 115.0
+      },
+      {
+        "level": 1,
+        "status": "PASS",
+        "steps": 45,
+        "baseline": 123,
+        "rhae": 115.0
+      },
+      {
+        "level": 2,
+        "status": "PASS",
+        "steps": 41,
+        "baseline": 73,
+        "rhae": 115.0
+      },
+      {
+        "level": 3,
+        "status": "PASS",
+        "steps": 49,
+        "baseline": 84,
+        "rhae": 115.0
+      },
+      {
+        "level": 4,
+        "status": "PASS",
+        "steps": 44,
+        "baseline": 96,
+        "rhae": 115.0
+      },
+      {
+        "level": 5,
+        "status": "PASS",
+        "steps": 80,
+        "baseline": 192,
+        "rhae": 115.0
+      },
+      {
+        "level": 6,
+        "status": "PASS",
+        "steps": 53,
+        "baseline": 186,
+        "rhae": 115.0
+      }
+    ]
+  },
+  "ft09": {
+    "game_id": "ft09",
+    "levels_completed": 6,
+    "total_levels": 6,
+    "avg_rhae": 115.0,
+    "total_rhae": 690.0,
+    "total_steps": 75,
+    "game_over": false,
+    "per_level": [
+      {
+        "level": 0,
+        "status": "PASS",
+        "steps": 4,
+        "baseline": 17,
+        "rhae": 115.0
+      },
+      {
+        "level": 1,
+        "status": "PASS",
+        "steps": 7,
+        "baseline": 51,
+        "rhae": 115.0
+      },
+      {
+        "level": 2,
+        "status": "PASS",
+        "steps": 14,
+        "baseline": 38,
+        "rhae": 115.0
+      },
+      {
+        "level": 3,
+        "status": "PASS",
+        "steps": 16,
+        "baseline": 42,
+        "rhae": 115.0
+      },
+      {
+        "level": 4,
+        "status": "PASS",
+        "steps": 21,
+        "baseline": 56,
+        "rhae": 115.0
+      },
+      {
+        "level": 5,
+        "status": "PASS",
+        "steps": 13,
+        "baseline": 34,
+        "rhae": 115.0
+      }
+    ]
+  },
+  "tr87": {
+    "game_id": "tr87",
+    "levels_completed": 5,
+    "total_levels": 6,
+    "avg_rhae": 115.0,
+    "total_rhae": 575.0,
+    "total_steps": 356,
+    "game_over": true,
+    "per_level": [
+      {
+        "level": 0,
+        "status": "PASS",
+        "steps": 14,
+        "baseline": 54,
+        "rhae": 115.0
+      },
+      {
+        "level": 1,
+        "status": "PASS",
+        "steps": 25,
+        "baseline": 58,
+        "rhae": 115.0
+      },
+      {
+        "level": 2,
+        "status": "PASS",
+        "steps": 21,
+        "baseline": 40,
+        "rhae": 115.0
+      },
+      {
+        "level": 3,
+        "status": "PASS",
+        "steps": 21,
+        "baseline": 66,
+        "rhae": 115.0
+      },
+      {
+        "level": 4,
+        "status": "PASS",
+        "steps": 19,
+        "baseline": 55,
+        "rhae": 115.0
+      },
+      {
+        "level": 5,
+        "status": "FAIL",
+        "steps": 256,
+        "baseline": 78,
+        "rhae": 0.0
+      }
+    ]
+  }
+}

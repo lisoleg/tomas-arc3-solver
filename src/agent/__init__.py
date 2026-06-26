@@ -59,6 +59,19 @@ from .tomas_learner import (
     MacroCandidate,
     ActionTrace,
     EpisodeTrace,
+    OnlinePSIAudit,
+    PhysicalNARConv,
+    GaussExGuard,
+    FastPathDispatcher,
+    extract_topo_features,
+    extract_topo_features_vec,
+    # v3.6.0 — 物理紧化 + Ψ-截断 + 进化增益
+    PhysicalGaussExGuard,
+    PsiCutController,
+    compute_scaling_law_v36,
+    classify_task_complexity,
+    # v3.7.0 — 流贯归约框架
+    PhysicalCompactificationReduction,
 )
 
 # ── MetaSnapNet可选集成 ──
@@ -132,6 +145,20 @@ __all__ = [
     "MacroCandidate",
     "ActionTrace",
     "EpisodeTrace",
+    # 拓扑饱和修正 v3.5.0 — OnlinePSIAudit + PhysicalNARConv
+    "OnlinePSIAudit",
+    "PhysicalNARConv",
+    "GaussExGuard",
+    "FastPathDispatcher",
+    "extract_topo_features",
+    "extract_topo_features_vec",
+    # v3.6.0 — 物理紧化 + Ψ-截断 + 进化增益
+    "PhysicalGaussExGuard",
+    "PsiCutController",
+    "compute_scaling_law_v36",
+    "classify_task_complexity",
+    # v3.7.0 — 流贯归约框架
+    "PhysicalCompactificationReduction",
     # MetaSnapNet κ-Snap Beam Scoring (SPP集成)
     "TopoFeatureExtractor",
     "ProgramNodeFeatureExtractor",

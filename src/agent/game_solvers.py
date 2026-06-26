@@ -2495,6 +2495,7 @@ def solve_generic_bfs(
     max_depth: int = 40,
     max_nodes: int = 500000,
     max_time: float = 30.0,
+    phys_pruner: Any = None,
 ) -> list[tuple] | None:
     """BFS solver - finds shortest solution path.
 
@@ -2506,11 +2507,18 @@ def solve_generic_bfs(
     BFS explores all states at depth d before depth d+1, guaranteeing
     the shortest solution is found first.
 
+    v3.7.0: Added phys_pruner parameter for PhysicalCompactificationReduction.
+    When provided, each expansion candidate is checked against Φ_phys
+    constraints before adding to the BFS frontier — reducing search space
+    from O(|D|^n) to O(|D|^k × poly(n)) per Theorem 3.1.
+
     Args:
         game: The game object (will NOT be modified - uses deepcopy).
         max_depth: Maximum search depth.
         max_nodes: Maximum total states to explore.
         max_time: Time limit in seconds.
+        phys_pruner: Optional PhysicalCompactificationReduction instance
+            for Φ_phys pruning of expansion candidates.
 
     Returns:
         List of (GameAction, data) tuples, or None if no solution found.
@@ -2554,6 +2562,14 @@ def solve_generic_bfs(
             if state_h in visited:
                 continue
             visited.add(state_h)
+
+            # v3.7.0 — Φ_phys pruning: reject expansion candidates that violate physics
+            if phys_pruner is not None:
+                try:
+                    if phys_pruner.should_prune_game_state(g_copy, g):
+                        continue  # Pruned by PhysicalCompactificationReduction
+                except Exception:
+                    pass  # If pruning fails, accept the candidate anyway
 
             if len(path) + 1 < max_depth:
                 queue.append((g_copy, path + [(ai.id, dict(ai.data) if ai.data else {})], state_h))
@@ -2835,6 +2851,7 @@ def solve_generic_dfs(
     max_depth: int = 15,
     max_nodes: int = 30000,
     max_time: float = 10.0,
+    phys_pruner: Any = None,
 ) -> list[tuple] | None:
     """Generic DFS solver using deepcopy for each branch.
 
@@ -2846,11 +2863,15 @@ def solve_generic_dfs(
     reflected in sprite positions. Instead, limits consecutive no-change
     actions to prevent infinite loops.
 
+    v3.7.0: Added phys_pruner parameter for Φ_phys pruning. When provided,
+    each expansion candidate is checked before recursive search.
+
     Args:
         game: The game object (will be modified during search).
         max_depth: Maximum search depth (number of actions).
         max_nodes: Maximum states to explore.
         max_time: Time limit in seconds.
+        phys_pruner: Optional PhysicalCompactificationReduction instance.
 
     Returns:
         List of (GameAction, data) tuples, or None if no solution found.
@@ -2895,6 +2916,14 @@ def solve_generic_dfs(
 
             if g_copy._state == GameState.GAME_OVER:
                 continue
+
+            # v3.7.0 — Φ_phys pruning for DFS expansion
+            if phys_pruner is not None:
+                try:
+                    if phys_pruner.should_prune_game_state(g_copy, g):
+                        continue  # Pruned by PhysicalCompactificationReduction
+                except Exception:
+                    pass  # If pruning fails, accept anyway
 
             new_hash = _game_state_hash(g_copy)
             if new_hash == state_h:
@@ -4196,7 +4225,7 @@ def _snap_click_coordinates(
 
             # Only snap if within reasonable distance (max 10 pixels)
             if best_dist <= 100:  # 10 pixel radius
-                corrected_plan.append((action, (best_pos[0], best_pos[1])))
+                corrected_plan.append((action, {"x": best_pos[0], "y": best_pos[1]}))
             else:
                 corrected_plan.append((action, click_data))
         else:
@@ -4278,17 +4307,22 @@ def solve_beam_search(
     max_depth: int = 80,
     beam_width: int = 10,
     max_time: float = 8.0,
+    phys_pruner: Any = None,
 ) -> list[tuple] | None:
     """Beam search solver: explores multiple paths simultaneously.
 
     Much faster than DFS for large action spaces because it doesn't
     backtrack. Uses state novelty and game score to prioritize exploration.
 
+    v3.7.0: Added phys_pruner for Φ_phys pruning (Theorem 3.1).
+    κ-Snap recommended Beam Width=16 (article §3.2).
+
     Args:
         game: The game object (will NOT be modified - uses deepcopy).
         max_depth: Maximum number of actions.
         beam_width: Number of parallel states to maintain.
         max_time: Time limit in seconds.
+        phys_pruner: Optional PhysicalCompactificationReduction instance.
 
     Returns:
         List of (GameAction, data) tuples, or None if no solution found.
@@ -4336,6 +4370,14 @@ def solve_beam_search(
                     continue
                 seen_hashes.add(state_h)
 
+                # v3.7.0 — Φ_phys pruning for Beam expansion
+                if phys_pruner is not None:
+                    try:
+                        if phys_pruner.should_prune_game_state(g_copy, g):
+                            continue  # Pruned by PhysicalCompactificationReduction
+                    except Exception:
+                        pass  # If pruning fails, accept anyway
+
                 # Score: prefer higher game score, shorter paths
                 score = _score_game_state(g_copy, original_level) - len(path) * 0.1
                 candidates.append((score, g_copy, path + [step]))
@@ -4355,12 +4397,15 @@ def solve_idfs(
     max_depths: list[int] | None = None,
     max_time: float = 10.0,
     max_nodes: int = 80000,
+    phys_pruner: Any = None,
 ) -> list[tuple] | None:
     """Iterative deepening DFS with snapshot/restore.
 
     Tries increasing depth limits: 5, 8, 12, 18, 25, 35.
     Uses _snapshot_state/_restore_state instead of deepcopy per action,
     which is significantly faster.
+
+    v3.7.0: Added phys_pruner for Φ_phys pruning (Theorem 3.1).
 
     Args:
         game: The game object (will be modified during search, restored after).
@@ -4388,7 +4433,8 @@ def solve_idfs(
         visited: set[str] = set()
         result = _idfs_search(
             game, 0, max_depth, [], 0,
-            visited, original_level, t0, max_time, max_nodes
+            visited, original_level, t0, max_time, max_nodes,
+            phys_pruner=phys_pruner,
         )
 
         # Restore game state after each depth attempt
@@ -4411,8 +4457,12 @@ def _idfs_search(
     t0: float,
     max_time: float,
     max_nodes: int,
+    phys_pruner: Any = None,
 ) -> list[tuple] | None:
-    """Recursive DFS helper for solve_idfs. Uses snapshot/restore."""
+    """Recursive DFS helper for solve_idfs. Uses snapshot/restore.
+
+    v3.7.0: Added phys_pruner parameter for Φ_phys pruning.
+    """
     import time as _time
     from arcengine import GameState
 
@@ -4454,12 +4504,31 @@ def _idfs_search(
             _restore_state(game, snapshot)
             continue
 
+        # v3.7.0 — Φ_phys pruning for IDFS expansion
+        if phys_pruner is not None:
+            try:
+                # Extract grid for pruning check
+                grid_for_prune = None
+                try:
+                    grid_for_prune = np.array(game.current_state.grid)
+                except Exception:
+                    try:
+                        grid_for_prune = np.array(game.grid)
+                    except Exception:
+                        pass
+                if grid_for_prune is not None and phys_pruner.should_prune(new_grid=grid_for_prune):
+                    _restore_state(game, snapshot)
+                    continue  # Pruned by PhysicalCompactificationReduction
+            except Exception:
+                pass  # If pruning fails, accept anyway
+
         new_hash = _game_state_hash(game)
         new_no_change = no_change + 1 if new_hash == state_h else 0
 
         result = _idfs_search(
             game, depth + 1, max_depth, path + [step], new_no_change,
-            visited, original_level, t0, max_time, max_nodes
+            visited, original_level, t0, max_time, max_nodes,
+            phys_pruner=phys_pruner,
         )
 
         if result:
@@ -4719,19 +4788,67 @@ def solve_game(
         """Return remaining time in global budget."""
         return max(0.0, _solve_game_max_time - (_time.time() - _solve_game_t0))
 
-    # Adaptive parameters based on action space size
+    # ═══════════════════════════════════════════════════════════════════
+    # v3.7.0 — 流贯归约 Phase 选择策略
+    # ═══════════════════════════════════════════════════════════════════
+    # classify_task_complexity() determines which phases to use:
+    #   P class:        Phase -1→0→0.5→1→Keyboard→Random (skip BFS/DFS/Beam)
+    #   P_in_phys:      Phase -1→0→0.5→1→BFS(Φ_phys)→Beam(Φ_phys)→DFS
+    #   NP_Hard:        Full pipeline (all phases)
+    #   NP_C_likely:    Phase -1→0→0.5→1→Keyboard→Random (minimal pipeline)
+    task_complexity = None
+    phys_pruner = None
+    try:
+        from .tomas_learner import (
+            TOMASLearner,
+            PhysicalCompactificationReduction,
+            classify_task_complexity as _classify_task,
+            extract_topo_features as _extract_topo,
+        )
+        grid_for_classify = None
+        try:
+            grid_for_classify = np.array(game.current_state.grid)
+        except Exception:
+            try:
+                grid_for_classify = np.array(game.grid)
+            except Exception:
+                pass
+        if grid_for_classify is not None:
+            learner = TOMASLearner()
+            game_state_for_classify = {
+                "sprites": [],
+                "game_id": game_id,
+                "level_idx": level_idx,
+                "n_actions": n_actions,
+                "grid_shape": grid_for_classify.shape,
+            }
+            task_complexity = learner.init_compactification(
+                initial_grid=grid_for_classify,
+                game_id=base_id,
+                game_state=game_state_for_classify,
+            )
+            phys_pruner = learner.physical_compactification
+    except Exception:
+        pass
+
+    # Determine phase strategy from complexity class
+    complexity_class = task_complexity.get("complexity_class", "NP_C_likely") if task_complexity else "NP_C_likely"
+    skip_search_phases = complexity_class in ("P", "NP_C_likely")  # Skip BFS/Beam/DFS for easy tasks
+    use_phys_pruning = complexity_class in ("P_in_phys", "NP_Hard")  # Use Φ_phys pruning in search
+
+    # Adaptive parameters based on action space size + κ-Snap Beam Width=16 (article §3.2)
     if n_actions <= 4:
-        beam_w = 12
-        beam_time = 6.0
-        idfs_time = 10.0
+        beam_w = 16  # κ-Snap recommended Beam Width
+        beam_time = 8.0
+        idfs_time = 12.0
         idfs_depths = [5, 8, 12, 18, 25, 35]
     elif n_actions <= 7:
-        beam_w = 10
-        beam_time = 6.0
-        idfs_time = 8.0
+        beam_w = 16
+        beam_time = 8.0
+        idfs_time = 10.0
         idfs_depths = [5, 8, 12, 18, 25]
     else:
-        beam_w = 8
+        beam_w = 12
         beam_time = 5.0
         idfs_time = 6.0
         idfs_depths = [4, 6, 10, 15]
@@ -4829,12 +4946,17 @@ def solve_game(
             pass
 
     # Phase 2: BFS for small action spaces (finds shortest solution first)
-    if n_actions <= 7 and _time_remaining() > 3.0:
+    # v3.7.0 — Only run if task complexity requires search (P_in_phys / NP_Hard)
+    # P class / NP_C_likely → skip BFS entirely (Fast-Path sufficient)
+    if not skip_search_phases and n_actions <= 7 and _time_remaining() > 3.0:
         try:
             bfs_time = 20.0 if n_actions <= 4 else 15.0
             bfs_depth = 40 if n_actions <= 4 else 30
             bfs_nodes = 300000 if n_actions <= 4 else 200000
-            plan = solve_generic_bfs(game, max_depth=bfs_depth, max_nodes=bfs_nodes, max_time=bfs_time)
+            plan = solve_generic_bfs(
+                game, max_depth=bfs_depth, max_nodes=bfs_nodes, max_time=bfs_time,
+                phys_pruner=phys_pruner if use_phys_pruning else None,
+            )
             plan = _normalize_plan(plan)
             if plan is not None and _verify_plan(plan):
                 return plan
@@ -4842,10 +4964,14 @@ def solve_game(
             pass
 
     # Phase 3: Beam search (fast, parallel exploration - uses deepcopy internally)
-    if _time_remaining() > 2.0:
+    # v3.7.0 — κ-Snap Beam Width=16 per article §3.2, with Φ_phys pruning
+    if not skip_search_phases and _time_remaining() > 2.0:
         try:
             beam_t = min(beam_time, _time_remaining() - 1.0)
-            plan = solve_beam_search(game, max_depth=80, beam_width=beam_w, max_time=beam_t)
+            plan = solve_beam_search(
+                game, max_depth=80, beam_width=beam_w, max_time=beam_t,
+                phys_pruner=phys_pruner if use_phys_pruning else None,
+            )
             plan = _normalize_plan(plan)
             if plan is not None and _verify_plan(plan):
                 return plan
@@ -4853,11 +4979,15 @@ def solve_game(
             pass
 
     # Phase 4: Iterative deepening DFS (thorough, uses snapshot/restore)
-    if _time_remaining() > 2.0:
+    # v3.7.0 — Only for NP_Hard tasks (P/P_in_phys use Beam instead)
+    if not skip_search_phases and _time_remaining() > 2.0:
         try:
             game_copy = copy.deepcopy(game)
             idfs_t = min(idfs_time, _time_remaining() - 1.0)
-            plan = solve_idfs(game_copy, max_depths=idfs_depths, max_time=idfs_t)
+            plan = solve_idfs(
+                game_copy, max_depths=idfs_depths, max_time=idfs_t,
+                phys_pruner=phys_pruner if use_phys_pruning else None,
+            )
             plan = _normalize_plan(plan)
             if plan is not None and _verify_plan(plan):
                 return plan
@@ -4865,13 +4995,17 @@ def solve_game(
             pass
 
     # Phase 5: Generic DFS (deepcopy backtracking - slow but thorough)
-    if _time_remaining() > 2.0:
+    # v3.7.0 — Only for NP_Hard tasks
+    if not skip_search_phases and _time_remaining() > 2.0:
         try:
             game_copy = copy.deepcopy(game)
             dfs_depth = 40 if n_actions <= 7 else 25
             dfs_nodes = 200000 if n_actions <= 7 else 80000
             dfs_t = min(15.0, _time_remaining() - 1.0) if n_actions <= 7 else min(10.0, _time_remaining() - 1.0)
-            plan = solve_generic_dfs(game_copy, max_depth=dfs_depth, max_nodes=dfs_nodes, max_time=dfs_t)
+            plan = solve_generic_dfs(
+                game_copy, max_depth=dfs_depth, max_nodes=dfs_nodes, max_time=dfs_t,
+                phys_pruner=phys_pruner if use_phys_pruning else None,
+            )
             plan = _normalize_plan(plan)
             if plan is not None and _verify_plan(plan):
                 return plan

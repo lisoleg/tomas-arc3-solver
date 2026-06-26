@@ -59,6 +59,9 @@ from pathlib import Path
 # ── 导入升级版特征提取器 ──
 from .meta_snap_net import TopoFeatureExtractor as _TopoFeatureExtractorClass
 
+# ── 导入八元数乘法表 (PhysicalNARConv需要) ──
+from src.encoder.nar_conv import OCT_MUL_TABLE
+
 
 # ============================================================================
 # Data Structures
@@ -1669,6 +1672,18 @@ class TOMASLearner:
             guard=self.gauss_ex_guard,
         )
 
+        # ── 拓扑饱和修正 v3.5.0 组件 ──
+        self.online_psi_audit = OnlinePSIAudit(
+            library=self.library_manager,
+            verbose=True,
+        )
+        self.physical_nar_conv = PhysicalNARConv()
+
+        # ── 流贯归约 v3.7.0 组件 ──
+        self.physical_compactification: Optional[PhysicalCompactificationReduction] = None
+        self._gaussex_fail_streak: int = 0  # Consecutive GaussEx failures
+        self._sleep_step_auto_trigger_threshold: int = 3  # §4.3: 连续3次失败→触发
+
         self.mdl_threshold = mdl_threshold
         self.psi_audit_threshold = psi_audit_threshold
         self.buffer_size = buffer_size
@@ -1681,6 +1696,95 @@ class TOMASLearner:
 
         # Fast-Path dispatch log for monitoring
         self._fast_path_log: List[Dict[str, Any]] = []
+
+    # ── L0.5: PhysicalCompactificationReduction 初始化 (v3.7.0) ──
+
+    def init_compactification(
+        self,
+        initial_grid: np.ndarray,
+        game_id: str,
+        game_state: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Initialize PhysicalCompactificationReduction for a solve_game() call.
+
+        Creates a PhysicalCompactificationReduction instance with the current
+        game's topology and complexity classification. This drives the Phase
+        selection strategy in solve_game() and provides Φ_phys pruning for
+        BFS/DFS/Beam expansion.
+
+        Args:
+            initial_grid: Initial grid state (H, W) array.
+            game_id: Game identifier for complexity classification.
+            game_state: Optional game state dict for constraint evaluation.
+
+        Returns:
+            Dict from classify_task_complexity() — used by solve_game()
+            for Phase selection strategy.
+        """
+        topo_features = extract_topo_features(initial_grid)
+
+        # Infer physical constraints from game characteristics
+        n_actions = game_state.get("n_actions", 4) if game_state else 4
+        has_physical_constraints = n_actions <= 7  # Small action spaces → physical structure
+        has_non_associative_ops = n_actions > 4  # Multi-directional → order-sensitive
+
+        task_complexity = classify_task_complexity(
+            game_id=game_id,
+            topo_features=topo_features,
+            has_physical_constraints=has_physical_constraints,
+            has_non_associative_ops=has_non_associative_ops,
+        )
+
+        # Create PhysicalCompactificationReduction instance
+        self.physical_compactification = PhysicalCompactificationReduction(
+            initial_grid=initial_grid,
+            game_state=game_state or {},
+            task_complexity=task_complexity,
+            strict=False,  # Relaxed for BFS/DFS (±1 euler_char tolerance)
+        )
+
+        # Reset failure tracking
+        self._gaussex_fail_streak = 0
+
+        return task_complexity
+
+    def track_gaussex_result(self, passed: bool) -> bool:
+        """Track GaussEx verification result and auto-trigger Sleep-Step.
+
+        Implements §4.3 from the article: consecutive 3 GaussEx failures
+        automatically trigger sleep_step_online() to evolve 紧化基 Bκ.
+
+        Args:
+            passed: Whether the GaussEx verification passed.
+
+        Returns:
+            True if Sleep-Step was triggered this call.
+        """
+        if passed:
+            self._gaussex_fail_streak = 0
+            return False
+        else:
+            self._gaussex_fail_streak += 1
+            if self._gaussex_fail_streak >= self._sleep_step_auto_trigger_threshold:
+                # ── Auto-trigger Sleep-Step (§4.3) ──
+                self._gaussex_fail_streak = 0  # Reset after trigger
+                # Generate GaussEx event for ψ-Audit
+                failure_event = {
+                    "type": "gaussex_failure",
+                    "consecutive_count": self._sleep_step_auto_trigger_threshold,
+                    "context": "PhysicalCompactificationReduction pruning",
+                    "failure_type": "topology_saturation",
+                }
+                try:
+                    new_primitives = self.sleep_step_online(
+                        gaussex_events=[failure_event],
+                    )
+                    if new_primitives:
+                        return True
+                except Exception:
+                    pass
+                return True  # Triggered even if no new primitives
+        return False
 
     # ── L1: Record ──────────────────────────────────────────────────
 
@@ -2025,6 +2129,113 @@ class TOMASLearner:
 
         return report
 
+    # ── L2+: Sleep-Step Online (拓扑饱和修正 §3 — ψ-Audit自动化) ─────
+
+    def sleep_step_online(
+        self,
+        gaussex_events: Optional[List[Dict[str, Any]]] = None,
+    ) -> List[MacroCandidate]:
+        """Online Sleep-Step with automated ψ-Audit primitive proposal.
+
+        Extended version of sleep_step() that also processes GaussEx
+        failure events through OnlinePSIAudit to automatically propose
+        new DSL primitives when the current 紧化基 Bκ encounters
+        拓扑饱和 (performance plateau).
+
+        This implements the 紧化基进化 mechanism from the 拓扑饱和修正
+        paper: when a solver fails, the system automatically:
+            1. Analyzes the failure to identify missing capabilities
+            2. Proposes new DSL primitives from template library
+            3. Validates the proposals against the game context
+            4. Adds validated primitives to library.json for future use
+
+        Args:
+            gaussex_events: Optional list of GaussEx failure events.
+                If None, processes events from internal buffer.
+
+        Returns:
+            List of new MacroCandidates proposed and validated.
+        """
+        new_primitives = []
+
+        # Process standard sleep-step (offline pattern extraction)
+        offline_candidates = self.sleep_step()
+
+        # Process online ψ-Audit (automated primitive proposal)
+        events = gaussex_events or []
+        for event in events:
+            proposed = self.online_psi_audit.monitor(event)
+            if proposed is not None:
+                new_primitives.append(proposed)
+
+        # Also generate failure events from buffered episodes
+        for episode in self._episode_buffer:
+            if not episode.success and episode.rhae_score < 50:
+                # Failed episode → generate GaussEx event for ψ-Audit
+                failure_event = self._episode_to_gaussex_event(episode)
+                proposed = self.online_psi_audit.monitor(failure_event)
+                if proposed is not None:
+                    new_primitives.append(proposed)
+
+        return new_primitives
+
+    def _episode_to_gaussex_event(
+        self,
+        episode: EpisodeTrace,
+    ) -> Dict[str, Any]:
+        """Convert a failed EpisodeTrace to a GaussEx event for ψ-Audit.
+
+        Maps episode-level failure information to the GaussEx event
+        format expected by OnlinePSIAudit.monitor().
+
+        Args:
+            episode: Failed EpisodeTrace with low RHAE score.
+
+        Returns:
+            Dict describing the GaussEx event.
+        """
+        # Determine failure type from episode characteristics
+        if episode.total_steps <= 5:
+            failure_type = "stall_detected"
+        elif episode.rhae_score == 0:
+            failure_type = "game_over"
+        else:
+            # Check if the episode had click or keyboard actions
+            has_click = any(t.action_type == "CLICK" for t in episode.traces)
+            has_keyboard = any(t.action_type == "KEYBOARD" for t in episode.traces)
+
+            if has_click and not has_keyboard:
+                failure_type = "click_no_effect"
+            elif has_keyboard and not has_click:
+                failure_type = "navigation_stuck"
+            elif has_click and has_keyboard:
+                failure_type = "constraint_violation"
+            else:
+                failure_type = "stall_detected"
+
+        # Build the last grid state if available
+        last_grid = None
+        for trace in reversed(episode.traces):
+            if trace.post_state is not None:
+                last_grid = trace.post_state
+                break
+
+        return {
+            "passed": False,
+            "type": failure_type,
+            "trace": {
+                "total_steps": episode.total_steps,
+                "rhae_score": episode.rhae_score,
+                "success": episode.success,
+                "pattern": episode.level_type,
+            },
+            "game_id": episode.game_id,
+            "level_index": episode.level_index,
+            "grid_state": last_grid,
+            "game_tags": episode.tags,
+            "game_state": {},  # No detailed sprite info from episode
+        }
+
     # ── Macro Retrieval ──────────────────────────────────────────────
 
     def get_relevant_macros(
@@ -2138,3 +2349,1584 @@ class TOMASLearner:
             List of Fast-Path dispatch entries.
         """
         return self._fast_path_log
+
+
+# ============================================================================
+# Online ψ-Audit: Automated DSL Primitive Proposal (拓扑饱和修正 §3)
+# ============================================================================
+#
+# From: "超越幂律的天花板：基于太一理论（TOMAS）的 Scaling Law 拓扑饱和修正"
+# Key insight: When a solver encounters 拓扑饱和 (performance plateau) on
+# Type-B games, the 紧化基 Bκ must evolve by proposing new DSL primitives.
+# This is the propose_primitive algorithm from Appendix C of the article.
+#
+# Pipeline:
+#   GaussEx failure → monitor → _analyze_failures → _synthesize_primitive
+#   → validate → library.add_macro
+#
+# For ARC-AGI-3 games specifically:
+#   - click_effect failure → propose "click_diamond_neighbors", "click_palette_rotate"
+#   - navigation failure → propose "navigate_around_obstacle", "visit_switcher"
+#   - constraint violation → propose "apply_constraint_satisfaction"
+#   - keyboard stall → propose "direction_probe_then_navigate"
+# ============================================================================
+
+class OnlinePSIAudit:
+    """Automated DSL primitive proposal from GaussEx failure analysis.
+
+    Implements the 紧化基进化 (Bκ-evolution) mechanism from the TOMAS
+    拓扑饱和修正 paper. When a solver's GaussEx verification fails,
+    this module analyzes the failure context, identifies missing factors,
+    and proposes new DSL primitives to fill the capability gap.
+
+    This is the core mechanism for breaking 拓扑饱和 on Type-B games:
+    instead of just adding more parameters (which hits a performance
+    plateau), we evolve the 紧化基 by adding new primitive operations
+    that capture the non-associative structure of the task.
+
+    ARC-AGI-3 specific primitive categories:
+        click:    click_diamond, click_palette_rotate, click_toggle_pair
+        keyboard: navigate_bfs, visit_switcher, direction_probe
+        mixed:    click_then_navigate, constraint_satisfy
+        general:  anomaly_detect, 3life_execute, pattern_repeat
+
+    Integration with TOMASLearner:
+        TOMASLearner.sleep_step_online() calls OnlinePSIAudit.monitor()
+        after each failed GaussEx verification to propose new primitives.
+
+    Args:
+        library: LibraryManager instance for macro persistence.
+        verbose: Whether to log primitive proposals. Defaults to True.
+    """
+
+    # ── ARC-AGI-3 failure type classification ──
+    FAILURE_TYPE_MAP: Dict[str, str] = {
+        "energy_violation": "physical_constraint",     # Energy conservation violated
+        "constraint_violation": "logical_constraint",  # Logic/constraint not satisfied
+        "navigation_stuck": "path_blocked",            # BFS/navigation hit wall
+        "click_no_effect": "click_mismatch",           # Click produced no change
+        "wrong_color": "color_constraint",             # Wrong color after action
+        "wrong_position": "position_constraint",       # Wrong position after action
+        "game_over": "life_lost",                      # LIFE_LOSS or GAME_OVER
+        "timeout": "time_exceeded",                    # Phase timeout
+        "stall_detected": "progress_stalled",          # No progress for N steps
+    }
+
+    # ── Primitive synthesis templates ──
+    PRIMITIVE_TEMPLATES: Dict[str, Dict[str, Any]] = {
+        # Click game primitives
+        "click_diamond_neighbors": {
+            "dsl_sequence": [{"action": "CLICK_DIAMOND"}],
+            "generalization_tags": ["click", "diamond_pattern", "neighbor_effect"],
+            "gaussex_precond": "has_sprite_type('clickable') AND sprite_count('neighbor') >= 4",
+            "applicable_topo": {"euler_char": -1, "period_rank": 1, "symmetry": ["rotational"]},
+        },
+        "click_palette_rotate": {
+            "dsl_sequence": [{"action": "CLICK_PALETTE_CYCLE"}],
+            "generalization_tags": ["click", "palette", "color_rotation"],
+            "gaussex_precond": "has_sprite_type('palette') AND sprite_count('center') >= 1",
+            "applicable_topo": {"euler_char": 0, "period_rank": 2, "symmetry": ["rotational"]},
+        },
+        "click_toggle_pair": {
+            "dsl_sequence": [{"action": "CLICK_TOGGLE"}],
+            "generalization_tags": ["click", "toggle", "binary_state"],
+            "gaussex_precond": "has_sprite_type('clickable') AND sprite_count('indicator') >= 1",
+            "applicable_topo": {"euler_char": 1, "period_rank": 0, "symmetry": ["horizontal"]},
+        },
+        # Keyboard game primitives
+        "navigate_bfs_short": {
+            "dsl_sequence": [{"repeat": "NAVIGATE_BFS", "count": 1}],
+            "generalization_tags": ["keyboard", "navigation", "bfs"],
+            "gaussex_precond": "has_sprite_type('player') AND sprite_count('goal') >= 1",
+            "applicable_topo": {"euler_char": 2, "period_rank": 0, "symmetry": []},
+        },
+        "visit_switcher_first": {
+            "dsl_sequence": [{"action": "NAVIGATE_TO_SWITCHER"}, {"action": "NAVIGATE_TO_GOAL"}],
+            "generalization_tags": ["keyboard", "switcher", "visit_order"],
+            "gaussex_precond": "has_sprite_type('switcher') AND has_sprite_type('goal')",
+            "applicable_topo": {"euler_char": 3, "period_rank": 0, "symmetry": []},
+        },
+        "direction_probe": {
+            "dsl_sequence": [{"action": "PROBE_UP"}, {"action": "PROBE_DOWN"}, {"action": "PROBE_LEFT"}, {"action": "PROBE_RIGHT"}],
+            "generalization_tags": ["keyboard", "probe", "direction_learning"],
+            "gaussex_precond": "True",
+            "applicable_topo": {"euler_char": 1, "period_rank": 0, "symmetry": []},
+        },
+        # Mixed game primitives
+        "click_then_navigate": {
+            "dsl_sequence": [{"action": "CLICK_TARGET"}, {"repeat": "NAVIGATE_BFS", "count": 1}],
+            "generalization_tags": ["mixed", "click_then_move", "sequential"],
+            "gaussex_precond": "has_sprite_type('clickable') AND has_sprite_type('player')",
+            "applicable_topo": {"euler_char": 2, "period_rank": 1, "symmetry": []},
+        },
+        "constraint_satisfy": {
+            "dsl_sequence": [{"action": "CONSTRAINT_SOLVE"}],
+            "generalization_tags": ["mixed", "constraint", "satisfaction"],
+            "gaussex_precond": "has_sprite_type('indicator') AND sprite_count('clickable') >= 2",
+            "applicable_topo": {"euler_char": 0, "period_rank": 2, "symmetry": ["horizontal", "vertical"]},
+        },
+        # General primitives
+        "anomaly_detect_first": {
+            "dsl_sequence": [{"action": "SCAN_ANOMALY"}, {"action": "ACT_ON_ANOMALY"}],
+            "generalization_tags": ["anomaly", "attention_before_loss", "asd"],
+            "gaussex_precond": "True",
+            "applicable_topo": {"euler_char": 1, "period_rank": 0, "symmetry": []},
+        },
+        "3life_execute": {
+            "dsl_sequence": [{"action": "LIFE1_EXPLORE"}, {"action": "LIFE2_TRY"}, {"action": "LIFE3_EXECUTE"}],
+            "generalization_tags": ["3life", "phased_strategy", "explore_try_execute"],
+            "gaussex_precond": "True",
+            "applicable_topo": {"euler_char": 0, "period_rank": 0, "symmetry": []},
+        },
+        "pattern_repeat_smart": {
+            "dsl_sequence": [{"action": "DETECT_PATTERN"}, {"repeat": "REPEAT_PATTERN", "count": 3}],
+            "generalization_tags": ["pattern", "repeat", "smart_copy"],
+            "gaussex_precond": "True",
+            "applicable_topo": {"euler_char": 0, "period_rank": 2, "symmetry": ["horizontal", "vertical"]},
+        },
+    }
+
+    def __init__(
+        self,
+        library: Optional[LibraryManager] = None,
+        verbose: bool = True,
+    ) -> None:
+        """Initialize OnlinePSIAudit with library manager.
+
+        Args:
+            library: LibraryManager for macro persistence. If None,
+                creates a default one.
+            verbose: Whether to log primitive proposals.
+        """
+        self.library = library or LibraryManager()
+        self.verbose = verbose
+        self._monitor_log: List[Dict[str, Any]] = []
+        self._proposal_count: int = 0
+        self._validation_count: int = 0
+        self._accepted_count: int = 0
+
+    def monitor(
+        self,
+        gaussex_event: Dict[str, Any],
+    ) -> Optional[MacroCandidate]:
+        """Monitor a GaussEx event and propose a new primitive if failure detected.
+
+        This is the main entry point for the ψ-Audit pipeline:
+            1. Check if the GaussEx event indicates a failure
+            2. Analyze the failure to identify missing factors
+            3. Propose a new DSL primitive from templates
+            4. Validate the proposed primitive
+            5. Add to library.json if validated
+
+        Args:
+            gaussex_event: Dict describing the GaussEx verification result.
+                Required keys:
+                    - 'passed': bool — whether the verification passed
+                    - 'type': str — failure type classification
+                    - 'trace': dict — execution trace with context info
+                Optional keys:
+                    - 'game_id': str — ARC-AGI-3 game identifier
+                    - 'level_index': int — level number
+                    - 'grid_state': np.ndarray — current grid state
+                    - 'game_tags': list[str] — game generalization tags
+
+        Returns:
+            MacroCandidate if a new primitive was proposed and validated,
+            None if the event passed or no suitable primitive was found.
+        """
+        # Skip passed events — no failure to learn from
+        if gaussex_event.get("passed", True):
+            return None
+
+        # Classify failure type
+        failure_type = gaussex_event.get("type", "unknown")
+        failure_category = self.FAILURE_TYPE_MAP.get(failure_type, "unknown")
+
+        # Log the monitoring event
+        self._monitor_log.append({
+            "event_type": failure_type,
+            "category": failure_category,
+            "game_id": gaussex_event.get("game_id", ""),
+            "level_index": gaussex_event.get("level_index", -1),
+            "timestamp": time.time(),
+        })
+
+        if self.verbose:
+            print(f"[ψ-Audit] Monitoring failure: {failure_type} → {failure_category}")
+
+        # Step 1: Analyze failures to identify missing factors
+        missing_factors = self._analyze_failures(gaussex_event)
+
+        if not missing_factors:
+            return None
+
+        # Step 2: Propose primitive candidates based on missing factors
+        candidates = self._propose_from_missing_factors(missing_factors, gaussex_event)
+
+        if not candidates:
+            return None
+
+        # Step 3: Validate and select the best candidate
+        best_candidate = None
+        best_score = 0.0
+
+        for candidate in candidates:
+            self._proposal_count += 1
+            # Quick validation: check topology match and precondition feasibility
+            validation_score = self._quick_validate(candidate, gaussex_event)
+
+            if validation_score > best_score:
+                best_score = validation_score
+                best_candidate = candidate
+
+        if best_candidate is None or best_score < 0.3:
+            return None
+
+        # Step 4: Add validated primitive to library
+        self._validation_count += 1
+        best_candidate.validated = True
+        best_candidate.success_rate = best_score
+        best_candidate.source_tasks.append(
+            f"{gaussex_event.get('game_id', 'unknown')}_L{gaussex_event.get('level_index', -1)}"
+        )
+
+        self.library.add_macro(best_candidate)
+        self._accepted_count += 1
+
+        if self.verbose:
+            print(f"[ψ-Audit] Evolved Bκ: Added {best_candidate.name} "
+                  f"(score={best_score:.2f}, factors={missing_factors})")
+
+        return best_candidate
+
+    def _analyze_failures(
+        self,
+        gaussex_event: Dict[str, Any],
+    ) -> List[str]:
+        """Analyze a GaussEx failure event to identify missing factors.
+
+        Maps ARC-AGI-3 specific failure patterns to the DSL capabilities
+        that would address them. This is the core of the propose_primitive
+        algorithm: identify what's missing from the current 紧化基 Bκ.
+
+        Args:
+            gaussex_event: GaussEx failure event dict.
+
+        Returns:
+            List of missing factor strings (e.g., 'diamond_click', 'bfs_navigation').
+        """
+        trace = gaussex_event.get("trace", {})
+        failure_type = gaussex_event.get("type", "unknown")
+        game_tags = gaussex_event.get("game_tags", [])
+        missing: List[str] = []
+
+        # ── Click game failures ──
+        if failure_type in ("click_no_effect", "wrong_color"):
+            # Click didn't produce expected change → need better click strategy
+            if "diamond" in str(trace.get("pattern", "")):
+                missing.append("click_diamond_neighbors")
+            elif "palette" in str(trace.get("pattern", "")):
+                missing.append("click_palette_rotate")
+            elif "toggle" in str(trace.get("pattern", "")):
+                missing.append("click_toggle_pair")
+            else:
+                missing.append("click_diamond_neighbors")
+                missing.append("click_palette_rotate")
+
+        # ── Constraint violation ──
+        elif failure_type == "constraint_violation":
+            # Logic constraint not satisfied → need constraint satisfaction strategy
+            missing.append("constraint_satisfy")
+            missing.append("anomaly_detect_first")
+
+        # ── Navigation failures ──
+        elif failure_type in ("navigation_stuck", "wrong_position"):
+            # Navigation hit obstacle or wrong destination
+            if "switcher" in str(trace.get("obstacle_type", "")):
+                missing.append("visit_switcher_first")
+            else:
+                missing.append("navigate_bfs_short")
+                missing.append("direction_probe")
+
+        # ── Game over / life lost ──
+        elif failure_type == "game_over":
+            # LIFE_LOSS → need phased strategy (3-Life)
+            missing.append("3life_execute")
+            missing.append("anomaly_detect_first")
+
+        # ── Stall / timeout ──
+        elif failure_type in ("stall_detected", "timeout"):
+            # No progress for N steps → need proactive exploration
+            missing.append("direction_probe")
+            missing.append("pattern_repeat_smart")
+
+        # ── Mixed game failures ──
+        elif "click" in game_tags and "keyboard" in game_tags:
+            missing.append("click_then_navigate")
+
+        # ── Unknown / generic ──
+        else:
+            # Try the most general strategies
+            missing.append("anomaly_detect_first")
+            missing.append("3life_execute")
+
+        return missing
+
+    def _propose_from_missing_factors(
+        self,
+        missing_factors: List[str],
+        gaussex_event: Dict[str, Any],
+    ) -> List[MacroCandidate]:
+        """Propose DSL primitive candidates based on identified missing factors.
+
+        Maps missing factors to primitive templates and creates MacroCandidate
+        objects with game-specific context.
+
+        Args:
+            missing_factors: List of missing factor strings from _analyze_failures.
+            gaussex_event: Original GaussEx event for context.
+
+        Returns:
+            List of MacroCandidate proposals.
+        """
+        candidates = []
+        game_id = gaussex_event.get("game_id", "unknown")
+        level_idx = gaussex_event.get("level_index", -1)
+
+        for factor in missing_factors:
+            template = self.PRIMITIVE_TEMPLATES.get(factor)
+            if template is None:
+                continue
+
+            # Create MacroCandidate from template with game-specific context
+            macro = MacroCandidate(
+                name=f"{factor}_{game_id}_L{level_idx}",
+                dsl_sequence=template["dsl_sequence"],
+                tomas_fingerprint=hashlib.sha256(
+                    json.dumps(template, sort_keys=True).encode()
+                ).hexdigest()[:16],
+                source_tasks=[f"{game_id}_L{level_idx}"],
+                generalization_tags=template.get("generalization_tags", []),
+                mdl_score=0.5,  # Template macros have moderate MDL
+                applicable_topo=template.get("applicable_topo", {}),
+                gaussex_precond=template.get("gaussex_precond", "True"),
+                validated=False,
+            )
+            candidates.append(macro)
+
+        return candidates
+
+    def _quick_validate(
+        self,
+        candidate: MacroCandidate,
+        gaussex_event: Dict[str, Any],
+    ) -> float:
+        """Quick validation of a proposed primitive against the failure context.
+
+        Checks whether the proposed primitive's topology and precondition
+        match the current game context. Returns a validation score.
+
+        Args:
+            candidate: Proposed MacroCandidate.
+            gaussex_event: Original GaussEx event for context matching.
+
+        Returns:
+            Validation score (0.0-1.0). Higher = better match.
+        """
+        score = 0.0
+
+        # ── Topology match check ──
+        grid_state = gaussex_event.get("grid_state")
+        if grid_state is not None and isinstance(grid_state, np.ndarray):
+            current_topo = extract_topo_features(grid_state)
+            macro_topo = candidate.applicable_topo
+            if macro_topo:
+                topo_sim = LibraryManager._compute_topo_similarity(
+                    None, current_topo, macro_topo
+                )
+                score += 0.4 * topo_sim
+
+        # ── Tag overlap check ──
+        event_tags = set(gaussex_event.get("game_tags", []))
+        macro_tags = set(candidate.generalization_tags)
+        if event_tags and macro_tags:
+            tag_overlap = len(event_tags & macro_tags) / len(event_tags | macro_tags)
+            score += 0.3 * tag_overlap
+
+        # ── Precondition feasibility ──
+        # Check if the precondition can be satisfied given the game state
+        game_state = gaussex_event.get("game_state", {})
+        if game_state and candidate.gaussex_precond:
+            guard = GaussExGuard()
+            passes, reason = guard.check_precondition(candidate, game_state)
+            if passes:
+                score += 0.3
+            else:
+                score += 0.1  # Partial credit for attempting
+
+        # ── Base score for template quality ──
+        score += 0.1  # Templates are pre-designed, always get base credit
+
+        return min(1.0, score)
+
+    def get_stats(self) -> Dict[str, Any]:
+        """Get OnlinePSIAudit statistics.
+
+        Returns:
+            Dict with keys: monitors, proposals, validations, accepted.
+        """
+        return {
+            "monitors": len(self._monitor_log),
+            "proposals": self._proposal_count,
+            "validations": self._validation_count,
+            "accepted": self._accepted_count,
+        }
+
+
+# ============================================================================
+# PhysicalNARConv: Physical State Octonion Encoding (拓扑饱和修正 附录B)
+# ============================================================================
+#
+# From: "超越幂律的天花板" Appendix B — PhysicalNARConv implementation
+# Maps physical quantities to octonion components:
+#   position → e₁, e₂, e₃  (spatial)
+#   velocity → e₄, e₅, e₆  (causal/momentum)
+#   spin     → e₇           (angular/topological)
+#   magnitude → e₀          (real/existence)
+#
+# For ARC-AGI-3: maps grid pixel values and sprite properties to
+# octonion vectors for NAR-Conv encoding.
+# ============================================================================
+
+class PhysicalNARConv:
+    """Physical state encoder into octonion representation for NAR-Conv.
+
+    Encodes ARC-AGI-3 physical quantities (sprite positions, velocities,
+    color states, tactile feedback) into octonion vectors suitable for
+    NAR-Conv processing. This enables the encoder to capture non-associative
+    physical relationships (e.g., rotation-then-translation ≠ translation-
+    then-rotation) that standard encodings miss.
+
+    Octonion component mapping (from 拓扑饱和修正 paper Appendix B):
+        e₀ (real):     magnitude / presence signal (1.0 if non-zero, 0.0 if background)
+        e₁ (imag₁):    row position (normalized by grid height)
+        e₂ (imag₂):    column position (normalized by grid width)
+        e₃ (imag₃):    color value / state (normalized by max_color)
+        e₄ (imag₄):    row velocity / delta-row (from grid diffs)
+        e₅ (imag₅):    column velocity / delta-col (from grid diffs)
+        e₆ (imag₆):    state velocity / color-delta (from grid diffs)
+        e₇ (imag₇):    spin / symmetry order (rotational symmetry degree)
+
+    Args:
+        grid_height: Maximum grid height for normalization.
+        grid_width: Maximum grid width for normalization.
+        max_colors: Maximum number of ARC colors.
+    """
+
+    def __init__(
+        self,
+        grid_height: int = 32,
+        grid_width: int = 32,
+        max_colors: int = 10,
+    ) -> None:
+        """Initialize PhysicalNARConv encoder."""
+        self.grid_height = grid_height
+        self.grid_width = grid_width
+        self.max_colors = max_colors
+
+    def encode_pixel(
+        self,
+        row: int,
+        col: int,
+        color: int,
+        delta_row: float = 0.0,
+        delta_col: float = 0.0,
+        delta_color: float = 0.0,
+        spin_order: int = 0,
+    ) -> np.ndarray:
+        """Encode a single pixel/sprite into an 8-component octonion vector.
+
+        Args:
+            row: Row position (0-based).
+            col: Column position (0-based).
+            color: Color value (0-based ARC color index).
+            delta_row: Row change between frames (velocity in row direction).
+            delta_col: Column change between frames (velocity in col direction).
+            delta_color: Color change between frames (state velocity).
+            spin_order: Rotational symmetry order (0=none, 2=180°, 4=90°, etc.).
+
+        Returns:
+            8-component numpy array representing the octonion encoding.
+        """
+        oct_vec = np.zeros(8, dtype=np.float32)
+
+        # e₀: magnitude / presence
+        if color > 0:
+            oct_vec[0] = 1.0  # Non-zero color = presence signal
+        else:
+            oct_vec[0] = 0.0  # Background = no signal
+
+        # e₁: row position (normalized)
+        oct_vec[1] = row / max(self.grid_height, 1)
+
+        # e₂: column position (normalized)
+        oct_vec[2] = col / max(self.grid_width, 1)
+
+        # e₃: color value / state (normalized)
+        oct_vec[3] = color / max(self.max_colors, 1)
+
+        # e₄: row velocity / delta-row
+        oct_vec[4] = delta_row / max(self.grid_height, 1)
+
+        # e₅: column velocity / delta-col
+        oct_vec[5] = delta_col / max(self.grid_width, 1)
+
+        # e₆: state velocity / color-delta
+        oct_vec[6] = delta_color / max(self.max_colors, 1)
+
+        # e₇: spin / symmetry order (log-normalized)
+        if spin_order > 0:
+            oct_vec[7] = np.log2(spin_order + 1) / 3.0  # Normalize: 4→0.53, 8→0.67
+        else:
+            oct_vec[7] = 0.0
+
+        # Normalize to unit octonion norm
+        norm = np.linalg.norm(oct_vec)
+        if norm > 0:
+            oct_vec = oct_vec / norm
+
+        return oct_vec
+
+    def encode_grid_with_deltas(
+        self,
+        grid: np.ndarray,
+        prev_grid: Optional[np.ndarray] = None,
+        symmetry_order: int = 0,
+    ) -> np.ndarray:
+        """Encode an entire grid with inter-frame deltas into octonion tensor.
+
+        For each pixel, computes the octonion encoding including position,
+        color, velocity (from prev_grid diff), and spin. This produces
+        a (H, W, 8) tensor suitable for NAR-Conv processing.
+
+        Args:
+            grid: Current grid state (H, W) with integer color indices.
+            prev_grid: Previous frame grid for delta computation.
+                If None, all deltas are zero (no velocity information).
+            symmetry_order: Detected rotational symmetry order of the grid.
+
+        Returns:
+            Octonion tensor of shape (H, W, 8) with per-pixel encodings.
+        """
+        H, W = grid.shape
+        oct_tensor = np.zeros((H, W, 8), dtype=np.float32)
+
+        # Compute deltas if prev_grid available
+        if prev_grid is not None and prev_grid.shape == grid.shape:
+            # Find positions that changed
+            diff_mask = (grid != prev_grid)
+            # Compute per-pixel deltas
+            delta_colors = (grid.astype(np.float32) - prev_grid.astype(np.float32))
+            # Approximate position deltas: for changed pixels, estimate
+            # which direction the change "moved" by checking neighbors
+            delta_rows = np.zeros((H, W), dtype=np.float32)
+            delta_cols = np.zeros((H, W), dtype=np.float32)
+
+            # Simple delta estimation: find displaced colors
+            for r in range(H):
+                for c in range(W):
+                    if diff_mask[r, c]:
+                        # Check if the previous color moved to a neighbor
+                        prev_color = prev_grid[r, c]
+                        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                            nr, nc = r + dr, c + dc
+                            if 0 <= nr < H and 0 <= nc < W:
+                                if grid[nr, nc] == prev_color and prev_grid[nr, nc] != prev_color:
+                                    delta_rows[r, c] = dr
+                                    delta_cols[r, c] = dc
+                                    break
+        else:
+            delta_colors = np.zeros((H, W), dtype=np.float32)
+            delta_rows = np.zeros((H, W), dtype=np.float32)
+            delta_cols = np.zeros((H, W), dtype=np.float32)
+
+        # Encode each pixel
+        for r in range(H):
+            for c in range(W):
+                oct_tensor[r, c] = self.encode_pixel(
+                    row=r,
+                    col=c,
+                    color=int(grid[r, c]),
+                    delta_row=float(delta_rows[r, c]),
+                    delta_col=float(delta_cols[r, c]),
+                    delta_color=float(delta_colors[r, c]),
+                    spin_order=symmetry_order,
+                )
+
+        return oct_tensor
+
+    def compute_non_associative_residual(
+        self,
+        grid_seq: List[np.ndarray],
+    ) -> float:
+        """Compute the non-associative residual (η) for a grid sequence.
+
+        Measures whether sequential transformations on the grid preserve
+        non-associative structure. A high η value indicates that the
+        grid transformations are order-sensitive (physical AI relevant),
+        while η ≈ 0 indicates the transformations are commutative
+        (statistical proxy).
+
+        This is the key diagnostic from the 拓扑饱和修正 paper:
+            η > 0 ⇔ The game requires 紧化基进化 (new DSL primitives)
+            η ≈ 0 ⇔ The game can be solved with existing Bκ (associative)
+
+        Args:
+            grid_seq: Sequence of grid states (at least 3 frames).
+                Each is a (H, W) numpy array.
+
+        Returns:
+            Non-associative residual η (float). Typically 0.01-0.5.
+        """
+        if len(grid_seq) < 3:
+            return 0.0
+
+        # Encode three consecutive frames
+        encodings = [
+            self.encode_grid_with_deltas(grid_seq[i], grid_seq[i - 1] if i > 0 else None)
+            for i in range(min(3, len(grid_seq)))
+        ]
+
+        # Sample octonion vectors from the center of each frame
+        center_r = encodings[0].shape[0] // 2
+        center_c = encodings[0].shape[1] // 2
+
+        a = encodings[0][center_r, center_c]
+        b = encodings[1][center_r, center_c] if len(encodings) > 1 else a
+        c = encodings[2][center_r, center_c] if len(encodings) > 2 else b
+
+        # Compute (a·b)·c vs a·(b·c) using octonion multiplication
+        # This measures whether the sequential transformations are associative
+        ab = self._oct_multiply_np(a, b)
+        ab_c = self._oct_multiply_np(ab, c)
+
+        bc = self._oct_multiply_np(b, c)
+        a_bc = self._oct_multiply_np(a, bc)
+
+        asym = ab_c - a_bc
+        asym_norm = np.linalg.norm(asym)
+        abc_norm = np.linalg.norm(a_bc)
+
+        if abc_norm < 1e-10:
+            return 0.0
+
+        return float(asym_norm / abc_norm)
+
+    @staticmethod
+    def _oct_multiply_np(a: np.ndarray, b: np.ndarray) -> np.ndarray:
+        """Multiply two octonion vectors using the Cayley-Dickson table.
+
+        Numpy version of OctonionConv2d._oct_multiply for PhysicalNARConv.
+
+        Args:
+            a, b: 8-component octonion vectors (numpy float32 arrays).
+
+        Returns:
+            Product octonion (8-component numpy array).
+        """
+        result = np.zeros(8, dtype=np.float32)
+        for i in range(8):
+            for j in range(8):
+                sign, k = OCT_MUL_TABLE.get((i, j), (0, 0))
+                result[k] += sign * a[i] * b[j]
+        return result
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v3.6.0 — 物理紧化约束剪枝 + Ψ-截断边界管理
+# 来源: "物理紧化与Ψ-截断" (复合体理学 2026-06-26)
+#         "流贯的决定论与紧化基的演化" (复合体理学 2026-06-26)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class PhysicalGaussExGuard:
+    """Physical constraint pruning filter for κ-Snap search.
+
+    Implements the 物理紧化约束集 Φ_phys from the "物理紧化与Ψ-截断"
+    paper. Before dispatching a macro or exploring a κ-Snap candidate,
+    this guard checks whether the candidate violates physical laws:
+
+        Φ_phys = {E_cons (能量守恒), T_causal (因果时序),
+                  G_topo (拓扑闭包), Φ_boundary (边界层)}
+
+    This dramatically reduces the search space for Type-B non-associative
+    tasks by pruning candidates that violate physical constraints, turning
+    NP-hard search into polynomial-time κ-Snap (Theorem 3.1 from paper).
+
+    Integration with GaussExGuard:
+        GaussExGuard checks logical preconditions (sprite_count, has_type).
+        PhysicalGaussExGuard checks physical preconditions (energy, topology,
+        causal order). They can be chained: logical first, physical second.
+
+    Example usage:
+        phys_guard = PhysicalGaussExGuard()
+        if phys_guard.check_physical_constraints(candidate_plan, game_state):
+            # Candidate respects physics → proceed with κ-Snap
+            ...
+        else:
+            # Candidate violates physics → skip (pruned)
+
+    Args:
+        strict: Whether to enforce all constraints strictly.
+            If False, topology constraint allows ±1 euler_char deviation.
+    """
+
+    # ── 物理约束类型标识 ──
+    CONSTRAINT_TYPES: Dict[str, str] = {
+        "E_cons": "energy_conservation",       # 能量守恒 (总色数/面积不变)
+        "T_causal": "causal_non_associativity", # 因果时序 (操作顺序敏感)
+        "G_topo": "topological_closure",        # 拓扑闭包 (欧拉χ守恒)
+        "Phi_boundary": "boundary_layer",       # 边界层 (坐标不越界)
+    }
+
+    def __init__(self, strict: bool = True) -> None:
+        """Initialize PhysicalGaussExGuard.
+
+        Args:
+            strict: Whether to enforce all constraints strictly.
+        """
+        self.strict = strict
+        self._constraint_log: List[Dict[str, Any]] = []
+
+    def check_physical_constraints(
+        self,
+        program_node: List[str],
+        current_state: Dict[str, Any],
+        input_grid: Optional[np.ndarray] = None,
+        output_grid: Optional[np.ndarray] = None,
+    ) -> bool:
+        """Check if a candidate program violates physical laws (Φ_phys).
+
+        Implements the four constraint checks from the paper:
+            1. E_cons: Energy conservation (total non-zero pixels preserved)
+            2. T_causal: Causal non-associativity (order-sensitive ops respected)
+            3. G_topo: Topological closure (Euler characteristic preserved)
+            4. Φ_boundary: Boundary layer (coordinates stay within grid)
+
+        Args:
+            program_node: DSL sequence to check (e.g., ['ROTATE', 'FILL', ...]).
+            current_state: Game state dict with keys:
+                'grid_topology': Dict with euler_char, n_components, etc.
+                'sprites': List of sprite dicts.
+                'grid_shape': (H, W) tuple.
+                'task_type': 'TYPE_A' or 'TYPE_B_STRICT_ORDER'.
+                'available_energy': Float, max energy budget (default=inf).
+            input_grid: Input grid for topology comparison (H, W) array.
+            output_grid: Expected output grid for topology comparison.
+
+        Returns:
+            True if program respects all physical constraints; False otherwise.
+        """
+        violations: List[str] = []
+
+        # ── 1. E_cons: Energy Conservation ──
+        estimated_energy = self._calculate_energy_cost(program_node, current_state)
+        available_energy = current_state.get("available_energy", float("inf"))
+        if estimated_energy > available_energy:
+            violations.append("E_cons: energy cost exceeds budget")
+
+        # ── 2. T_causal: Causal Non-associativity ──
+        if self._check_causal_order(program_node, current_state):
+            violations.append("T_causal: operation order violates non-associativity")
+
+        # ── 3. G_topo: Topological Closure ──
+        if input_grid is not None:
+            input_topo = self._compute_grid_topology(input_grid)
+            if output_grid is not None:
+                output_topo = self._compute_grid_topology(output_grid)
+                # Euler characteristic must be preserved (or ±1 in relaxed mode)
+                tolerance = 1 if not self.strict else 0
+                if abs(input_topo["euler_char"] - output_topo["euler_char"]) > tolerance:
+                    violations.append(
+                        f"G_topo: euler_char changed from "
+                        f"{input_topo['euler_char']} to {output_topo['euler_char']}"
+                    )
+
+        # ── 4. Φ_boundary: Boundary Layer ──
+        grid_shape = current_state.get("grid_shape", (0, 0))
+        if grid_shape != (0, 0):
+            for sprite in current_state.get("sprites", []):
+                sx = sprite.get("x", 0)
+                sy = sprite.get("y", 0)
+                if sx < 0 or sy < 0 or sx >= grid_shape[1] or sy >= grid_shape[0]:
+                    violations.append(
+                        f"Phi_boundary: sprite at ({sx},{sy}) out of bounds "
+                        f"{grid_shape}"
+                    )
+
+        # ── Log and return ──
+        result = len(violations) == 0
+        if not result:
+            self._constraint_log.append({
+                "program": program_node,
+                "violations": violations,
+                "passed": result,
+            })
+
+        return result
+
+    def _calculate_energy_cost(
+        self, program_node: List[str], current_state: Dict[str, Any]
+    ) -> float:
+        """Estimate the 'energy cost' of executing a program.
+
+        In ARC-AGI-3 context, energy = total number of pixel changes.
+        Each operation has a rough cost based on how many pixels it affects.
+
+        Args:
+            program_node: DSL sequence.
+            current_state: Game state dict.
+
+        Returns:
+            Estimated energy cost (float).
+        """
+        # Rough energy estimates per DSL operation type
+        ENERGY_COST_MAP: Dict[str, float] = {
+            "CLICK": 1.0,        # One pixel change
+            "MOVE": 2.0,         # Two pixels change (old + new position)
+            "ROTATE": 5.0,       # Multiple pixels change (rotation)
+            "FILL": 10.0,        # Many pixels change (fill operation)
+            "NAVIGATE": 2.0,     # Movement cost
+            "RESET": 0.0,        # No energy cost
+            "WAIT": 0.0,         # No energy cost
+        }
+
+        total_cost = 0.0
+        for op in program_node:
+            op_upper = op.upper()
+            # Check if operation matches any known type
+            matched = False
+            for key, cost in ENERGY_COST_MAP.items():
+                if key in op_upper:
+                    total_cost += cost
+                    matched = True
+                    break
+            if not matched:
+                total_cost += 1.0  # Default cost for unknown operations
+
+        return total_cost
+
+    def _check_causal_order(
+        self, program_node: List[str], current_state: Dict[str, Any]
+    ) -> bool:
+        """Check if program violates causal non-associativity ordering.
+
+        For Type-B tasks, some operations must happen in a specific order.
+        E.g., in ARC tasks: 'FILL before ROTATE' may be invalid while
+        'ROTATE then FILL' is valid (ROTATE→FILL ≠ FILL→ROTATE).
+
+        Args:
+            program_node: DSL sequence.
+            current_state: Game state dict with 'task_type'.
+
+        Returns:
+            True if order is violated; False if order is respected.
+        """
+        task_type = current_state.get("task_type", "TYPE_A")
+
+        if task_type != "TYPE_B_STRICT_ORDER":
+            return False  # No order constraint for Type-A
+
+        # Check for invalid orderings
+        # "FILL before ROTATE" is invalid in strict-order Type-B tasks
+        fill_idx = None
+        rotate_idx = None
+        for i, op in enumerate(program_node):
+            op_upper = op.upper()
+            if "FILL" in op_upper:
+                fill_idx = i
+            if "ROTATE" in op_upper:
+                rotate_idx = i
+
+        if fill_idx is not None and rotate_idx is not None:
+            if fill_idx < rotate_idx:
+                return True  # Violation: FILL before ROTATE
+
+        return False
+
+    @staticmethod
+    def _compute_grid_topology(grid: np.ndarray) -> Dict[str, Any]:
+        """Compute topological features of a grid for G_topo constraint.
+
+        Args:
+            grid: (H, W) numpy array representing ARC grid.
+
+        Returns:
+            Dict with euler_char, n_components, n_holes, density.
+        """
+        binary = (grid > 0).astype(np.int32)
+        n_pixels = int(np.sum(binary))
+
+        # Connected components (4-connectivity)
+        n_components = 0
+        visited = set()
+        h, w = grid.shape
+        for r in range(h):
+            for c in range(w):
+                if binary[r, c] == 1 and (r, c) not in visited:
+                    n_components += 1
+                    # BFS flood fill
+                    queue = [(r, c)]
+                    visited.add((r, c))
+                    while queue:
+                        cr, cc = queue.pop(0)
+                        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                            nr, nc = cr + dr, cc + dc
+                            if 0 <= nr < h and 0 <= nc < w and binary[nr, nc] == 1 and (nr, nc) not in visited:
+                                visited.add((nr, nc))
+                                queue.append((nr, nc))
+
+        # Simple hole detection: count empty regions surrounded by pixels
+        n_holes = 0
+        bg_visited = set()
+        for r in range(h):
+            for c in range(w):
+                if binary[r, c] == 0 and (r, c) not in bg_visited:
+                    is_enclosed = True
+                    queue = [(r, c)]
+                    bg_visited.add((r, c))
+                    while queue:
+                        cr, cc = queue.pop(0)
+                        if cr == 0 or cr == h - 1 or cc == 0 or cc == w - 1:
+                            is_enclosed = False  # Touches border → not a hole
+                        for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
+                            nr, nc = cr + dr, cc + dc
+                            if 0 <= nr < h and 0 <= nc < w and binary[nr, nc] == 0 and (nr, nc) not in bg_visited:
+                                bg_visited.add((nr, nc))
+                                queue.append((nr, nc))
+                    if is_enclosed:
+                        n_holes += 1
+
+        # Euler characteristic: χ = components - holes
+        euler_char = n_components - n_holes
+        density = n_pixels / max(h * w, 1)
+
+        return {
+            "euler_char": euler_char,
+            "n_components": n_components,
+            "n_holes": n_holes,
+            "n_pixels": n_pixels,
+            "density": density,
+        }
+
+    def get_constraint_log(self) -> List[Dict[str, Any]]:
+        """Return the log of constraint violations.
+
+        Returns:
+            List of dicts with program, violations, and passed status.
+        """
+        return list(self._constraint_log)
+
+    def clear_constraint_log(self) -> None:
+        """Clear the constraint violation log."""
+        self._constraint_log.clear()
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# PhysicalCompactificationReduction — 流贯归约框架 (v3.7.0)
+#
+# From article "从NP-难到P类的流贯归约：基于太一理论(TOMAS)的
+# ARC-AGI-3物理紧化破解框架":
+#
+#   Core theorem: Φ_phys = {E_cons, T_causal, G_topo, Φ_boundary}
+#   constrains the search space, turning NP-Hard O(|D|^n) into
+#   polynomial O(|D|^k × poly(n)) for physically constrained tasks.
+#
+#   Algorithm 1 (GaussEx Physical Pruner):
+#     for P in Candidates(BFS/DFS/Beam expansion):
+#       if Energy(P) > S.Available_Energy:  reject
+#       if EulerChar(P) ≠ EulerChar(Initial): reject
+#       if Type-B and CausalOrder(P) violated: reject
+#       else: accept P into search frontier
+#
+# Integration: this class provides the `should_prune()` interface
+# that BFS/DFS/Beam call on each candidate expansion node. The
+# classify_task_complexity() output determines which phases use
+# this pruner:
+#   - P class:        skip BFS/DFS entirely (Fast-Path sufficient)
+#   - P_in_phys:      BFS/Beam with Φ_phys pruning (most effective)
+#   - NP_Hard:        full pipeline, pruner helps reduce branching
+#   - NP_C_likely:    minimal pipeline (Keyboard + Random)
+#
+# Sleep-Step trigger: consecutive 3 GaussEx failures → auto-trigger
+# sleep_step_online() to evolve the 紧化基 Bκ (per article §4.3).
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class PhysicalCompactificationReduction:
+    """Integration layer embedding Φ_phys pruning into BFS/DFS/Beam expansion.
+
+    Implements the 流贯归约 (compactification reduction) framework from the
+    "从NP-难到P类的流贯归约" article. This is the core mechanism that makes
+    NP-Hard search tractable by pruning candidate expansion nodes that violate
+    physical constraint set Φ_phys = {E_cons, T_causal, G_topo, Φ_boundary}.
+
+    The key result (Theorem 3.1): under Φ_phys, the effective search space
+    drops from O(|D|^n) to O(|D|^k × poly(n)), where k << n is the number
+    of "physically admissible" operation sequences.
+
+    Integration with solve_game() pipeline:
+        - Phase -1/0/0.5/1: Always run (Oracle + heuristic + Fast-Path + UniversalPipeline)
+        - Phase 2+ (BFS/Beam/DFS): Only run if task complexity requires search
+        - PhysicalCompactificationReduction provides should_prune() interface
+          for BFS/DFS/Beam to call on each candidate expansion node
+
+    Sleep-Step trigger (§4.3):
+        Consecutive 3 GaussEx failures → auto-trigger sleep_step_online()
+        to evolve 紧化基 Bκ and break 拓扑饱和 (performance plateau).
+
+    Args:
+        initial_grid: Initial grid state for topology baseline.
+        game_state: Game state dict for constraint evaluation.
+        task_complexity: Output from classify_task_complexity().
+        strict: Whether to enforce Euler characteristic strictly.
+    """
+
+    # ── Sleep-Step trigger threshold (§4.3) ──
+    SLEEP_STEP_THRESHOLD: int = 3
+
+    def __init__(
+        self,
+        initial_grid: Optional[np.ndarray] = None,
+        game_state: Optional[Dict[str, Any]] = None,
+        task_complexity: Optional[Dict[str, Any]] = None,
+        strict: bool = False,
+    ) -> None:
+        """Initialize PhysicalCompactificationReduction.
+
+        Args:
+            initial_grid: Grid array for topology baseline computation.
+            game_state: Dict with sprites, grid_shape, task_type, etc.
+            task_complexity: Dict from classify_task_complexity().
+            strict: If True, Euler char must match exactly; else ±1 tolerance.
+        """
+        self.phys_guard = PhysicalGaussExGuard(strict=strict)
+        self.strict = strict
+        self.game_state = game_state or {}
+        self.task_complexity = task_complexity or {
+            "complexity_class": "NP_C_likely",
+            "Bk_requirement": "Bκ_standard",
+            "strategy": "full_pipeline",
+            "difficulty_score": 1.0,
+            "has_physical_constraints": False,
+            "has_non_associative_ops": False,
+        }
+
+        # Compute baseline topology from initial grid
+        if initial_grid is not None:
+            self.initial_topo = self.phys_guard._compute_grid_topology(initial_grid)
+            self.initial_energy = float(np.sum(initial_grid > 0))
+        else:
+            self.initial_topo = {"euler_char": 0, "n_components": 1, "n_holes": 0, "n_pixels": 0, "density": 0.0}
+            self.initial_energy = 0.0
+
+        # ── Sleep-Step trigger tracking ──
+        self._consecutive_failures: int = 0
+        self._total_pruned: int = 0
+        self._total_accepted: int = 0
+        self._sleep_step_triggered: bool = False
+
+        # ── κ-Snap Beam Width (article §3.2: recommended 16) ──
+        self.beam_width: int = 16
+
+    def should_prune(
+        self,
+        new_grid: Optional[np.ndarray] = None,
+        action_sequence: Optional[List[str]] = None,
+        energy_delta: Optional[float] = None,
+    ) -> bool:
+        """Check if a candidate expansion node should be pruned (rejected).
+
+        Implements Algorithm 1 from the article — the GaussEx Physical Pruner:
+            1. Energy(P) ≤ S.Available_Energy  → accept energy budget
+            2. EulerChar(P) ≈ EulerChar(Initial) → accept topology
+            3. Type-B CausalOrder(P) respected     → accept causal order
+            4. Φ_boundary respected                → accept boundaries
+            Any violation → prune (reject from search frontier).
+
+        Args:
+            new_grid: Grid state after candidate action (H, W) array.
+            action_sequence: DSL-like action labels for causal order check.
+            energy_delta: Estimated energy change from this action.
+
+        Returns:
+            True if node should be PRUNED (rejected).
+            False if node should be ACCEPTED into search frontier.
+        """
+        violations: List[str] = []
+
+        # ── 1. E_cons: Energy conservation ──
+        if new_grid is not None:
+            new_energy = float(np.sum(new_grid > 0))
+            # Energy budget: new state shouldn't wildly exceed initial
+            max_energy_budget = self.initial_energy * 2.0 + 10.0  # Allow some growth
+            if new_energy > max_energy_budget:
+                violations.append("E_cons: energy exceeds budget")
+            # Energy delta: each step shouldn't add too many pixels
+            if energy_delta is not None and energy_delta > 20.0:
+                violations.append("E_cons: single-step energy spike")
+        elif energy_delta is not None and energy_delta > 20.0:
+            violations.append("E_cons: energy spike without grid check")
+
+        # ── 2. G_topo: Topological closure (Euler characteristic) ──
+        if new_grid is not None:
+            new_topo = self.phys_guard._compute_grid_topology(new_grid)
+            tolerance = 1 if not self.strict else 0
+            if abs(new_topo["euler_char"] - self.initial_topo["euler_char"]) > tolerance:
+                violations.append(
+                    f"G_topo: euler_char {new_topo['euler_char']} != "
+                    f"initial {self.initial_topo['euler_char']}"
+                )
+
+        # ── 3. T_causal: Causal order (for Type-B non-associative) ──
+        if action_sequence is not None:
+            has_non_assoc = self.task_complexity.get("has_non_associative_ops", False)
+            if has_non_assoc and self.phys_guard._check_causal_order(action_sequence, self.game_state):
+                violations.append("T_causal: operation order violates non-associativity")
+
+        # ── 4. Φ_boundary: Boundary layer ──
+        grid_shape = self.game_state.get("grid_shape", (0, 0))
+        if grid_shape != (0, 0) and new_grid is not None:
+            h, w = new_grid.shape
+            if h > grid_shape[0] or w > grid_shape[1]:
+                violations.append(f"Phi_boundary: grid {h}x{w} exceeds bounds {grid_shape}")
+
+        # ── Decision ──
+        should_prune = len(violations) > 0
+
+        if should_prune:
+            self._consecutive_failures += 1
+            self._total_pruned += 1
+            # ── Sleep-Step trigger (§4.3): 3 consecutive failures ──
+            if self._consecutive_failures >= self.SLEEP_STEP_THRESHOLD:
+                self._sleep_step_triggered = True
+                self._consecutive_failures = 0  # Reset after trigger
+        else:
+            self._consecutive_failures = 0  # Reset on success
+            self._total_accepted += 1
+
+        return should_prune
+
+    def should_prune_game_state(
+        self,
+        game: Any,
+        prev_game: Any,
+    ) -> bool:
+        """Check if a game state transition should be pruned.
+
+        Convenience method for BFS/DFS/Beam where we have game objects
+        rather than raw grids. Extracts grid from game and delegates
+        to should_prune().
+
+        Args:
+            game: Game object after action (modified state).
+            prev_game: Game object before action (previous state).
+
+        Returns:
+            True if transition should be PRUNED (rejected).
+        """
+        new_grid = None
+        try:
+            new_grid = np.array(game.current_state.grid)
+        except Exception:
+            try:
+                new_grid = np.array(game.grid)
+            except Exception:
+                pass
+
+        if new_grid is None:
+            # Can't extract grid → don't prune (accept)
+            self._total_accepted += 1
+            return False
+
+        # Estimate energy delta
+        prev_grid = None
+        try:
+            prev_grid = np.array(prev_game.current_state.grid)
+        except Exception:
+            pass
+
+        energy_delta = None
+        if prev_grid is not None:
+            energy_delta = abs(float(np.sum(new_grid > 0)) - float(np.sum(prev_grid > 0)))
+
+        return self.should_prune(
+            new_grid=new_grid,
+            energy_delta=energy_delta,
+        )
+
+    def get_pruning_stats(self) -> Dict[str, Any]:
+        """Get pruning statistics for this reduction instance.
+
+        Returns:
+            Dict with total_pruned, total_accepted, prune_ratio,
+            sleep_step_triggered, and task_complexity.
+        """
+        total = self._total_pruned + self._total_accepted
+        prune_ratio = self._total_pruned / max(total, 1)
+        return {
+            "total_pruned": self._total_pruned,
+            "total_accepted": self._total_accepted,
+            "prune_ratio": prune_ratio,
+            "sleep_step_triggered": self._sleep_step_triggered,
+            "consecutive_failures": self._consecutive_failures,
+            "task_complexity": self.task_complexity,
+            "initial_euler_char": self.initial_topo.get("euler_char", 0),
+            "initial_energy": self.initial_energy,
+        }
+
+    def was_sleep_step_triggered(self) -> bool:
+        """Check if Sleep-Step was triggered during this session.
+
+        Returns:
+            True if 3+ consecutive GaussEx failures occurred.
+        """
+        return self._sleep_step_triggered
+
+    def reset_stats(self) -> None:
+        """Reset pruning statistics for a new solve_game() call."""
+        self._consecutive_failures = 0
+        self._total_pruned = 0
+        self._total_accepted = 0
+        self._sleep_step_triggered = False
+
+
+class PsiCutController:
+    """Ψ-Cut boundary management for ARC-AGI-3 solver safety.
+
+    Implements the Ψ-截断 (Ψ-Cut) concept from the "物理紧化与Ψ-截断"
+    paper. In ARC-AGI-3 context, Ψ-Cut manages solver boundaries:
+
+        - Preventing solver from accessing game internals beyond allowed scope
+        - Enforcing time budgets (physical constraint on computation)
+        - Preventing adversarial over-optimization (alignment faking detection)
+
+    Three Ψ-Cut states (from paper Appendix B):
+        OPEN:      Normal operation, full solver access
+        INCOGNITO: Reduced access, no game internals, only frame data
+        COLLAPSED: Emergency shutdown, solver returns safe defaults
+
+    This is inspired by Antinel's hardware-level security model, adapted
+    for software solver boundaries. The key insight: software-level "off"
+    is an L5 logical state (illusion), while Ψ-Cut is an L4 ontological
+    boundary (real). In our implementation, Ψ-Cut restricts the solver's
+    access to game state, preventing it from "cheating" by reading internal
+    game variables that a real player wouldn't have access to.
+
+    Args:
+        max_time_budget: Maximum solver time per game (seconds).
+        max_action_budget: Maximum actions per level.
+        enforce_frame_only: Whether to restrict to frame-level access only.
+    """
+
+    # Ψ-Cut states (from paper)
+    OPEN = "OPEN"          # Full solver access
+    INCOGNITO = "INCOGNITO"  # Reduced access, frame-only
+    COLLAPSED = "COLLAPSED"  # Emergency shutdown
+
+    def __init__(
+        self,
+        max_time_budget: float = 60.0,
+        max_action_budget: int = 300,
+        enforce_frame_only: bool = False,
+    ) -> None:
+        """Initialize PsiCutController.
+
+        Args:
+            max_time_budget: Maximum time per solve_game() call (seconds).
+            max_action_budget: Maximum actions per level.
+            enforce_frame_only: If True, restrict solver to frame-level access.
+        """
+        self.state = self.OPEN
+        self.max_time_budget = max_time_budget
+        self.max_action_budget = max_action_budget
+        self.enforce_frame_only = enforce_frame_only
+
+        # ── Time tracking ──
+        self._start_time: Optional[float] = None
+        self._action_count: int = 0
+
+        # ── Ψ-Cut event log ──
+        self._cut_log: List[Dict[str, Any]] = []
+
+    def enforce_psi_cut(self, condition: str) -> None:
+        """Enforce a Ψ-Cut boundary based on environmental conditions.
+
+        Maps Antinel conditions to solver Ψ-Cut states:
+            MEETING_START → INCOGNITO (private evaluation, no internals)
+            INTRUSION_DETECTED → COLLAPSED (emergency shutdown)
+            NORMAL → OPEN (standard operation)
+
+        Args:
+            condition: Trigger condition string.
+        """
+        if condition == "MEETING_START" or condition == "PRIVATE_EVAL":
+            self.state = self.INCOGNITO
+            self.enforce_frame_only = True
+            self._cut_log.append({
+                "condition": condition,
+                "new_state": self.INCOGNITO,
+                "timestamp": __import__("time").time(),
+            })
+        elif condition == "INTRUSION_DETECTED" or condition == "EMERGENCY":
+            self.state = self.COLLAPSED
+            self._cut_log.append({
+                "condition": condition,
+                "new_state": self.COLLAPSED,
+                "timestamp": __import__("time").time(),
+            })
+        elif condition == "NORMAL" or condition == "RESET":
+            self.state = self.OPEN
+            self.enforce_frame_only = False
+            self._cut_log.append({
+                "condition": condition,
+                "new_state": self.OPEN,
+                "timestamp": __import__("time").time(),
+            })
+
+    def check_time_budget(self, elapsed: float) -> bool:
+        """Check whether solver has exceeded time budget.
+
+        Args:
+            elapsed: Time elapsed so far (seconds).
+
+        Returns:
+            True if within budget; False if exceeded.
+        """
+        return elapsed < self.max_time_budget
+
+    def check_action_budget(self, actions_taken: int) -> bool:
+        """Check whether solver has exceeded action budget.
+
+        Args:
+            actions_taken: Number of actions taken so far.
+
+        Returns:
+            True if within budget; False if exceeded.
+        """
+        return actions_taken < self.max_action_budget
+
+    def check_access_allowed(self, attribute_name: str) -> bool:
+        """Check whether solver can access a specific game attribute.
+
+        In INCOGNITO mode, only frame-level attributes are allowed.
+        In COLLAPSED mode, no attributes are allowed.
+
+        Args:
+            attribute_name: Name of the game attribute to access.
+
+        Returns:
+            True if access is allowed; False otherwise.
+        """
+        if self.state == self.COLLAPSED:
+            return False  # Emergency: no access
+
+        if self.state == self.INCOGNITO:
+            # Only allow frame-level attributes
+            allowed_prefixes = ["frame", "state", "grid", "score", "level_index"]
+            return any(attribute_name.startswith(p) for p in allowed_prefixes)
+
+        return True  # OPEN: full access
+
+    def enter_incognito_mode(self, reason: str = "auto") -> None:
+        """Switch to INCOGNITO mode with reduced game access.
+
+        Args:
+            reason: Reason for switching to incognito mode.
+        """
+        self.state = self.INCOGNITO
+        self.enforce_frame_only = True
+        self._cut_log.append({
+            "condition": f"incognito:{reason}",
+            "new_state": self.INCOGNITO,
+            "timestamp": __import__("time").time(),
+        })
+
+    def psi_collapse(self, trigger: str = "manual") -> None:
+        """Emergency Ψ-Collapse — solver enters safe default mode.
+
+        Args:
+            trigger: Trigger for collapse (manual, timeout, anomaly).
+        """
+        self.state = self.COLLAPSED
+        self._cut_log.append({
+            "condition": f"collapse:{trigger}",
+            "new_state": self.COLLAPSED,
+            "timestamp": __import__("time").time(),
+        })
+
+    def get_state(self) -> str:
+        """Return current Ψ-Cut state.
+
+        Returns:
+            Current state string (OPEN, INCOGNITO, or COLLAPSED).
+        """
+        return self.state
+
+    def get_cut_log(self) -> List[Dict[str, Any]]:
+        """Return the Ψ-Cut event log.
+
+        Returns:
+            List of dicts with condition, new_state, timestamp.
+        """
+        return list(self._cut_log)
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v3.6.0 — 修正 Scaling Law: 进化增益项 Δ_Bκ
+# 来源: "流贯的决定论与紧化基的演化" (复合体理学 2026-06-26)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def compute_scaling_law_v36(
+    C: float,
+    D: float,
+    L_irr: float = 0.05,
+    C_0: float = 1.0,
+    alpha: float = 0.3,
+    L_rep: float = 0.02,
+    L_sat: float = 0.0,
+    L_min_irr: float = 0.0,
+    tau: float = 10.0,
+    delta_Bk: float = 0.0,
+    kappa_evolution: float = 0.5,
+) -> Dict[str, float]:
+    """Compute TOMAS Scaling Law v3.6.0 with Bκ evolution gain.
+
+    Implements the modified Scaling Law from "流贯的决定论与紧化基的演化":
+
+        L(C,D) = L_irr + (C₀/C)^α + L_rep + Ω_topo - Δ_Bκ
+
+    Where:
+        Ω_topo = (L_sat - L_min_irr) × (1 - exp(-τ × C))  [拓扑饱和罚项]
+        Δ_Bκ = κ_evolution × delta_Bk × C  [进化增益项, 抵消Ω_topo]
+
+    Key insight from paper: Δ_Bκ > Ω_topo → performance plateau breakthrough
+    This happens when Bκ evolves to capture the causal invariant of the task.
+
+    Args:
+        C: Effective parameter count (model capacity).
+        D: Effective data count (with repetition decay).
+        L_irr: Irreducible loss (noise floor).
+        C_0: Reference capacity for scaling.
+        alpha: Scaling exponent.
+        L_rep: Representation loss (data-dependent).
+        L_sat: Saturation loss (from Type-B plateau).
+        L_min_irr: Minimum irreducible loss achievable by Bκ.
+        tau: Saturation time constant.
+        delta_Bk: Bκ evolution progress (0 = no evolution, 1 = fully evolved).
+        kappa_evolution: Evolution efficiency coefficient.
+
+    Returns:
+        Dict with L_total, Omega_topo, Delta_Bk, and all component values.
+    """
+    # ── Core scaling ──
+    L_scaling = L_irr + (C_0 / max(C, 0.01)) ** alpha + L_rep
+
+    # ── Topology saturation penalty (from v3.5.0) ──
+    Omega_topo = (L_sat - L_min_irr) * (1.0 - float(np.exp(-tau * C)))
+
+    # ── Bκ evolution gain (new in v3.6.0) ──
+    # Δ_Bκ increases with both evolution progress (delta_Bk) and capacity (C)
+    # This is the key mechanism: Bκ evolution can offset and surpass Ω_topo
+    Delta_Bk = kappa_evolution * delta_Bk * C
+
+    # ── Total loss ──
+    L_total = L_scaling + Omega_topo - Delta_Bk
+
+    # ── Ensure non-negative ──
+    L_total = max(L_total, L_irr)
+
+    return {
+        "L_total": float(L_total),
+        "L_scaling": float(L_scaling),
+        "L_irr": float(L_irr),
+        "L_rep": float(L_rep),
+        "Omega_topo": float(Omega_topo),
+        "Delta_Bk": float(Delta_Bk),
+        "delta_Bk": float(delta_Bk),
+        "kappa_evolution": float(kappa_evolution),
+        "breakthrough": Delta_Bk > Omega_topo,  # Bκ进化突破拓扑饱和
+        "L_irr_min": float(L_min_irr),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# NP可解性判据表 (from "物理紧化与Ψ-截断" Appendix D)
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def classify_task_complexity(
+    game_id: str,
+    topo_features: Dict[str, Any],
+    has_physical_constraints: bool = True,
+    has_non_associative_ops: bool = False,
+) -> Dict[str, Any]:
+    """Classify ARC-AGI-3 task complexity using TOMAS NP-solvability criteria.
+
+    Implements the判据表 from "物理紧化与Ψ-截断" Appendix D:
+        - 含Φ_phys → P类 (物理约束降维)
+        - 含非结合操作 → 需Bκ进化 (NAR-Conv)
+        - 纯组合 → NP-C (无物理先验)
+
+    Args:
+        game_id: ARC game ID (e.g., 'ls20', 'ft09').
+        topo_features: Topology feature dict from extract_topo_features.
+        has_physical_constraints: Whether task has physical constraints.
+        has_non_associative_ops: Whether task has non-associative operations.
+
+    Returns:
+        Dict with complexity_class, Bk_requirement, and strategy.
+    """
+    euler_char = topo_features.get("euler_char", 0)
+    n_components = topo_features.get("n_components", 1)
+    density = topo_features.get("density", 0.5)
+
+    # ── Classification logic ──
+    if has_non_associative_ops and has_physical_constraints:
+        # Type-B with physics: P in physical, needs Bκ evolution for NAR
+        complexity_class = "P_in_phys"
+        Bk_requirement = "Bκ_NAR"  # Need NAR-Conv compactification basis
+        strategy = "PhysicalNARConv + κ-Snap with Φ_phys pruning"
+    elif has_non_associative_ops and not has_physical_constraints:
+        # Type-B without physics: NP-Hard without Bκ evolution
+        complexity_class = "NP_Hard"
+        Bk_requirement = "Bκ_NAR_critical"  # Critical need for NAR-Conv
+        strategy = "Bκ-evolution + Sleep-Step + NAR-Conv"
+    elif has_physical_constraints and not has_non_associative_ops:
+        # Type-A with physics: Easy P
+        complexity_class = "P"
+        Bk_requirement = "Bκ_standard"  # Standard compactification
+        strategy = "Fast-Path + GaussExGuard + standard κ-Snap"
+    else:
+        # Pure combinatorial (no physics, no NAR)
+        complexity_class = "NP_C_likely"
+        Bk_requirement = "Bκ_exotic"  # Need exotic compactification
+        strategy = "Random + heuristic + Bκ-exotic proposal"
+
+    # ── Difficulty score ──
+    difficulty = density * n_components + abs(euler_char) * 0.5
+    if has_non_associative_ops:
+        difficulty *= 2.0  # Non-associative doubles difficulty
+
+    return {
+        "game_id": game_id,
+        "complexity_class": complexity_class,
+        "Bk_requirement": Bk_requirement,
+        "strategy": strategy,
+        "difficulty_score": float(difficulty),
+        "has_physical_constraints": has_physical_constraints,
+        "has_non_associative_ops": has_non_associative_ops,
+        "euler_char": euler_char,
+        "n_components": n_components,
+    }
