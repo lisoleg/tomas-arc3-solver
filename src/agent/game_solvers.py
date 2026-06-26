@@ -49,6 +49,15 @@ from .rhae_controller import (
     create_game_task,
     ls20_estimate_human_steps,
 )
+from .neural_dsl import (
+    RecurrentDSL,
+    GatedDSL,
+    AdvancedDSL,
+    inject_interneurons,
+    estimate_ic_with_motifs,
+    neuro_inspired_kps_search,
+    neurally_gated_expand,
+)
 
 
 # ============================================================================
@@ -9325,6 +9334,25 @@ def solve_game(
                 ic_metric=ic_metric,  # from v3.12.0 ICMetric
                 gex_constraint=phys_gaussex,  # from v3.12.0 PhysicalGaussExConstraint
                 use_liu_mechanism=True,  # v3.14.0: Liu mechanism S_rel priority formula
+            )
+            plan = _normalize_plan(plan)
+            if plan is not None and _verify_plan(plan):
+                return plan
+        except Exception:
+            pass
+
+    # Phase 2.6: Neural-Inspired κ-PS (v3.16.0 NEW)
+    # LSTM forget gate + ResNet residual compose + Transformer attention + Hopfield energy convergence
+    # Supplements κ-PS with neural-inspired gate mechanisms and motif IC estimation
+    if not skip_search_phases and _time_remaining() > 2.0:
+        try:
+            neuro_kps_time = min(10.0, _time_remaining() - 1.0)
+            plan = neuro_inspired_kps_search(
+                game, max_depth=40, max_nodes=200000, max_time=neuro_kps_time,
+                forget_threshold=0.05,  # LSTM forget gate IC threshold
+                energy_threshold=1/6,   # Hopfield energy convergence (5/6 saturation)
+                ic_metric=ic_metric,    # from v3.12.0 ICMetric
+                gex_constraint=phys_gaussex,  # from v3.12.0 PhysicalGaussExConstraint
             )
             plan = _normalize_plan(plan)
             if plan is not None and _verify_plan(plan):

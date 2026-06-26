@@ -146,6 +146,17 @@ from .rhae_controller import (
     ls20_estimate_human_steps,
 )
 
+# ── v3.16.0 — Neural-Inspired DSL (神经启发架构: LSTM/ResNet/Transformer/Hopfield) ──
+from .neural_dsl import (
+    RecurrentDSL,
+    GatedDSL,
+    AdvancedDSL,
+    inject_interneurons,
+    estimate_ic_with_motifs,
+    neuro_inspired_kps_search,
+    neurally_gated_expand,
+)
+
 # ── MetaSnapNet可选集成 ──
 try:
     from .meta_snap_net import (
@@ -295,6 +306,14 @@ __all__ = [
     "RHAEBudgetController",
     "create_game_task",
     "ls20_estimate_human_steps",
+    # v3.16.0 — Neural-Inspired DSL
+    "RecurrentDSL",
+    "GatedDSL",
+    "AdvancedDSL",
+    "inject_interneurons",
+    "estimate_ic_with_motifs",
+    "neuro_inspired_kps_search",
+    "neurally_gated_expand",
     # MetaSnapNet κ-Snap Beam Scoring (SPP集成)
     "TopoFeatureExtractor",
     "ProgramNodeFeatureExtractor",

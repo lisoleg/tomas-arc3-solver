@@ -1,0 +1,85 @@
+classDiagram
+    direction TB
+
+    class RecurrentDSL {
+        +repeat_until_converge(operation: Callable, initial_state: Any, max_steps: int) List~Any~
+        +fixed_point_iterate(obj_set: List~Any~, transform: Callable, global_condition: Callable, max_steps: int) List~Any~
+        -_check_convergence(prev_sig: str, curr_sig: str) bool
+        -_layout_hasher: LayoutHasher
+    }
+
+    class GatedDSL {
+        +forget_gate(context: Dict, threshold: float) Dict
+        +input_gate(feature_map: Dict, selector: Callable) Dict
+        -_compute_ic(context: Dict) float
+    }
+
+    class AdvancedDSL {
+        +residual_compose(op1: Callable, op2: Callable) Callable
+        +attention_select(options: List, query_context: Dict) Any
+        +repeat_until_converge(op: Callable, initial_state: Any, max_steps: int) List~Any~
+        -_attention_scores(options: List, query: Dict) List~float~
+        -_merge_states(base: Any, residual: Any) Any
+    }
+
+    class NeuroInspiredKPS {
+        +neuro_inspired_kps_search(eml_graph: EMLHypergraphV2, primitives: List~Callable~, game: Any, max_depth: int, max_nodes: int, max_time: float) List~tuple~ or None
+        -_forget_gate_filter(candidates: List, ic_threshold: float) List
+        -_residual_expand(node: Node, op1: Callable, op2: Callable) List~Node~
+        -_attention_priority(nodes: List, query: Dict) List~float~
+        -_energy_convergence_check(energy_history: List) bool
+    }
+
+    class EMLHypergraphV2 {
+        +nodes: List~EMLNode~
+        +hyperedges: List~EMLHyperedge~
+        +interneurons: List~EMLInterneuron~
+        +dead_zero_ratio: float
+        +isomorphism_ratio: float
+        +add_interneuron(edge_id: int, mod: float, phase: Tuple) None
+        +count_2cycles() int
+        +count_3cycles() int
+    }
+
+    class EMLInterneuron {
+        +id: str
+        +edge_id: int
+        +mod: float
+        +phase: Tuple~int int~
+        +centroid: Tuple~float float~
+        +witness_type: str
+    }
+
+    class LayoutHasher {
+        +hash_grid(grid: ndarray) str
+    }
+
+    class Node {
+        +id: int
+        +parent_id: int
+        +action: Any
+        +depth: int
+        +meta: Dict
+    }
+
+    class GaussExVerifier {
+        +verify(game, reference) float
+    }
+
+    class ActionSpace {
+        +game_actions: List
+        +grid_transforms: List
+    }
+
+    RecurrentDSL --> LayoutHasher : uses convergence check
+    RecurrentDSL --> Node : iterates over
+    GatedDSL --> NeuroInspiredKPS : provides gates
+    AdvancedDSL --> NeuroInspiredKPS : provides compose+attention
+    NeuroInspiredKPS --> EMLHypergraphV2 : searches over
+    NeuroInspiredKPS --> Node : creates search nodes
+    NeuroInspiredKPS --> GaussExVerifier : energy convergence
+    NeuroInspiredKPS --> ActionSpace : uses primitives
+    EMLHypergraphV2 --> EMLInterneuron : contains
+    EMLHypergraphV2 --> EMLNode : contains
+    EMLHypergraphV2 --> EMLHyperedge : contains
+    AdvancedDSL --> RecurrentDSL : shares repeat_until_converge

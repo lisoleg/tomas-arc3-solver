@@ -1,4 +1,4 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.14.0.
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.16.0.
 
 Strategy:
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
@@ -38,6 +38,14 @@ Strategy:
   35. DFS Backtrack Planner: Stack-based DFS + visited set anti-loop (v3.12.0, §P0-4)
   36. Adaptive Sleep-Step Budget: B = B_base + α×MDL + β×log₂(freq+1) (v3.12.0, §P1-5)
   37. AST Width Control: W(d) = W_max × exp(-λd) (v3.12.0, §P1-6)
+  38. LS20 Proximity Position: 金币锚点不在步长网格上时计算包围盒重叠位置 (v3.15.3)
+  39. LS20 Emergency Coin Collection: trigger间紧急金币收集(BFS max_steps=remaining) (v3.15.3)
+  40. RecurrentDSL: 循环原语repeat_until_converge — 拓扑囚禁孤子(RNN启发) (v3.16.0)
+  41. GatedDSL: LSTM Forget Gate Ψ-Cut + Input Gate选择性注入 (v3.16.0)
+  42. AdvancedDSL: ResNet残差连接 + Transformer Attention选择 (v3.16.0)
+  43. EML Interneuron Injection: 超图中继节点 — 三角形→抽象witness (v3.16.0)
+  44. Motif IC Estimation: 2-cycle/3-cycle 计数奖励(Weizmann启发) (v3.16.0)
+  45. Neural κ-PS: 神经启发搜索(forget+residual+attention+energy) (v3.16.0)
 
 This file is self-contained — no imports from local project files.
 All replay data and logic is included inline.
@@ -205,7 +213,7 @@ ACTION_NAME_TO_ID: Dict[str, int] = {
 
 
 class MyAgent(Agent):
-    """TOMAS ARC-AGI-3 Solver v3.13.0 — Replay Oracle + Φ_phys + GibbsEnsemble + IDO + κ-Priority Search + Ψ-Cut Pruning + Anti-monotonicity.
+    """TOMAS ARC-AGI-3 Solver v3.16.0 — Replay Oracle + Φ_phys + GibbsEnsemble + IDO + κ-Priority Search + Ψ-Cut Pruning + Anti-monotonicity + Neural κ-PS + EML Interneuron + Motif IC.
 
     Strategy priority:
       1. ARC3 Replay Oracle (precomputed human-optimal sequences)
@@ -339,12 +347,29 @@ class MyAgent(Agent):
         self._macro_action_queue: List[Tuple[str, Optional[Dict]]] = []  # Macro-action plan queue
         self._object_targets: List[Tuple[int, int]] = []  # Target centroids from EML
 
+        # ── NEW v3.16.0: Neural κ-PS state ──
+        self._neuro_kps_active: bool = False  # Neural-inspired κ-PS active for this game
+        self._neuro_kps_forget_threshold: float = 0.1  # LSTM forget gate IC threshold
+        self._neuro_kps_attention_weights: Dict[str, float] = {}  # Transformer attention scores
+        self._neuro_kps_residual_cache: List[float] = []  # ResNet residual values (last N)
+        self._neuro_kps_energy_history: List[float] = []  # Hopfield energy convergence trace
+        self._neuro_kps_search_count: int = 0  # Number of Neural κ-PS invocations
+
+        # ── NEW v3.16.0: EML Interneuron injection state ──
+        self._eml_interneurons: List[Dict] = []  # Relay nodes injected into EML hypergraph
+        self._eml_interneuron_injected: bool = False  # Whether interneurons were injected
+
+        # ── NEW v3.16.0: Motif IC estimation state ──
+        self._motif_2cycles: int = 0  # 2-cycle count in EML hypergraph
+        self._motif_3cycles: int = 0  # 3-cycle count in EML hypergraph
+        self._motif_ic_bonus: float = 0.0  # Motif IC bonus = 0.2×n2cycles + 0.3×n3cycles
+
         # ── Initialize plan for level 0 ──
         self._compute_plan(0)
 
     @property
     def name(self) -> str:
-        return f"tomas.v3.14.0.{self.MAX_ACTIONS}"
+        return f"tomas.v3.16.0.{self.MAX_ACTIONS}"
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         """Stop when all levels completed or action budget exhausted."""
@@ -444,6 +469,17 @@ class MyAgent(Agent):
         self._eml_nodes_dark = []  # v3.14.0
         self._macro_action_queue = []  # v3.14.0
         self._object_targets = []  # v3.14.0
+        # ── Reset v3.16.0 state ──
+        self._neuro_kps_active = False  # v3.16.0
+        self._neuro_kps_attention_weights = {}  # v3.16.0
+        self._neuro_kps_residual_cache = []  # v3.16.0
+        self._neuro_kps_energy_history = []  # v3.16.0
+        self._neuro_kps_search_count = 0  # v3.16.0
+        self._eml_interneurons = []  # v3.16.0
+        self._eml_interneuron_injected = False  # v3.16.0
+        self._motif_2cycles = 0  # v3.16.0
+        self._motif_3cycles = 0  # v3.16.0
+        self._motif_ic_bonus = 0.0  # v3.16.0
         self._adaptive_sleep_budget = 3.0  # Reset to B_base default
         # Keep pattern_memory across levels — patterns may repeat
 
@@ -2167,6 +2203,10 @@ class MyAgent(Agent):
             tn36_action = self._tn36_state_transition_strategy(latest_frame, available_set)
             if tn36_action is not None:
                 return tn36_action
+        elif base_id == "ls20":
+            ls20_action = self._ls20_proximity_emergency_strategy(latest_frame, available_set)
+            if ls20_action is not None:
+                return ls20_action
 
         # ── Phase 0.7: Liu Mechanism S_rel Priority Search (v3.14.0 upgrade) ──
         # When priority mode is active, use Liu mechanism S_rel formula:
@@ -2175,6 +2215,14 @@ class MyAgent(Agent):
             kappa_action = self._kappa_priority_select(latest_frame, available_set)
             if kappa_action is not None:
                 return kappa_action
+
+        # ── Phase 2.6: Neural-Inspired κ-PS (v3.16.0 NEW) ──
+        # LSTM forget gate + ResNet residual compose + Transformer attention + Hopfield energy convergence
+        # Supplements κ-PS with neural-inspired gate mechanisms and motif IC estimation
+        if self._neuro_kps_active or (self._kappa_priority_mode and len(self._ic_history) >= 3):
+            neuro_action = self._neuro_inspired_kps_search(latest_frame, available_set)
+            if neuro_action is not None:
+                return neuro_action
 
         # ── Phase 1: Pattern repeat (highest priority) ──
         # If we've seen this exact grid configuration before and know

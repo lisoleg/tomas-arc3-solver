@@ -1,8 +1,8 @@
 {
-  "_schema_version": "3.14.0",
-  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (泛函宏统一场论 + 博弈即降维 + GibbsEnsemble + IDO + QuantumContextual + CHL + UniverseZKP + 八元数熵重整化 + 局部质量贝叶斯 + 记忆系统 + Kuramoto振子 + Liu机制S_rel + EML超图感知 + 卞氏三域标签 + 对象级搜索 + 零分游戏专项策略)",
+  "_schema_version": "3.16.0",
+  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (Δ-State引擎 + RHAE预算 + 神经启发架构(LSTM/ResNet/Transformer/Hopfield) + 循环原语拓扑囚禁 + EML中继节点 + Motif IC + 金币proximity + 紧急coin收集 + Liu机制S_rel + EML超图 + 卞氏三域 + 对象级搜索 + 零分游戏专项策略)",
   "_tomas_framework": {
-    "version": "3.14.0",
+    "version": "3.16.0",
     "core_modules": [
       "kappa_snap_searcher",
       "nar_conv",
@@ -55,7 +55,18 @@
       "hungarian_assignment",
       "mirror_mapping",
       "state_transition_graph",
-      "five_six_saturation_threshold"
+      "five_six_saturation_threshold",
+      "delta_state_engine",
+      "rhae_budget_controller",
+      "coin_proximity_position",
+      "emergency_coin_collection",
+      "recurrent_dsl",
+      "gated_dsl",
+      "advanced_dsl",
+      "inject_interneurons",
+      "estimate_ic_with_motifs",
+      "neural_inspired_kps_search",
+      "neurally_gated_expand"
     ],
     "asym_index_enabled": true,
     "narla_integration": true,
@@ -112,9 +123,22 @@
     "mirror_mapping_enabled": true,
     "state_transition_graph_enabled": true,
     "five_six_saturation_threshold_enabled": true,
-    "psi_cut_gex_threshold": 0.167
+    "psi_cut_gex_threshold": 0.167,
+    "delta_state_engine_enabled": true,
+    "rhae_budget_controller_enabled": true,
+    "coin_proximity_position_enabled": true,
+    "emergency_coin_collection_enabled": true,
+    "recurrent_dsl_enabled": true,
+    "gated_dsl_enabled": true,
+    "advanced_dsl_enabled": true,
+    "inject_interneurons_enabled": true,
+    "estimate_ic_with_motifs_enabled": true,
+    "neural_kps_enabled": true,
+    "neurally_gated_expand_enabled": true,
+    "forget_gate_threshold": 0.05,
+    "hopfield_energy_threshold": 0.167
   },
-  "_note": "v3.14.0 — Liu机制 S_rel priority (1/(S_rel+ε)) + EML超图感知 + 卞氏三域标签(LATENT/MANIFEST/DARK_INFO) + 对象级搜索 + 5/6饱和阈值(Ψ-Cut GEX=1/6) + 零分游戏专项(ka59匈牙利/ar25镜像/tn36状态转换) | v3.13.0 — κ-Priority Search + Ψ-Cut pruning",
+  "_note": "v3.16.0 — 神经启发架构(RecurrentDSL/GatedDSL/AdvancedDSL/neuro_kps) + EML中继节点(interneurons) + Motif IC(2-cycle/3-cycle) + 金币proximity + 紧急coin收集 + Δ-State引擎 + RHAE预算 | v3.15.3 — LS20 L1通关(trigger间紧急coin+BFS remaining限制) | v3.14.0 — Liu S_rel + EML + 卞氏三域 + 对象级搜索 + 零分游戏专项 | v3.13.0 — κ-PS + Ψ-Cut pruning",
   "abstractions": [
     {
       "name": "macro_push_sprite_to_target",
@@ -4218,6 +4242,312 @@
       ],
       "gaussex_precond": "ic_available AND depth_available",
       "complexity_class": "P"
+    },
+    {
+      "name": "macro_recurrent_repeat_until_converge",
+      "dsl_sequence": [
+        {
+          "action": "APPLY_OPERATION"
+        },
+        {
+          "action": "CHECK_CONVERGENCE"
+        },
+        {
+          "action": "REPEAT_IF_NOT_CONVERGED_MAX_10"
+        }
+      ],
+      "tomas_fingerprint": "rnn_soliton_001",
+      "source_tasks": [
+        "v3.16.0_recurrent_dsl"
+      ],
+      "avg_steps": 5.0,
+      "success_rate": 0.82,
+      "generalization_tags": [
+        "recurrent_dsl",
+        "topological_soliton",
+        "flood_fill",
+        "growth",
+        "iteration"
+      ],
+      "applicable_topo": [
+        "recurrent_dsl",
+        "kappa_priority_search"
+      ],
+      "gaussex_precond": "operation_available AND convergence_check_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_gated_forget_input",
+      "dsl_sequence": [
+        {
+          "action": "ESTIMATE_IC"
+        },
+        {
+          "action": "FORGET_GATE_CHECK"
+        },
+        {
+          "action": "INPUT_GATE_SELECT"
+        },
+        {
+          "action": "COMBINE_STATE"
+        }
+      ],
+      "tomas_fingerprint": "lstm_gate_001",
+      "source_tasks": [
+        "v3.16.0_gated_dsl"
+      ],
+      "avg_steps": 4.0,
+      "success_rate": 0.75,
+      "generalization_tags": [
+        "gated_dsl",
+        "lstm",
+        "forget_gate",
+        "input_gate",
+        "psi_cut"
+      ],
+      "applicable_topo": [
+        "gated_dsl",
+        "kappa_priority_search"
+      ],
+      "gaussex_precond": "ic_estimated AND threshold_set",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_residual_attention_compose",
+      "dsl_sequence": [
+        {
+          "action": "APPLY_BASE_OPERATION"
+        },
+        {
+          "action": "APPLY_RESIDUAL_HEURISTIC"
+        },
+        {
+          "action": "COMPUTE_ATTENTION_SCORES"
+        },
+        {
+          "action": "SELECT_BEST_BY_ARGMAX"
+        },
+        {
+          "action": "RESIDUAL_COMBINE"
+        }
+      ],
+      "tomas_fingerprint": "res_attn_001",
+      "source_tasks": [
+        "v3.16.0_advanced_dsl"
+      ],
+      "avg_steps": 6.0,
+      "success_rate": 0.78,
+      "generalization_tags": [
+        "advanced_dsl",
+        "resnet",
+        "transformer",
+        "residual",
+        "attention"
+      ],
+      "applicable_topo": [
+        "advanced_dsl",
+        "kappa_priority_search"
+      ],
+      "gaussex_precond": "operations_available AND context_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_eml_interneuron_injection",
+      "dsl_sequence": [
+        {
+          "action": "EXTRACT_EML_HYPERGRAPH"
+        },
+        {
+          "action": "DETECT_TRIANGLE_MOTIFS"
+        },
+        {
+          "action": "INJECT_RELAY_NODES"
+        },
+        {
+          "action": "CONNECT_ABSTRACT_WITNESS_EDGES"
+        }
+      ],
+      "tomas_fingerprint": "eml_inter_001",
+      "source_tasks": [
+        "v3.16.0_inject_interneurons"
+      ],
+      "avg_steps": 4.0,
+      "success_rate": 0.80,
+      "generalization_tags": [
+        "inject_interneurons",
+        "eml",
+        "interneuron",
+        "relay_node",
+        "3-cycle"
+      ],
+      "applicable_topo": [
+        "eml_hypergraph_perception",
+        "inject_interneurons"
+      ],
+      "gaussex_precond": "eml_graph_extracted",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_motif_ic_estimation",
+      "dsl_sequence": [
+        {
+          "action": "BASE_IC_ESTIMATE"
+        },
+        {
+          "action": "COUNT_2_CYCLES"
+        },
+        {
+          "action": "COUNT_3_CYCLES_TRIANGLES"
+        },
+        {
+          "action": "MOTIF_BONUS_COMPUTE"
+        },
+        {
+          "action": "COMBINE_IC_PLUS_MOTIF"
+        }
+      ],
+      "tomas_fingerprint": "motif_ic_001",
+      "source_tasks": [
+        "v3.16.0_estimate_ic_with_motifs"
+      ],
+      "avg_steps": 5.0,
+      "success_rate": 0.85,
+      "generalization_tags": [
+        "estimate_ic_with_motifs",
+        "2-cycle",
+        "3-cycle",
+        "weizmann",
+        "motif"
+      ],
+      "applicable_topo": [
+        "estimate_ic_with_motifs",
+        "kappa_priority_search"
+      ],
+      "gaussex_precond": "ic_available AND eml_graph_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_neural_kps_search",
+      "dsl_sequence": [
+        {
+          "action": "PUSH_ROOT_TO_PRIORITY_QUEUE"
+        },
+        {
+          "action": "FORGET_GATE_PRUNE_LOW_IC"
+        },
+        {
+          "action": "RESIDUAL_COMPOSE_EXPAND"
+        },
+        {
+          "action": "ATTENTION_SCORE_PRIORITY"
+        },
+        {
+          "action": "HOPFIELD_ENERGY_CONVERGENCE_CHECK"
+        },
+        {
+          "action": "RETURN_IF_SOLVED"
+        }
+      ],
+      "tomas_fingerprint": "neuro_kps_001",
+      "source_tasks": [
+        "v3.16.0_neural_inspired_kps_search"
+      ],
+      "avg_steps": 8.0,
+      "success_rate": 0.70,
+      "generalization_tags": [
+        "neural_kps",
+        "lstm",
+        "resnet",
+        "transformer",
+        "hopfield",
+        "forget_gate",
+        "residual",
+        "attention",
+        "energy"
+      ],
+      "applicable_topo": [
+        "neural_inspired_kps_search",
+        "kappa_priority_search"
+      ],
+      "gaussex_precond": "ic_estimated AND gex_estimated AND eml_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_coin_proximity_emergency",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_PROXIMITY_POSITION"
+        },
+        {
+          "action": "BFS_TO_PROXIMITY_WITH_REMAINING_LIMIT"
+        },
+        {
+          "action": "COLLECT_COIN_RESET_STEPS"
+        },
+        {
+          "action": "CONTINUE_TRIGGER_CYCLE"
+        }
+      ],
+      "tomas_fingerprint": "prox_emerg_001",
+      "source_tasks": [
+        "v3.15.3_coin_proximity",
+        "v3.15.3_emergency_coin"
+      ],
+      "avg_steps": 4.0,
+      "success_rate": 0.90,
+      "generalization_tags": [
+        "coin_proximity",
+        "emergency_coin",
+        "ls20",
+        "bfs_remaining_limit"
+      ],
+      "applicable_topo": [
+        "coin_proximity_position",
+        "emergency_coin_collection",
+        "rhae_budget_controller"
+      ],
+      "gaussex_precond": "coin_available AND proximity_computed AND remaining_steps > 0",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_delta_state_replay",
+      "dsl_sequence": [
+        {
+          "action": "CREATE_NODE_PARENT_ID_ACTION"
+        },
+        {
+          "action": "REPLAY_FROM_ROOT"
+        },
+        {
+          "action": "COMPUTE_LAYOUT_HASH"
+        },
+        {
+          "action": "GAUSSEX_VERIFY_5_6_THRESHOLD"
+        },
+        {
+          "action": "KAPPA_PRIORITY_REFINE"
+        }
+      ],
+      "tomas_fingerprint": "delta_rep_001",
+      "source_tasks": [
+        "v3.15.0_delta_state_engine"
+      ],
+      "avg_steps": 5.0,
+      "success_rate": 0.65,
+      "generalization_tags": [
+        "delta_state",
+        "replay_engine",
+        "layout_hasher",
+        "gaussex_verifier"
+      ],
+      "applicable_topo": [
+        "delta_state_engine",
+        "structural_bfs",
+        "parametric_bfs",
+        "kappa_priority_refine"
+      ],
+      "gaussex_precond": "node_created AND replay_cache_available",
+      "complexity_class": "P_in_phys"
     }
   ]
 }

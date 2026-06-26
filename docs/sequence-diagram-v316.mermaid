@@ -1,0 +1,44 @@
+sequenceDiagram
+    participant Pipeline as solve_game_with_pipeline<br/>(game_solvers.py)
+    participant KPS as solve_kappa_priority_search<br/>(Phase 2.5)
+    participant NeuroKPS as neuro_inspired_kps_search<br/>(Phase 2.7)
+    participant EML as extract_eml_hypergraph
+    participant Inject as inject_interneurons
+    participant IC as estimate_ic_with_motifs
+    participant Gated as GatedDSL.forget_gate
+    participant Advanced as AdvancedDSL
+    participant Recurrent as RecurrentDSL
+    participant DeltaState as delta_state.py
+
+    Pipeline->>Pipeline: Phase -0.5 → Phase -1 → Phase 0 → Phase 0.5 → Phase 1
+    Pipeline->>Pipeline: Phase 2 (BFS)
+    Pipeline->>KPS: Phase 2.5: κ-PS (Liu S_rel)
+    
+    alt Phase 2.5 返回 None
+        Pipeline->>EML: extract_eml_hypergraph(game)
+        EML-->>Pipeline: eml_graph (EMLHypergraphV2)
+        Pipeline->>Inject: inject_interneurons(eml_graph, mod=0.5)
+        Inject-->>Pipeline: eml_graph_v2 (含interneurons)
+        Pipeline->>IC: estimate_ic_with_motifs(prog, eml_graph_v2)
+        IC-->>Pipeline: motif_ic (float)
+        Pipeline->>NeuroKPS: neuro_inspired_kps_search(eml_graph_v2, primitives, game, ...)
+        
+        loop Neuro-启发搜索循环
+            NeuroKPS->>Gated: forget_gate(context, threshold)
+            Gated-->>NeuroKPS: filtered_context
+            NeuroKPS->>Advanced: residual_compose(op1, op2)
+            Advanced-->>NeuroKPS: composed_op
+            NeuroKPS->>Advanced: attention_select(options, query)
+            Advanced-->>NeuroKPS: best_option
+            NeuroKPS->>Recurrent: repeat_until_converge(op, state, max_steps)
+            Recurrent->>DeltaState: LayoutHasher.hash_grid(state)
+            DeltaState-->>Recurrent: state_signature
+            Recurrent-->>NeuroKPS: converged_trajectory
+        end
+        
+        NeuroKPS-->>Pipeline: action_sequence | None
+    else Phase 2.5 返回 solution
+        KPS-->>Pipeline: solution (跳过Phase 2.7)
+    end
+    
+    Pipeline->>Pipeline: Phase 3 → Phase 4 → Phase 5 → Phase 6 → Phase 7 → Phase 8
