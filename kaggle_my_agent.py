@@ -1473,29 +1473,13 @@ class MyAgent(Agent):
         base_id = self.game_id.split("-")[0] if self.game_id else ""
 
         # Estimate IC from grid complexity (inline simplified)
+        # v3.16.0: IC augmented by motif cycle counting bonus
         layer = self._extract_layer0(grid)
         ic_est = 0.0
         if layer:
-            h = len(layer)
-            w = len(layer[0]) if h > 0 else 0
-            total_nonzero = 0
-            distinct_colors: Set[int] = set()
-            for r in range(min(h, 64)):
-                for c in range(min(w, 64)):
-                    try:
-                        val = layer[r][c]
-                        if val != 0 and val != -1:
-                            total_nonzero += 1
-                            distinct_colors.add(val)
-                    except (IndexError, TypeError):
-                        continue
-            # IC = color_diversity + nonzero_density + depth_penalty
-            ic_est = (
-                len(distinct_colors) * 0.3
-                + (total_nonzero / max(h * w, 1)) * 0.5
-                - (self.action_counter / 500.0) * 0.2  # Depth penalty
-            )
-            ic_est = max(0.0, ic_est)
+            ic_est = self._estimate_ic_from_grid(layer)
+            # v3.16.0: Add motif IC bonus (2-cycle/3-cycle counting)
+            ic_est += self._motif_ic_bonus
 
         self._ic_history.append(ic_est)
 
@@ -2006,6 +1990,538 @@ class MyAgent(Agent):
 
         return None
 
+    # ── LS20 Proximity Position + Emergency Coin Collection (v3.15.3) ────
+
+    def _ls20_proximity_emergency_strategy(
+        self, latest_frame: FrameData, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """LS20 proximity position + emergency coin collection strategy (v3.15.3).
+
+        When Oracle replay fails for LS20, this strategy:
+        1. compute_coin_proximity_position: Find coin anchor proximity positions
+           when anchors are not on the step-length grid (bbox overlap positions).
+        2. emergency_coin_collection: BFS-based urgent coin collection between
+           triggers (max_steps = remaining budget).
+
+        Args:
+            latest_frame: Current frame data.
+            available_set: Set of available action IDs.
+
+        Returns:
+            GameAction for proximity position or emergency coin collection, or None.
+        """
+        grid = latest_frame.frame if latest_frame.frame else []
+        layer = self._extract_layer0(grid)
+        if not layer:
+            return None
+
+        # Extract EML for coin anchor detection
+        if not self._eml_extracted:
+            self._eml_hg = self._extract_eml_hypergraph_inline(grid)
+            self._eml_extracted = True
+            if self._eml_hg:
+                self._eml_nodes_manifest = [
+                    n for n in self._eml_hg['nodes'] if n['domain_label'] == 'MANIFEST'
+                ]
+
+        # ── Step 1: Compute coin proximity positions ──
+        proximity_targets = self._compute_coin_proximity_position(layer)
+        if proximity_targets and 6 in available_set:
+            for px, py in proximity_targets:
+                coord_key = f"{px},{py}"
+                if coord_key not in self._visited_coords:
+                    self._visited_coords.add(coord_key)
+                    action = GameAction.ACTION6
+                    action.set_data({"x": px, "y": py})
+                    action.reasoning = {"why": "ls20-proximity-position",
+                                        "target": (px, py)}
+                    self._action_history.append("ACTION6")
+                    return action
+
+        # ── Step 2: Emergency coin collection ──
+        remaining = self.MAX_ACTIONS - self.action_counter
+        if remaining > 5:
+            coin_action = self._emergency_coin_collection(layer, available_set, remaining)
+            if coin_action is not None:
+                return coin_action
+
+        # ── Step 3: Fallback to standard keyboard navigation ──
+        if self._estimated_player_pos and self._direction_map:
+            nonzero = self._find_nonzero_cells(grid)
+            if nonzero:
+                targets = [(x, y) for x, y, v in nonzero
+                           if f"{x},{y}" not in self._visited_coords and v != 0]
+                if targets:
+                    tx, ty = targets[0]
+                    return self._navigate_to_target(tx, ty, available_set)
+
+        return None
+
+    def _compute_coin_proximity_position(
+        self, layer: List[List[int]]
+    ) -> List[Tuple[int, int]]:
+        """Compute coin anchor proximity positions (v3.15.3 inline).
+
+        When coin anchors are not aligned to the step-length grid,
+        compute bounding box overlap positions that allow approach.
+
+        Args:
+            layer: The 2D grid layer.
+
+        Returns:
+            List of (x, y) proximity position coordinates.
+        """
+        h = len(layer)
+        w = len(layer[0]) if h > 0 else 0
+        if h == 0 or w == 0:
+            return []
+
+        # Find "coin" cells — non-zero, non-background values with small area
+        # In LS20, coins are small clusters of distinct values
+        coin_cells: List[Tuple[int, int, int]] = []
+        for r in range(min(h, 64)):
+            for c in range(min(w, 64)):
+                try:
+                    val = layer[r][c]
+                    if val != 0 and val != -1:
+                        coin_cells.append((c, r, val))  # (x, y, val)
+                except (IndexError, TypeError):
+                    continue
+
+        if not coin_cells:
+            return []
+
+        # Compute bounding boxes for each coin cluster
+        # Group by value
+        value_groups: Dict[int, List[Tuple[int, int]]] = {}
+        for x, y, val in coin_cells:
+            value_groups.setdefault(val, []).append((x, y))
+
+        # For each group, compute bbox centroid and proximity positions
+        proximity_positions: List[Tuple[int, int]] = []
+        step_length = 2  # Approximate grid step length for proximity
+
+        for val, cells in value_groups.items():
+            if len(cells) < 1:
+                continue
+            # Bbox of the group
+            min_x = min(x for x, y in cells)
+            max_x = max(x for x, y in cells)
+            min_y = min(y for x, y in cells)
+            max_y = max(y for x, y in cells)
+
+            # Compute bbox overlap positions
+            # Anchors that don't align to step grid → find overlap positions
+            cx = (min_x + max_x) // 2
+            cy = (min_y + max_y) // 2
+
+            # Check if centroid aligns to step grid
+            if cx % step_length != 0 or cy % step_length != 0:
+                # Compute nearby grid-aligned positions (bbox overlap)
+                aligned_x = cx - (cx % step_length)
+                aligned_y = cy - (cy % step_length)
+                # Add all grid-aligned positions within the bbox
+                for ax in range(max(0, aligned_x - step_length), min(w, aligned_x + step_length + 1), step_length):
+                    for ay in range(max(0, aligned_y - step_length), min(h, aligned_y + step_length + 1), step_length):
+                        proximity_positions.append((ax, ay))
+            else:
+                # Already aligned — add direct centroid
+                proximity_positions.append((cx, cy))
+
+        return proximity_positions
+
+    def _emergency_coin_collection(
+        self, layer: List[List[int]], available_set: Set[int], max_steps: int
+    ) -> Optional[GameAction]:
+        """Emergency coin collection between triggers (v3.15.3 inline).
+
+        BFS-based coin collection when Oracle replay has failed and
+        remaining budget is limited. Collects nearest coins efficiently.
+
+        Args:
+            layer: The 2D grid layer.
+            available_set: Set of available action IDs.
+            max_steps: Remaining action budget for BFS.
+
+        Returns:
+            GameAction navigating toward nearest coin, or None.
+        """
+        if not self._estimated_player_pos:
+            return None
+
+        px, py = self._estimated_player_pos
+
+        # Find all coin positions (non-zero, non-background)
+        coins: List[Tuple[int, int, int]] = []
+        h = len(layer)
+        w = len(layer[0]) if h > 0 else 0
+        for r in range(min(h, 64)):
+            for c in range(min(w, 64)):
+                try:
+                    val = layer[r][c]
+                    if val != 0 and val != -1:
+                        dist = abs(c - px) + abs(r - py)
+                        if dist <= max_steps:  # Within BFS budget
+                            coins.append((dist, c, r))  # (dist, x, y)
+                except (IndexError, TypeError):
+                    continue
+
+        if not coins:
+            return None
+
+        # Sort by distance (nearest first)
+        coins.sort()
+
+        # Navigate toward nearest reachable coin
+        _, tx, ty = coins[0]
+        return self._navigate_to_target(tx, ty, available_set)
+
+    # ── Neural-Inspired κ-PS (v3.16.0) ────────────────────────────────────
+
+    def _neuro_inspired_kps_search(
+        self, latest_frame: FrameData, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """Neural-Inspired κ-Priority Search (v3.16.0 inline simplified).
+
+        Supplements Liu κ-PS with neural-inspired mechanisms:
+        - LSTM Forget Gate: IC < threshold → prune (Ψ-Cut variant)
+        - ResNet Residual: compose current priority with residual from history
+        - Transformer Attention: motif IC + residual → dynamic priority weights
+        - Hopfield Energy: energy convergence → solved detection
+
+        PriorityQueue(IC priority) with neural gate mechanisms.
+
+        Args:
+            latest_frame: Current frame data.
+            available_set: Set of available action IDs.
+
+        Returns:
+            GameAction with highest neural-modulated priority, or None.
+        """
+        grid = latest_frame.frame if latest_frame.frame else []
+        layer = self._extract_layer0(grid)
+        if not layer:
+            return None
+
+        # ── Estimate base IC from grid complexity ──
+        ic_est = self._estimate_ic_from_grid(layer)
+
+        # ── Motif IC bonus (v3.16.0: Weizmann-inspired cycle counting) ──
+        motif_bonus = self._motif_ic_bonus  # 0.2×n2cycles + 0.3×n3cycles
+        ic_with_motif = ic_est + motif_bonus
+
+        # ── LSTM Forget Gate: IC < threshold → prune ──
+        if ic_with_motif < self._neuro_kps_forget_threshold:
+            # Forget gate: prune low-IC candidates (similar to Ψ-Cut)
+            self._neuro_kps_search_count += 1
+            return None
+
+        # ── ResNet Residual: compose with historical residual ──
+        residual = 0.0
+        if self._neuro_kps_residual_cache:
+            residual = self._neuro_kps_residual_cache[-1]
+        # Residual connection: priority_new = ic_with_motif + residual
+        composed_priority = ic_with_motif + residual
+
+        # Update residual cache: new residual = old_priority - new_priority
+        if self._ic_history:
+            old_priority = self._ic_history[-1]
+            new_residual = old_priority - composed_priority
+            self._neuro_kps_residual_cache.append(new_residual)
+            # Keep only last 8 residuals (bounded cache)
+            if len(self._neuro_kps_residual_cache) > 8:
+                self._neuro_kps_residual_cache = self._neuro_kps_residual_cache[-8:]
+
+        # ── Transformer Attention: dynamic weight computation ──
+        # attention_score = motif_IC_weight + residual_effect_weight
+        motif_weight = min(1.0, motif_bonus / max(ic_est, 0.01))
+        residual_weight = min(1.0, abs(residual) / max(composed_priority, 0.01))
+        attention_score = 0.6 * motif_weight + 0.4 * residual_weight
+
+        # Store attention weights per action
+        self._neuro_kps_attention_weights = {}
+        for action_name in DIRECTION_ACTIONS:
+            aid = ACTION_NAME_TO_ID.get(action_name, 0)
+            if aid in available_set:
+                eff = self._effective_actions.get(action_name, 0)
+                # Attention-modulated weight: effectiveness × composed_priority × attention
+                self._neuro_kps_attention_weights[action_name] = (
+                    max(eff, 1) * composed_priority * (1.0 + attention_score)
+                )
+        if 6 in available_set:
+            self._neuro_kps_attention_weights["ACTION6"] = composed_priority * (1.0 + attention_score) * 2.0
+        if 5 in available_set and self._special_probed:
+            special_eff = self._effective_actions.get("ACTION5", 0)
+            if special_eff > 0:
+                self._neuro_kps_attention_weights["ACTION5"] = special_eff * composed_priority * (1.0 + attention_score)
+
+        # ── Hopfield Energy convergence check ──
+        # Energy = -sum(priority_weights) + regularization
+        energy = -sum(self._neuro_kps_attention_weights.values()) + 0.01 * self.action_counter
+        self._neuro_kps_energy_history.append(energy)
+
+        # Check for energy convergence (solved detection)
+        if len(self._neuro_kps_energy_history) >= 3:
+            recent = self._neuro_kps_energy_history[-3:]
+            energy_variance = sum((e - sum(recent)/3)**2 for e in recent) / 3
+            if energy_variance < 0.001:
+                # Energy converged → likely solved or stuck
+                # Use last effective action as signal
+                if self._effective_actions:
+                    best_action = max(self._effective_actions, key=self._effective_actions.get)
+                    if ACTION_NAME_TO_ID.get(best_action, 0) in available_set:
+                        action = getattr(GameAction, best_action)
+                        action.reasoning = f"neuro-kps-energy-converged: {best_action}"
+                        self._action_history.append(best_action)
+                        self._neuro_kps_search_count += 1
+                        return action
+
+        # ── PriorityQueue: select action with highest attention-modulated priority ──
+        if not self._neuro_kps_attention_weights:
+            self._neuro_kps_search_count += 1
+            return None
+
+        # Sort by attention weight (descending)
+        sorted_actions = sorted(
+            self._neuro_kps_attention_weights.items(),
+            key=lambda x: x[1],
+            reverse=True
+        )
+
+        # Top candidates
+        top_candidates = sorted_actions[:max(4, self._ast_width_max)]
+        if self._matroid_prune_enabled and len(top_candidates) > 4:
+            top_candidates = top_candidates[:4]
+
+        # Weighted random choice
+        actions_list = [a for a, w in top_candidates]
+        weights_list = [max(w, 0.01) for a, w in top_candidates]
+        action_name = random.choices(actions_list, weights=weights_list, k=1)[0]
+
+        action = getattr(GameAction, action_name)
+        if action_name == "ACTION6" and action.is_complex():
+            # Click targeting: use EML manifest nodes or delta cells
+            click_target = None
+            if self._eml_extracted and self._eml_nodes_manifest:
+                for node in self._eml_nodes_manifest:
+                    nx, ny = int(node['centroid'][1]), int(node['centroid'][0])
+                    coord_key = f"{nx},{ny}"
+                    if coord_key not in self._visited_coords:
+                        self._visited_coords.add(coord_key)
+                        click_target = (nx, ny)
+                        break
+            if click_target is None and self._delta_click_pool:
+                x, y = self._delta_click_pool.pop(0)
+                self._visited_coords.add(f"{x},{y}")
+                click_target = (x, y)
+            if click_target is None:
+                click_target = (random.randint(0, 63), random.randint(0, 63))
+            action.set_data({"x": click_target[0], "y": click_target[1]})
+            action.reasoning = {"why": "neuro-kps-click", "ic": ic_with_motif,
+                                "attention": attention_score, "energy": energy,
+                                "residual": residual, "eml_target": click_target}
+        else:
+            action.reasoning = f"neuro-kps: {action_name} (ic={ic_with_motif:.2f}, att={attention_score:.2f}, E={energy:.2f}, res={residual:.2f})"
+
+        self._action_history.append(action_name)
+        self._neuro_kps_search_count += 1
+        self._neuro_kps_active = True  # Activate for subsequent calls
+        return action
+
+    def _estimate_ic_from_grid(self, layer: List[List[int]]) -> float:
+        """Estimate Information Content from grid complexity (v3.16.0 inline).
+
+        Args:
+            layer: The 2D grid layer.
+
+        Returns:
+            IC estimate (float, >= 0).
+        """
+        h = len(layer)
+        w = len(layer[0]) if h > 0 else 0
+        if h == 0 or w == 0:
+            return 0.0
+
+        total_nonzero = 0
+        distinct_colors: Set[int] = set()
+        for r in range(min(h, 64)):
+            for c in range(min(w, 64)):
+                try:
+                    val = layer[r][c]
+                    if val != 0 and val != -1:
+                        total_nonzero += 1
+                        distinct_colors.add(val)
+                except (IndexError, TypeError):
+                    continue
+
+        # IC = color_diversity + nonzero_density + depth_penalty + motif_bonus
+        ic_est = (
+            len(distinct_colors) * 0.3
+            + (total_nonzero / max(h * w, 1)) * 0.5
+            - (self.action_counter / 500.0) * 0.2  # Depth penalty
+        )
+        return max(0.0, ic_est)
+
+    # ── EML Interneuron Injection (v3.16.0) ───────────────────────────────
+
+    def _inject_eml_interneurons(self, eml_hg: Dict) -> Dict:
+        """Inject interneuron relay nodes into EML hypergraph (v3.16.0 inline).
+
+        Detects triangle structures (3-node cycles) in the EML hypergraph and
+        creates relay nodes (abstract witness) at the centroid of each triangle.
+        Each relay node connects to all triangle member nodes with abstract_witness edges.
+
+        Based on article: "超图中继节点 — 三角形→抽象witness"
+
+        Args:
+            eml_hg: EML hypergraph dict with 'nodes' and 'hyperedges'.
+
+        Returns:
+            Updated EML hypergraph dict with interneurons injected.
+        """
+        if not eml_hg or not eml_hg.get('nodes') or not eml_hg.get('hyperedges'):
+            return eml_hg
+
+        nodes = eml_hg['nodes']
+        edges = eml_hg['hyperedges']
+
+        # Build adjacency map: node_id → set of connected node_ids
+        adjacency: Dict[int, Set[int]] = {}
+        for node in nodes:
+            adjacency[node['id']] = set()
+
+        for edge in edges:
+            n1, n2 = edge['nodes']
+            adjacency.setdefault(n1, set()).add(n2)
+            adjacency.setdefault(n2, set()).add(n1)
+
+        # Detect triangles: for each pair of connected nodes, check common neighbors
+        triangles: List[Tuple[int, int, int]] = []
+        seen_triangles: Set[Tuple[int, int, int]] = set()
+
+        for node in nodes:
+            nid = node['id']
+            neighbors = adjacency.get(nid, set())
+            for n1 in neighbors:
+                for n2 in neighbors:
+                    if n1 < n2:  # Avoid duplicate pairs
+                        # Check if n1 and n2 are also connected
+                        if n2 in adjacency.get(n1, set()):
+                            tri = tuple(sorted([nid, n1, n2]))
+                            if tri not in seen_triangles:
+                                seen_triangles.add(tri)
+                                triangles.append(tri)
+
+        # For each triangle, create a relay_node (interneuron)
+        relay_nodes: List[Dict] = []
+        relay_edges: List[Dict] = []
+        next_node_id = max(n['id'] for n in nodes) + 1
+        next_edge_id = max(e['id'] for e in edges) + 1
+
+        for tri in triangles:
+            n0, n1, n2 = tri
+            # Compute centroid of the triangle (average of member centroids)
+            tri_nodes = [n for n in nodes if n['id'] in (n0, n1, n2)]
+            centroid_r = sum(n['centroid'][0] for n in tri_nodes) / max(len(tri_nodes), 1)
+            centroid_c = sum(n['centroid'][1] for n in tri_nodes) / max(len(tri_nodes), 1)
+
+            # Create relay node: mod=0.5 (half-between), phase=centroid
+            relay_node = {
+                'id': next_node_id,
+                'color': -2,  # Special marker for relay interneuron
+                'centroid': (centroid_r, centroid_c),
+                'area': 0.5,  # mod = 0.5 (interneuron weight)
+                'bbox': (
+                    min(n['bbox'][0] for n in tri_nodes),
+                    min(n['bbox'][1] for n in tri_nodes),
+                    max(n['bbox'][2] for n in tri_nodes),
+                    max(n['bbox'][3] for n in tri_nodes),
+                ),
+                'signature': (-2, 1, 1, 0.5),  # Relay signature
+                'domain_label': 'MANIFEST',  # Interneurons are manifest-level witnesses
+            }
+            relay_nodes.append(relay_node)
+
+            # Create abstract_witness edges connecting relay to each member
+            for member_id in (n0, n1, n2):
+                relay_edge = {
+                    'id': next_edge_id,
+                    'nodes': (next_node_id, member_id),
+                    'relation_type': 'abstract_witness',
+                    'domain_label': 'MANIFEST',
+                }
+                relay_edges.append(relay_edge)
+                next_edge_id += 1
+
+            next_node_id += 1
+
+        # Inject relay nodes and edges into the hypergraph
+        eml_hg['nodes'] = nodes + relay_nodes
+        eml_hg['hyperedges'] = edges + relay_edges
+        self._eml_interneurons = relay_nodes
+        self._eml_interneuron_injected = True
+
+        return eml_hg
+
+    # ── Motif IC Estimation (v3.16.0) ─────────────────────────────────────
+
+    def _estimate_ic_with_motifs(self, eml_hg: Dict) -> float:
+        """Estimate IC with motif cycle counting bonus (v3.16.0 inline).
+
+        Counts 2-cycles and 3-cycles in the EML hypergraph to augment
+        IC estimation. Motif bonus based on Weizmann counting approach:
+            motif_bonus = 0.2 × n_2cycles + 0.3 × n_3cycles
+
+        Args:
+            eml_hg: EML hypergraph dict.
+
+        Returns:
+            Motif IC bonus (float, >= 0).
+        """
+        if not eml_hg or not eml_hg.get('nodes') or not eml_hg.get('hyperedges'):
+            return 0.0
+
+        nodes = eml_hg['nodes']
+        edges = eml_hg['hyperedges']
+
+        # Build adjacency map
+        adjacency: Dict[int, Set[int]] = {}
+        for node in nodes:
+            adjacency[node['id']] = set()
+
+        for edge in edges:
+            n1, n2 = edge['nodes']
+            adjacency.setdefault(n1, set()).add(n2)
+            adjacency.setdefault(n2, set()).add(n1)
+
+        # Count 2-cycles (mutual edges: A→B and B→A)
+        n_2cycles = 0
+        for nid, neighbors in adjacency.items():
+            for neighbor in neighbors:
+                if nid in adjacency.get(neighbor, set()):
+                    n_2cycles += 1
+        # Each 2-cycle is counted twice (A→B and B→A), so divide by 2
+        n_2cycles = n_2cycles // 2
+
+        # Count 3-cycles (triangles)
+        n_3cycles = 0
+        seen_triangles: Set[Tuple[int, int, int]] = set()
+        for nid, neighbors in adjacency.items():
+            for n1 in neighbors:
+                for n2 in neighbors:
+                    if n1 < n2 and n2 in adjacency.get(n1, set()):
+                        tri = tuple(sorted([nid, n1, n2]))
+                        if tri not in seen_triangles:
+                            seen_triangles.add(tri)
+                            n_3cycles += 1
+
+        self._motif_2cycles = n_2cycles
+        self._motif_3cycles = n_3cycles
+        motif_bonus = 0.2 * n_2cycles + 0.3 * n_3cycles
+        self._motif_ic_bonus = motif_bonus
+
+        return motif_bonus
+
     # ── DFS Backtrack Planner (v3.12.0) ──────────────────────────────────
 
     def _dfs_backtrack_search(
@@ -2132,8 +2648,9 @@ class MyAgent(Agent):
         Multi-phase strategy:
           Phase 0: ASD Anomaly Detection ("Attention Before Loss")
           Phase 0.5: 3-Life Strategy routing (Life2/Life3)
-          Phase 0.6: EML Hypergraph Perception + Zero-score game routing (v3.14.0)
+          Phase 0.6: EML Hypergraph Perception + Zero-score game routing (v3.14.0) + Interneuron Injection + Motif IC (v3.16.0)
           Phase 0.7: Liu Mechanism S_rel Priority Search (v3.14.0 upgrade)
+          Phase 2.6: Neural-Inspired κ-PS (v3.16.0 NEW)
           Phase 1: Pattern repeat / Delta-based click targeting
           Phase 2: Stalling recovery
           Phase 3: Probe directions
@@ -2180,6 +2697,15 @@ class MyAgent(Agent):
             self._eml_hg = self._extract_eml_hypergraph_inline(grid)
             self._eml_extracted = True
             if self._eml_hg:
+                # ── v3.16.0: EML Interneuron Injection ──
+                # Inject relay nodes (abstract witness) for triangle structures
+                if not self._eml_interneuron_injected:
+                    self._eml_hg = self._inject_eml_interneurons(self._eml_hg)
+
+                # ── v3.16.0: Motif IC Estimation ──
+                # Count 2-cycle/3-cycle motifs for IC bonus
+                self._estimate_ic_with_motifs(self._eml_hg)
+
                 self._eml_nodes_manifest = [
                     n for n in self._eml_hg['nodes'] if n['domain_label'] == 'MANIFEST'
                 ]
