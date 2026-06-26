@@ -1,4 +1,4 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.10.0.
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.11.0.
 
 Strategy:
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
@@ -176,7 +176,7 @@ ACTION_NAME_TO_ID: Dict[str, int] = {
 
 
 class MyAgent(Agent):
-    """TOMAS ARC-AGI-3 Solver v3.10.0 — Replay Oracle + Φ_phys + GibbsEnsemble + IDO + QuantumContextual + CHL + UniverseZKP.
+    """TOMAS ARC-AGI-3 Solver v3.11.0 — Replay Oracle + Φ_phys + GibbsEnsemble + IDO + QuantumContextual + CHL + UniverseZKP + OctonionEntropyRenorm.
 
     Strategy priority:
       1. ARC3 Replay Oracle (precomputed human-optimal sequences)
@@ -278,7 +278,7 @@ class MyAgent(Agent):
 
     @property
     def name(self) -> str:
-        return f"tomas.v3.10.0.{self.MAX_ACTIONS}"
+        return f"tomas.v3.11.0.{self.MAX_ACTIONS}"
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         """Stop when all levels completed or action budget exhausted."""

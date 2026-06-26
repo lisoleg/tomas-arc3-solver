@@ -86,6 +86,14 @@ from .tomas_learner import (
     CHLIsomorphism,
     compute_effective_search_depth,
     UniverseZKP,
+    # v3.11.0 — 八元数熵重整化 + IDO-Agent (7 new concepts)
+    Octonion,
+    KappaAlgorithmOperator,
+    LogRenormalizationMachine,
+    IDONPEPReduction,
+    IDOVonNeumannEntropy,
+    MaximumEntropyReduction,
+    IDOAgent,
 )
 
 # ── MetaSnapNet可选集成 ──
@@ -187,6 +195,14 @@ __all__ = [
     "CHLIsomorphism",
     "compute_effective_search_depth",
     "UniverseZKP",
+    # v3.11.0 — 八元数熵重整化 + IDO-Agent (7 new concepts)
+    "Octonion",
+    "KappaAlgorithmOperator",
+    "LogRenormalizationMachine",
+    "IDONPEPReduction",
+    "IDOVonNeumannEntropy",
+    "MaximumEntropyReduction",
+    "IDOAgent",
     # MetaSnapNet κ-Snap Beam Scoring (SPP集成)
     "TopoFeatureExtractor",
     "ProgramNodeFeatureExtractor",

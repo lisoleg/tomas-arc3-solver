@@ -1,8 +1,8 @@
 {
-  "_schema_version": "3.10.0",
-  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (\u6cdb\u51fd\u5b8f\u7edf\u4e00\u573a\u8bba + \u535a\u5f08\u5373\u964d\u7ef4 + GibbsEnsemble + IDO + QuantumContextual + CHL + UniverseZKP)",
+  "_schema_version": "3.11.0",
+  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (\u6cdb\u51fd\u5b8f\u7edf\u4e00\u573a\u8bba + \u535a\u5f08\u5373\u964d\u7ef4 + GibbsEnsemble + IDO + QuantumContextual + CHL + UniverseZKP + \u516b\u5143\u6570\u71b4\u91cd\u6574\u5316)",
   "_tomas_framework": {
-    "version": "3.10.0-dev",
+    "version": "3.11.0-dev",
     "core_modules": [
       "kappa_snap_searcher",
       "nar_conv",
@@ -23,7 +23,14 @@
       "ido_framework",
       "quantum_contextual_evaluator",
       "chl_isomorphism",
-      "universe_zkp"
+      "universe_zkp",
+      "octonion",
+      "kappa_algorithm_operator",
+      "log_renormalization_machine",
+      "ido_np_ep_reduction",
+      "ido_von_neumann_entropy",
+      "maximum_entropy_reduction",
+      "ido_agent"
     ],
     "asym_index_enabled": true,
     "narla_integration": true,
@@ -46,9 +53,16 @@
     "quantum_contextual_evaluator": true,
     "chl_isomorphism": true,
     "interactive_dimension_reduction": true,
-    "universe_zkp": true
+    "universe_zkp": true,
+    "octonion_embedding": true,
+    "kappa_algorithm_operator": true,
+    "log_renormalization": true,
+    "ido_np_ep_reduction": true,
+    "ido_von_neumann_entropy": true,
+    "maximum_entropy_reduction": true,
+    "ido_agent": true
   },
-  "_note": "v3.10.0 - GibbsEnsemble (\u5409\u5e03\u65af\u7cfb\u7efc) + IDOFramework (Information-Description-Observer) + QuantumContextualEvaluator (Kochen-Specker\u4e92\u6587\u6027) + CHLIsomorphism (Curry-Howard-Lambek) + Interactive Dimension Reduction (\u4ea4\u4e92\u5f0f\u964d\u7ef4\u5b9a\u7406) + UniverseZKP (\u81ea\u6307\u4ea4\u4e92\u5f0f\u8bc1\u660e\u7cfb\u7edf)",
+  "_note": "v3.11.0 - Octonion (\u516b\u5143\u6570\u4ee3\u6570Cayley-Dickson) + KappaAlgorithmOperator (\u03ba\u7b97\u5b50/\u4e0d\u53ef\u8ba1\u7b97\u5ea7\u5e2d) + LogRenormalizationMachine (\u5bf9\u6570\u91cd\u6574\u5316\u673a\u5668NP\u2192P) + IDONPEPReduction (\u5b9a\u74063.1) + IDOVonNeumannEntropy (\u516b\u5143\u6570\u5bc6\u5ea6\u7a77\u71b3\u5b50\u71b3) + MaximumEntropyReduction (MER\u52a8\u4f5c\u9009\u62e9) + IDOAgent (\u5b8c\u6557IDO-Agent\u67b6\u6784)",
   "abstractions": [
     {
       "name": "macro_push_sprite_to_target",
@@ -3663,6 +3677,149 @@
       ],
       "gaussex_precond": "gaussex_available AND nar_conv_available",
       "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_octonion_perceive_embed",
+      "dsl_sequence": [
+        {
+          "action": "PERCEIVE_GRID"
+        },
+        {
+          "action": "OCTONION_EMBED"
+        },
+        {
+          "action": "COMPUTE_KAPPA"
+        }
+      ],
+      "applicable_topo": [
+        "octonion_uv_embedding",
+        "ido_dual_field"
+      ],
+      "gaussex_precond": "grid_available AND octonion_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_kappa_algorithm_classify",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_KAPPA"
+        },
+        {
+          "action": "CLASSIFY_COMPLEXITY"
+        },
+        {
+          "action": "SELECT_PIPELINE_PHASE"
+        }
+      ],
+      "applicable_topo": [
+        "kappa_operator",
+        "uncomputable_seating"
+      ],
+      "gaussex_precond": "kappa_operator_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_log_renormalization_uv_ir",
+      "dsl_sequence": [
+        {
+          "action": "COMPACTIFICATION"
+        },
+        {
+          "action": "COMPUTE_RENORMALIZED_ENTROPY"
+        },
+        {
+          "action": "VERIFY_NP_TO_P_REDUCTION"
+        }
+      ],
+      "applicable_topo": [
+        "renormalization_group_flow",
+        "uv_ir_duality"
+      ],
+      "gaussex_precond": "kappa_available AND log_renormalization_available",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_ido_np_ep_reduction",
+      "dsl_sequence": [
+        {
+          "action": "FIND_GENERATOR_G"
+        },
+        {
+          "action": "VERIFY_REDUCTION"
+        },
+        {
+          "action": "COMPUTE_REDUCED_COST"
+        }
+      ],
+      "applicable_topo": [
+        "octonion_automorphism",
+        "np_to_p_reduction"
+      ],
+      "gaussex_precond": "octonion_available AND demos_available",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_ido_von_neumann_entropy",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_RHO_KAPPA"
+        },
+        {
+          "action": "COMPUTE_ENTROPY"
+        },
+        {
+          "action": "ENTROPY_GRADIENT"
+        }
+      ],
+      "applicable_topo": [
+        "octonion_density_matrix",
+        "ido_entropy_operator"
+      ],
+      "gaussex_precond": "octonion_grid_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_mer_action_selection",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_DELTA_S"
+        },
+        {
+          "action": "SELECT_MER_ACTION"
+        },
+        {
+          "action": "MER_RANKING"
+        }
+      ],
+      "applicable_topo": [
+        "maximum_entropy_reduction",
+        "mer_principle"
+      ],
+      "gaussex_precond": "entropy_calc_available AND action_space_available",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_ido_agent_solve",
+      "dsl_sequence": [
+        {
+          "action": "PERCEIVE"
+        },
+        {
+          "action": "INDUCE_RULE"
+        },
+        {
+          "action": "SOLVE_P_TIME"
+        },
+        {
+          "action": "MER_FALLBACK"
+        }
+      ],
+      "applicable_topo": [
+        "ido_agent",
+        "octonion_inference"
+      ],
+      "gaussex_precond": "octonion_available AND demos_available AND entropy_calc_available",
+      "complexity_class": "P"
     }
   ]
 }
