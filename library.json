@@ -1,21 +1,43 @@
 {
-  "_schema_version": "3.3.0",
-  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (泛函宏统一场论)",
+  "_schema_version": "3.9.0",
+  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (泛函宏统一场论 + 流贯归约 + Sleep-Step Algorithm 1 + Abductive Lift + MoonshineProver)",
   "_tomas_framework": {
-    "version": "3.3.0-dev",
+    "version": "3.9.0-dev",
     "core_modules": [
       "kappa_snap_searcher",
       "nar_conv",
       "tomas_learner",
       "library_manager",
       "gaussex_verifier",
-      "fast_path_dispatcher"
+      "fast_path_dispatcher",
+      "online_psi_audit",
+      "physical_nar_conv",
+      "physical_gauss_ex_guard",
+      "psi_cut_controller",
+      "physical_compactification_reduction",
+      "persistent_kv_cache",
+      "interactive_zkp_loop",
+      "thinker_performer_pipeline",
+      "moonshine_prover"
     ],
     "asym_index_enabled": true,
     "narla_integration": true,
-    "fast_path_enabled": true
+    "fast_path_enabled": true,
+    "asd_enabled": true,
+    "three_life_strategy": true,
+    "physical_compactification": true,
+    "sleep_step_trigger": true,
+    "sleep_step_algorithm_1": true,
+    "abductive_lift": true,
+    "beam_width": 16,
+    "thinker_performer_pipeline": true,
+    "interactive_zkp_loop": true,
+    "kv_cache_persistent_state": true,
+    "clean_latent_writeback": true,
+    "topology_invariant_guided_ranking": true,
+    "moonshine_prover": true
   },
-  "_note": "Macros are validated by ψ-Audit before activation. TOMAS fingerprints enable cross-game pattern matching. v3.3.0 adds applicable_topo + gaussex_precond for Fast-Path dispatch.",
+  "_note": "v3.9.0 - Sleep-Step Algorithm 1 (SUCCESS LOG → Functional Macro) + κ-Snap反向 (Abductive Lift from solved games) + Ω_topo Breakthrough Trigger + NP_C_likely Boundary (requires_new_primitives) + MoonshineProver (Numerical Oracle Game)",
   "abstractions": [
     {
       "name": "macro_push_sprite_to_target",
@@ -3228,6 +3250,260 @@
       "mdl_score": 0.5,
       "min_demo_to_activate": 1,
       "created_at": 1782463243.5549953,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 1
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "func_macro_490750de_2x",
+      "dsl_sequence": [
+        {
+          "repeat": "CLICK",
+          "params": {
+            "target": "diamond"
+          },
+          "count": 2
+        }
+      ],
+      "tomas_fingerprint": "490750de7b1c12bb",
+      "source_tasks": [
+        "test",
+        "test"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.825,
+      "generalization_tags": [
+        "",
+        "functional_macro",
+        "success_pattern"
+      ],
+      "mdl_score": 0.5,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463362.9190745,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "n_components": 1,
+        "n_holes": 0,
+        "n_pixels": 4,
+        "density": 0.04
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "func_macro_045b2f1d_2x",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "params": {
+            "target": "diamond"
+          }
+        },
+        {
+          "action": "MOVE",
+          "params": {
+            "dx": 1,
+            "dy": 0
+          }
+        }
+      ],
+      "tomas_fingerprint": "045b2f1d85bf6b00",
+      "source_tasks": [
+        "test",
+        "test"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.825,
+      "generalization_tags": [
+        "CLICK",
+        "MOVE",
+        "functional_macro",
+        "success_pattern"
+      ],
+      "mdl_score": 1.0,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463362.9224803,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "n_components": 1,
+        "n_holes": 0,
+        "n_pixels": 4,
+        "density": 0.04
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "func_macro_321706fc_2x",
+      "dsl_sequence": [
+        {
+          "repeat": "CLICK",
+          "params": {
+            "target": "diamond"
+          },
+          "count": 2
+        },
+        {
+          "action": "MOVE",
+          "params": {
+            "dx": 1,
+            "dy": 0
+          }
+        }
+      ],
+      "tomas_fingerprint": "321706fcc2b17be5",
+      "source_tasks": [
+        "test",
+        "test"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 0.825,
+      "generalization_tags": [
+        "",
+        "MOVE",
+        "functional_macro",
+        "success_pattern"
+      ],
+      "mdl_score": 0.6666666666666666,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463362.9255412,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "n_components": 1,
+        "n_holes": 0,
+        "n_pixels": 4,
+        "density": 0.04
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "lift_test2_L0_18e69afe",
+      "dsl_sequence": [
+        {
+          "action": "KEYBOARD",
+          "category": "navigate_direction"
+        },
+        {
+          "action": "CLICK",
+          "category": "click_switcher"
+        }
+      ],
+      "tomas_fingerprint": "18e69afeaa86a79b",
+      "source_tasks": [
+        "test2_L0"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.9,
+      "generalization_tags": [
+        "navigate_direction",
+        "click_switcher",
+        "kappa_snap_reverse",
+        "abductive_lift",
+        "causal_invariant_2",
+        "navigation",
+        "bfs"
+      ],
+      "mdl_score": 0.6666666666666666,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463362.9442225,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 2,
+        "symmetry": [
+          "horizontal",
+          "vertical",
+          "rotational_180"
+        ],
+        "component_count": 1,
+        "hole_count": 0,
+        "density": 1.0
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "test_conj",
+      "dsl_sequence": [
+        {
+          "action": "CLICK"
+        },
+        {
+          "action": "MOVE"
+        }
+      ],
+      "tomas_fingerprint": "abc123",
+      "source_tasks": [],
+      "avg_steps": 0.0,
+      "success_rate": 0.8,
+      "generalization_tags": [
+        "click",
+        "navigation"
+      ],
+      "mdl_score": 0.5,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463362.9692347,
+      "validated": false,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 1
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "test_conj_r1",
+      "dsl_sequence": [
+        {
+          "action": "CLICK"
+        },
+        {
+          "action": "MOVE"
+        }
+      ],
+      "tomas_fingerprint": "abc123",
+      "source_tasks": [],
+      "avg_steps": 0.0,
+      "success_rate": 0.9,
+      "generalization_tags": [
+        "click",
+        "navigation",
+        "refined_round_1"
+      ],
+      "mdl_score": 0.5,
+      "min_demo_to_activate": 2,
+      "created_at": 1782463362.9794161,
+      "validated": false,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 1,
+        "euler_char_tolerance": 1
+      },
+      "gaussex_precond": "True AND density < 0.90 AND euler_char != 5"
+    },
+    {
+      "name": "test_conj",
+      "dsl_sequence": [
+        {
+          "action": "CLICK"
+        },
+        {
+          "action": "MOVE"
+        }
+      ],
+      "tomas_fingerprint": "abc123",
+      "source_tasks": [],
+      "avg_steps": 0.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "click",
+        "navigation"
+      ],
+      "mdl_score": 0.5,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463362.9692347,
       "validated": true,
       "applicable_topo": {
         "euler_char": 2,
