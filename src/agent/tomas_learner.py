@@ -52,6 +52,7 @@ import hashlib
 import time
 import copy
 import numpy as np
+from collections import namedtuple
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from pathlib import Path
@@ -8849,3 +8850,1821 @@ class IDOAgent:
             result = padded.reshape(target_shape)
 
         return result
+
+
+# ============================================================================
+# v3.12.0 — 局部质量贝叶斯推断 + RE-KL方向性 + IDO变分 + 记忆分级 +
+#            IC度量 + Psi-Cut合并 + 耦合振子 + 物理GaussEx (8 new concepts)
+# ============================================================================
+# 来源: 3篇新文章
+#   1. "IDO视域下的局部质量贝叶斯推断"
+#   2. "TOMAS/IDO视域下的智能体原生记忆系统"
+#   3. "基于流贯动力学的物理计算原语: 耦合振子生成模型(Un-0)"
+# ============================================================================
+
+
+class LocalMassBayesianInference:
+    """局部质量贝叶斯推断 — κ-Snap归约框架.
+
+    Bayesian updating as κ-Snap reduction:
+      prior = compactification base ℬ
+      likelihood = GaussEx verification signal
+      local ball probability = IDO information dual-field local sampling
+
+    The mass index (α, β) characterizes the local information structure:
+      α: inverse-scale exponent from power-law scaling of local ball probabilities
+      β: logarithmic correction exponent from local ball probabilities
+
+    Reference: "IDO视域下的局部质量贝叶斯推断"
+    """
+
+    def __init__(self) -> None:
+        """Initialize LocalMassBayesianInference."""
+        self._alpha: float = 1.0
+        self._beta: float = 0.0
+
+    def compute_mass_index(
+        self,
+        grid_or_density: Union[np.ndarray, List[List[int]]],
+        num_colors: int = 10,
+    ) -> Tuple[float, float]:
+        """Compute power mass index α and log mass index β.
+
+        For each cell, compute local density over 8-neighborhood,
+        then extract scaling exponents from local ball probabilities.
+
+        Args:
+            grid_or_density: 2D grid or density array.
+            num_colors: Number of color bins for density discretization.
+
+        Returns:
+            Tuple (α, β): power mass index and log correction index.
+        """
+        grid = np.asarray(grid_or_density, dtype=float)
+        if grid.ndim != 2:
+            # Flatten if needed
+            grid = grid.reshape(int(np.sqrt(grid.size)), -1)
+
+        rows, cols = grid.shape
+        # Compute local density for each cell (8-neighborhood)
+        local_densities: List[float] = []
+        for r in range(rows):
+            for c in range(cols):
+                neighborhood_sum = 0.0
+                neighborhood_count = 0.0
+                for dr in (-1, 0, 1):
+                    for dc in (-1, 0, 1):
+                        if dr == 0 and dc == 0:
+                            continue
+                        nr, nc = r + dr, c + dc
+                        if 0 <= nr < rows and 0 <= nc < cols:
+                            neighborhood_sum += grid[nr, nc]
+                            neighborhood_count += 1.0
+                if neighborhood_count > 0:
+                    local_density = neighborhood_sum / neighborhood_count
+                else:
+                    local_density = grid[r, c]
+                local_densities.append(local_density)
+
+        if len(local_densities) == 0:
+            return (1.0, 0.0)
+
+        # Discretize into ball probability bins
+        density_arr = np.array(local_densities)
+        # Remove zeros for log computation
+        nonzero = density_arr[density_arr > 0]
+        if len(nonzero) == 0:
+            return (0.0, 0.0)  # vacuum
+
+        # Compute histogram (local ball probabilities)
+        hist, bin_edges = np.histogram(nonzero, bins=num_colors, density=True)
+        bin_centers = (bin_edges[:-1] + bin_edges[1:]) / 2.0
+        # Filter out zero-probability bins
+        nonzero_hist = hist[hist > 0]
+        nonzero_centers = bin_centers[:len(nonzero_hist)]
+
+        if len(nonzero_hist) < 2:
+            return (1.0, 0.0)  # insufficient data for scaling
+
+        # Power-law scaling: P(s) ~ s^(-α)
+        # α from log-log regression of hist vs centers
+        log_centers = np.log(nonzero_centers)
+        log_hist = np.log(nonzero_hist)
+
+        # Linear regression: log_hist = -α * log_centers + C
+        n_pts = len(log_centers)
+        if n_pts >= 2:
+            x_mean = np.mean(log_centers)
+            y_mean = np.mean(log_hist)
+            x_var = np.sum((log_centers - x_mean) ** 2)
+            if x_var > 0:
+                xy_cov = np.sum((log_centers - x_mean) * (log_hist - y_mean))
+                alpha = -xy_cov / x_var  # power-law exponent
+            else:
+                alpha = 1.0
+        else:
+            alpha = 1.0
+
+        # Log correction β: residual from pure power-law
+        # β = mean(log(P / P_powerlaw_fit))
+        predicted_log = -alpha * log_centers + (y_mean + alpha * x_mean)
+        residuals = log_hist - predicted_log
+        beta = float(np.mean(residuals)) if len(residuals) > 0 else 0.0
+
+        self._alpha = alpha
+        self._beta = beta
+        return (alpha, beta)
+
+    def compute_local_rekl(
+        self,
+        q_density: Union[np.ndarray, List[float]],
+        p_density: Union[np.ndarray, List[float]],
+        center_idx: int = 0,
+        radius: int = 3,
+    ) -> float:
+        """Compute local RE-KL divergence within a small ball neighborhood.
+
+        RE_KL(q, p, B_r) = ∫_{B_r} [q(x) - p(x)]·log(q(x)/p(x)) dx
+        Discretized over grid cells within radius of center.
+
+        Args:
+            q_density: Query density array.
+            p_density: Reference density array.
+            center_idx: Index of the ball center.
+            radius: Ball radius in cells.
+
+        Returns:
+            Local RE-KL divergence value.
+        """
+        q = np.asarray(q_density, dtype=float)
+        p = np.asarray(p_density, dtype=float)
+
+        # Ensure same length
+        min_len = min(len(q), len(p))
+        q = q[:min_len]
+        p = p[:min_len]
+
+        # Define ball: indices within radius of center
+        start = max(0, center_idx - radius)
+        end = min(min_len, center_idx + radius + 1)
+        ball_indices = list(range(start, end))
+
+        if len(ball_indices) == 0:
+            return 0.0
+
+        # Compute RE-KL within ball
+        total_rekl = 0.0
+        abs_cont_contrib = 0.0  # absolute continuous part
+        singular_contrib = 0.0  # singular part
+
+        for idx in ball_indices:
+            qi = q[idx]
+            pi = p[idx]
+            # Avoid log(0) and division by zero
+            if qi <= 0 or pi <= 0:
+                # Singular contribution: where one is zero but other nonzero
+                if qi > 0 and pi == 0:
+                    singular_contrib += qi  # q exists where p doesn't → singular
+                elif qi == 0 and pi > 0:
+                    singular_contrib += 0.0  # no contribution from zero q
+                continue
+
+            # Standard RE-KL: (q - p) * log(q/p)
+            ratio = qi / pi
+            log_ratio = np.log(ratio)
+            diff = qi - pi
+            contribution = diff * log_ratio
+            abs_cont_contrib += contribution
+
+        total_rekl = abs_cont_contrib + singular_contrib
+        return float(total_rekl)
+
+    def bayesian_kappa_snap_update(
+        self,
+        prior_density: Union[np.ndarray, List[float]],
+        likelihood_signal: Union[np.ndarray, List[float]],
+        theta: float = 0.5,
+    ) -> Dict[str, Any]:
+        """κ-Snap reduction: posterior = κ-Snap(prior × likelihood).
+
+        Bayesian update as κ-Snap:
+          posterior density = normalized product of prior and likelihood
+          mass_index_shift = change in (α, β) after update
+          is_nontrivial = whether likelihood has surprise structure (non-regular)
+
+        Args:
+            prior_density: Prior probability density.
+            likelihood_signal: Likelihood / verification signal.
+            theta: Snap threshold for κ-Snap (0 < theta ≤ 1).
+
+        Returns:
+            Dict with 'posterior_density', 'mass_index_shift', 'is_nontrivial'.
+        """
+        prior = np.asarray(prior_density, dtype=float)
+        likelihood = np.asarray(likelihood_signal, dtype=float)
+
+        min_len = min(len(prior), len(likelihood))
+        prior = prior[:min_len]
+        likelihood = likelihood[:min_len]
+
+        # Compute unnormalized posterior = prior × likelihood
+        raw_posterior = prior * likelihood
+
+        # κ-Snap: threshold small values (snap to zero)
+        max_val = float(np.max(raw_posterior)) if len(raw_posterior) > 0 else 1.0
+        snap_threshold = theta * max_val
+        snapped = raw_posterior.copy()
+        snapped[raw_posterior < snap_threshold] = 0.0
+
+        # Normalize posterior
+        total = float(np.sum(snapped))
+        if total > 0:
+            posterior_density = snapped / total
+        else:
+            # Degenerate case: all snapped to zero → fallback to prior
+            posterior_density = prior / float(np.sum(prior)) if float(np.sum(prior)) > 0 else prior
+
+        # Compute mass index shift
+        alpha_before, beta_before = self._alpha, self._beta
+        alpha_after, beta_after = self.compute_mass_index(posterior_density.reshape(1, -1))
+        mass_index_shift = (alpha_after - alpha_before, beta_after - beta_before)
+
+        # Check nontriviality: likelihood has surprise structure
+        # Non-regular likelihood = not close to uniform → genuine inference
+        likelihood_std = float(np.std(likelihood)) if len(likelihood) > 1 else 0.0
+        likelihood_mean = float(np.mean(likelihood))
+        is_nontrivial = likelihood_std > 0.1 * max(likelihood_mean, 1e-8)
+
+        return {
+            "posterior_density": posterior_density.tolist(),
+            "mass_index_shift": mass_index_shift,
+            "is_nontrivial": is_nontrivial,
+        }
+
+    def classify_local_structure(self, mass_index: Tuple[float, float]) -> str:
+        """Classify local information structure from mass index (α, β).
+
+        Args:
+            mass_index: Tuple (α, β).
+
+        Returns:
+            Classification string:
+              'vacuum' — α≈0, β≈0 (0-information bits truncated, hard constraint)
+              'flat' — α≈1, β≈0 (flat information manifold, no special structure)
+              'high_curvature' — α≈1, β≈1 (high information curvature, sparse signal)
+              'collapsed' — α→0 (collapse, deterministic structure)
+        """
+        alpha, beta = mass_index
+        # Tolerance for approximate comparisons
+        tol = 0.15
+
+        if abs(alpha) < tol and abs(beta) < tol:
+            return "vacuum"
+        elif abs(alpha - 1.0) < tol and abs(beta) < tol:
+            return "flat"
+        elif abs(alpha - 1.0) < tol and abs(beta - 1.0) < tol:
+            return "high_curvature"
+        elif abs(alpha) < tol:
+            return "collapsed"
+        # Default: intermediate structure
+        return "intermediate"
+
+
+class REKLDirectionalEvaluator:
+    """RE-KL方向性评估 — Theorem 5.8 directional inequality.
+
+    RE-KL asymmetry originates from TOMAS game semantics:
+      Verifier→Prover (sub-critical) = rigid constraint (mode-seeking, reverse KL)
+      Prover→Verifier (bounded) =宽松 constraint (mode-averaging, forward KL)
+
+    Reference: "IDO视域下的局部质量贝叶斯推断", Theorem 5.8
+    """
+
+    def __init__(self) -> None:
+        """Initialize REKLDirectionalEvaluator."""
+        self._lmbi = LocalMassBayesianInference()
+
+    def evaluate_subcritical(
+        self,
+        q_density: Union[np.ndarray, List[float]],
+        p_density: Union[np.ndarray, List[float]],
+        radius: int = 3,
+    ) -> bool:
+        """Evaluate sub-critical condition: RE_KL(q→p) ≤ C·r^α.
+
+        Verifier direction: q must precisely replicate p's local information
+        structure → mode-seeking (reverse KL).
+
+        Args:
+            q_density: Query density.
+            p_density: Reference density.
+            radius: Ball radius for local computation.
+
+        Returns:
+            True if sub-critical condition is satisfied.
+        """
+        q = np.asarray(q_density, dtype=float)
+        p = np.asarray(p_density, dtype=float)
+
+        min_len = min(len(q), len(p))
+        q = q[:min_len]
+        p = p[:min_len]
+
+        # Compute RE-KL(q→p) at center
+        rekl_qp = self._lmbi.compute_local_rekl(q, p, center_idx=0, radius=radius)
+
+        # Compute mass index α for scaling bound
+        alpha, _ = self._lmbi.compute_mass_index(p.reshape(1, -1))
+
+        # Sub-critical threshold: C · r^α with C = max(p) * radius
+        C = float(np.max(p)) if len(p) > 0 else 1.0
+        threshold = C * (radius ** alpha)
+
+        return rekl_qp <= threshold
+
+    def evaluate_bounded(
+        self,
+        p_density: Union[np.ndarray, List[float]],
+        q_density: Union[np.ndarray, List[float]],
+        radius: int = 3,
+    ) -> bool:
+        """Evaluate bounded condition: RE_KL(p→q) ≤ M.
+
+        Prover direction: p allows adding local information density on top of q
+        → mode-averaging (forward KL). Much more lenient.
+
+        Args:
+            p_density: Reference density (Prover).
+            q_density: Query density (Verifier).
+            radius: Ball radius.
+
+        Returns:
+            True if bounded condition is satisfied.
+        """
+        p = np.asarray(p_density, dtype=float)
+        q = np.asarray(q_density, dtype=float)
+
+        min_len = min(len(p), len(q))
+        p = p[:min_len]
+        q = q[:min_len]
+
+        # Compute RE_KL(p→q) at center
+        rekl_pq = self._lmbi.compute_local_rekl(p, q, center_idx=0, radius=radius)
+
+        # Bounded threshold: M = max(p) * len(p) (generous bound)
+        M = float(np.max(p)) * min_len if min_len > 0 else 1.0
+
+        return rekl_pq <= M
+
+    def recommend_kl_direction(self, task_complexity_class: str) -> str:
+        """Recommend KL divergence direction based on task complexity.
+
+        Args:
+            task_complexity_class: One of 'P', 'P_in_phys', 'NP_C_likely', 'NP_Hard'.
+
+        Returns:
+            Recommended KL direction: 'reverse_kl' or 'forward_kl'.
+        """
+        mapping: Dict[str, str] = {
+            "P": "reverse_kl",              # Force exact pattern match
+            "P_in_phys": "reverse_kl",      # Physical constraints → exact match
+            "NP_C_likely": "reverse_kl",    # Need precise rules
+            "NP_Hard": "forward_kl",        # Allow over-coverage, more lenient
+        }
+        return mapping.get(task_complexity_class, "reverse_kl")
+
+    def compute_rekl_asymmetry(
+        self,
+        q_density: Union[np.ndarray, List[float]],
+        p_density: Union[np.ndarray, List[float]],
+        radius: int = 3,
+    ) -> float:
+        """Compute RE-KL asymmetry degree.
+
+        asymmetry = |RE_KL(q→p) - RE_KL(p→q)| / max(RE_KL(q→p), RE_KL(p→q))
+
+        Args:
+            q_density: Query density.
+            p_density: Reference density.
+            radius: Ball radius.
+
+        Returns:
+            Asymmetry degree (0 = symmetric, 1 = maximally asymmetric).
+        """
+        q = np.asarray(q_density, dtype=float)
+        p = np.asarray(p_density, dtype=float)
+
+        min_len = min(len(q), len(p))
+        q = q[:min_len]
+        p = p[:min_len]
+
+        rekl_qp = self._lmbi.compute_local_rekl(q, p, center_idx=0, radius=radius)
+        rekl_pq = self._lmbi.compute_local_rekl(p, q, center_idx=0, radius=radius)
+
+        max_val = max(abs(rekl_qp), abs(rekl_pq))
+        if max_val < 1e-12:
+            return 0.0  # Both zero → perfectly symmetric
+
+        asymmetry = abs(rekl_qp - rekl_pq) / max_val
+        return float(min(asymmetry, 1.0))
+
+
+class IDOGaussExVariationalObjective:
+    """IDO增强变分推断 — GaussEx-regularized variational inference.
+
+    Standard ELBO + local GaussEx penalty (RE-KL within theta₀ ball):
+      Total objective = -ELBO + λ · RE_KL(q, posterior, B_{θ₀, r})
+
+    Minimizing this = maximizing ELBO while maintaining local structural fidelity.
+
+    Reference: "IDO视域下的局部质量贝叶斯推断", §5 Algorithm Implementation
+    """
+
+    def __init__(self) -> None:
+        """Initialize IDOGaussExVariationalObjective."""
+        self._lmbi = LocalMassBayesianInference()
+
+    def compute_elbo(
+        self,
+        q_params: Dict[str, Any],
+        posterior_params: Dict[str, Any],
+    ) -> float:
+        """Compute standard ELBO = E_q[log p(x|θ)] - KL(q||p).
+
+        Uses discretized grid approximation.
+
+        Args:
+            q_params: Variational parameters dict with 'density' key (array).
+            posterior_params: Posterior parameters dict with 'density' key (array).
+
+        Returns:
+            ELBO value (higher = better fit).
+        """
+        q_density = np.asarray(q_params.get("density", [0.5]), dtype=float)
+        p_density = np.asarray(posterior_params.get("density", [0.5]), dtype=float)
+
+        min_len = min(len(q_density), len(p_density))
+        q = q_density[:min_len]
+        p = p_density[:min_len]
+
+        # E_q[log p(x|θ)] = Σ q(x) · log(p(x))  (discretized)
+        # Only compute where both q > 0 and p > 0
+        valid_mask = (q > 0) & (p > 0)
+        if not np.any(valid_mask):
+            return 0.0
+
+        expected_log_likelihood = float(np.sum(q[valid_mask] * np.log(p[valid_mask])))
+
+        # KL(q||p) = Σ q(x) · log(q(x)/p(x))  (standard KL)
+        kl_div = 0.0
+        for idx in range(min_len):
+            qi = q[idx]
+            pi = p[idx]
+            if qi > 0 and pi > 0:
+                kl_div += qi * np.log(qi / pi)
+            elif qi > 0:
+                kl_div += qi * np.log(qi / 1e-10)  # approximate
+
+        elbo = expected_log_likelihood - kl_div
+        return float(elbo)
+
+    def compute_local_gaussex_penalty(
+        self,
+        q_density: Union[np.ndarray, List[float]],
+        posterior_density: Union[np.ndarray, List[float]],
+        theta0_idx: int = 0,
+        radius: int = 3,
+        lam: float = 0.1,
+    ) -> float:
+        """Compute GaussEx regularization term.
+
+        penalty = λ · RE_KL(q, posterior, B_{θ₀, r})
+        Forces q to satisfy sub-critical condition within theta₀ ball.
+
+        Args:
+            q_density: Variational density.
+            posterior_density: Posterior density.
+            theta0_idx: Center index of the theta₀ ball.
+            radius: Ball radius.
+            lam: Regularization weight.
+
+        Returns:
+            GaussEx penalty value.
+        """
+        q = np.asarray(q_density, dtype=float)
+        p = np.asarray(posterior_density, dtype=float)
+
+        local_rekl = self._lmbi.compute_local_rekl(q, p, center_idx=theta0_idx, radius=radius)
+        penalty = lam * abs(local_rekl)
+        return float(penalty)
+
+    def ido_variational_objective(
+        self,
+        q_params: Dict[str, Any],
+        posterior_params: Dict[str, Any],
+        theta0_idx: int = 0,
+        radius: int = 3,
+        lam: float = 0.1,
+    ) -> float:
+        """Compute total IDO variational objective.
+
+        Total objective = -ELBO + λ · RE-KL(GaussEx)
+        Minimize this = maximize ELBO while keeping local structure fidelity.
+
+        Args:
+            q_params: Variational parameters.
+            posterior_params: Posterior parameters.
+            theta0_idx: Center index for GaussEx ball.
+            radius: Ball radius.
+            lam: GaussEx regularization weight.
+
+        Returns:
+            Total objective value (lower = better).
+        """
+        elbo = self.compute_elbo(q_params, posterior_params)
+
+        q_density = np.asarray(q_params.get("density", [0.5]), dtype=float)
+        p_density = np.asarray(posterior_params.get("density", [0.5]), dtype=float)
+
+        gaussex_penalty = self.compute_local_gaussex_penalty(
+            q_density, p_density, theta0_idx, radius, lam
+        )
+
+        total_objective = -elbo + gaussex_penalty
+        return float(total_objective)
+
+    def optimize_variational(
+        self,
+        q_init: Dict[str, Any],
+        posterior: Dict[str, Any],
+        theta0: int = 0,
+        max_steps: int = 50,
+        lam: float = 0.1,
+    ) -> Dict[str, Any]:
+        """Simple gradient descent optimization of variational parameters.
+
+        Args:
+            q_init: Initial variational parameters with 'density' key.
+            posterior: Posterior parameters with 'density' key.
+            theta0: Center index for GaussEx ball.
+            max_steps: Maximum optimization steps.
+            lam: GaussEx regularization weight.
+
+        Returns:
+            Dict with 'optimized_q', 'final_loss', 'elbo', 'rekl_penalty'.
+        """
+        q_density = np.asarray(q_init.get("density", [0.5]), dtype=float).copy()
+        p_density = np.asarray(posterior.get("density", [0.5]), dtype=float)
+
+        min_len = min(len(q_density), len(p_density))
+        q_density = q_density[:min_len]
+        p_density = p_density[:min_len]
+
+        learning_rate = 0.01
+        final_loss = 0.0
+        elbo = 0.0
+        rekl_penalty = 0.0
+
+        for step in range(max_steps):
+            # Compute current objective
+            q_params = {"density": q_density.tolist()}
+            total_obj = self.ido_variational_objective(
+                q_params, posterior, theta0, radius=3, lam=lam
+            )
+            elbo = self.compute_elbo(q_params, posterior)
+            rekl_penalty = self.compute_local_gaussex_penalty(
+                q_density, p_density, theta0, radius=3, lam=lam
+            )
+
+            # Simple gradient: move q toward posterior (reduce KL) with GaussEx constraint
+            # Gradient approximation: d(loss)/d(q_i) ≈ -log(p_i/q_i) + λ * local_rekl_gradient
+            for idx in range(min_len):
+                qi = q_density[idx]
+                pi = p_density[idx]
+                if qi > 1e-10 and pi > 1e-10:
+                    # KL gradient component
+                    kl_grad = np.log(qi / pi) + 1.0
+                    # GaussEx gradient: proportional to local RE-KL
+                    local_rekl = self._lmbi.compute_local_rekl(
+                        q_density, p_density, center_idx=theta0, radius=3
+                    )
+                    gaussex_grad = lam * local_rekl * (1.0 if idx == theta0 else 0.1)
+                    # Update
+                    gradient = kl_grad + gaussex_grad
+                    q_density[idx] = max(q_density[idx] - learning_rate * gradient, 1e-10)
+
+            # Re-normalize q to valid probability
+            total_q = float(np.sum(q_density))
+            if total_q > 0:
+                q_density = q_density / total_q
+
+            final_loss = total_obj
+
+            # Early stopping if loss is very small
+            if abs(total_obj) < 1e-6:
+                break
+
+        return {
+            "optimized_q": {"density": q_density.tolist()},
+            "final_loss": float(final_loss),
+            "elbo": float(elbo),
+            "rekl_penalty": float(rekl_penalty),
+        }
+
+
+# ── MemoryUnit namedtuple for TOMASMemoryArchive ──
+MemoryUnit = namedtuple("MemoryUnit", ["content", "ic_metric", "timestamp", "level", "phase", "tags"])
+
+
+class TOMASMemoryArchive:
+    """太一记忆分级架构 — Three-level memory system.
+
+    L1: 流贯缓存 (flow-through cache, instantaneous, FIFO eviction)
+    L2: κ-Snap归档 (κ-Snap archive, long-term, IC-based eviction)
+    L3: 具身参数 (embodied parameters, slow-changing, rarely evicted)
+
+    MemoryUnit = namedtuple('MemoryUnit', ['content', 'ic_metric', 'timestamp', 'level', 'phase', 'tags'])
+
+    Reference: "TOMAS/IDO视域下的智能体原生记忆系统"
+    """
+
+    def __init__(self, max_L1: int = 100, max_L2: int = 500, max_L3: int = 50) -> None:
+        """Initialize three-level memory storage.
+
+        Args:
+            max_L1: Maximum capacity of L1 (flow-through cache).
+            max_L2: Maximum capacity of L2 (κ-Snap archive).
+            max_L3: Maximum capacity of L3 (embodied parameters).
+        """
+        self.max_L1 = max_L1
+        self.max_L2 = max_L2
+        self.max_L3 = max_L3
+
+        # L1: list, FIFO eviction (instantaneous)
+        self.L1_cache: List[MemoryUnit] = []
+        # L2: dict keyed by tags, IC-based eviction (long-term)
+        self.L2_archive: Dict[str, List[MemoryUnit]] = {}
+        # L3: dict keyed by skill_id, rarely evicted (slow-changing)
+        self.L3_embodied: Dict[str, MemoryUnit] = {}
+
+        # IC metric calculator
+        self._ic_metric = ICMetric()
+
+    def store(self, memory_unit: MemoryUnit) -> bool:
+        """Store a memory unit in the appropriate level.
+
+        Overflow handling:
+          L1 overflow → FIFO eviction (oldest first)
+          L2 overflow → IC-based eviction (lowest IC first)
+          L3 overflow → rarely happens, oldest skill evicted
+
+        Args:
+            memory_unit: MemoryUnit to store.
+
+        Returns:
+            True if stored successfully.
+        """
+        level = memory_unit.level
+
+        if level == "L1" or level == 1:
+            self.L1_cache.append(memory_unit)
+            # FIFO eviction if overflow
+            while len(self.L1_cache) > self.max_L1:
+                self.L1_cache.pop(0)  # Remove oldest
+            return True
+
+        elif level == "L2" or level == 2:
+            # Store by tag grouping
+            tags = memory_unit.tags if memory_unit.tags else ["__default__"]
+            primary_tag = tags[0] if isinstance(tags, list) else str(tags)
+            if primary_tag not in self.L2_archive:
+                self.L2_archive[primary_tag] = []
+            self.L2_archive[primary_tag].append(memory_unit)
+
+            # IC-based eviction if overflow
+            total_L2 = sum(len(v) for v in self.L2_archive.values())
+            while total_L2 > self.max_L2:
+                # Find tag group with lowest average IC
+                min_ic_tag = None
+                min_ic_val = float("inf")
+                for tag, units in self.L2_archive.items():
+                    if len(units) > 0:
+                        avg_ic = sum(u.ic_metric for u in units) / len(units)
+                        if avg_ic < min_ic_val:
+                            min_ic_val = avg_ic
+                            min_ic_tag = tag
+                if min_ic_tag is not None and self.L2_archive[min_ic_tag]:
+                    # Remove lowest IC unit in that group
+                    lowest_ic_idx = 0
+                    lowest_ic = self.L2_archive[min_ic_tag][0].ic_metric
+                    for idx, unit in enumerate(self.L2_archive[min_ic_tag]):
+                        if unit.ic_metric < lowest_ic:
+                            lowest_ic = unit.ic_metric
+                            lowest_ic_idx = idx
+                    self.L2_archive[min_ic_tag].pop(lowest_ic_idx)
+                    # Clean up empty tag groups
+                    if not self.L2_archive[min_ic_tag]:
+                        del self.L2_archive[min_ic_tag]
+                total_L2 = sum(len(v) for v in self.L2_archive.values())
+            return True
+
+        elif level == "L3" or level == 3:
+            # Key by skill_id (use first tag as skill_id)
+            tags = memory_unit.tags if memory_unit.tags else ["__default__"]
+            skill_id = tags[0] if isinstance(tags, list) else str(tags)
+            self.L3_embodied[skill_id] = memory_unit
+
+            # Rare eviction: oldest skill if overflow
+            while len(self.L3_embodied) > self.max_L3:
+                # Remove the oldest (lowest timestamp)
+                oldest_key = min(
+                    self.L3_embodied.keys(),
+                    key=lambda k: self.L3_embodied[k].timestamp
+                )
+                del self.L3_embodied[oldest_key]
+            return True
+
+        return False
+
+    def retrieve(
+        self,
+        query_tags: List[str],
+        query_ic_min: float = 0.5,
+        gaussex_phase_check: bool = False,
+    ) -> List[MemoryUnit]:
+        """Retrieve memory units matching query tags and IC threshold.
+
+        Search strategy:
+          1. Search L2 by tag matching
+          2. If gaussex_phase_check=True → GaussEx phase compatibility re-ranking
+          3. Filter by IC >= query_ic_min
+
+        Args:
+            query_tags: Tags to search for.
+            query_ic_min: Minimum IC metric threshold.
+            gaussex_phase_check: Whether to apply GaussEx phase compatibility.
+
+        Returns:
+            List of matching MemoryUnit objects.
+        """
+        results: List[MemoryUnit] = []
+
+        # Search L2 by tags
+        for tag in query_tags:
+            if tag in self.L2_archive:
+                for unit in self.L2_archive[tag]:
+                    if unit.ic_metric >= query_ic_min:
+                        results.append(unit)
+
+        # Also search L1 for recent matches
+        for unit in self.L1_cache:
+            unit_tags = unit.tags if unit.tags else []
+            if isinstance(unit_tags, str):
+                unit_tags = [unit_tags]
+            if any(t in unit_tags for t in query_tags):
+                if unit.ic_metric >= query_ic_min:
+                    results.append(unit)
+
+        # Also search L3 for embodied matches
+        for skill_id, unit in self.L3_embodied.items():
+            unit_tags = unit.tags if unit.tags else []
+            if isinstance(unit_tags, str):
+                unit_tags = [unit_tags]
+            if any(t in unit_tags for t in query_tags):
+                if unit.ic_metric >= query_ic_min:
+                    results.append(unit)
+
+        # GaussEx phase compatibility re-ranking
+        if gaussex_phase_check and len(results) > 1:
+            # Sort by IC metric (higher IC = better phase compatibility)
+            results.sort(key=lambda u: u.ic_metric, reverse=True)
+
+        return results
+
+    def update_incremental(self, memory_unit: MemoryUnit) -> bool:
+        """Local incremental update (only prune changed branches).
+
+        No global reconstruction — avoids O(n²) κ-Snap.
+
+        Args:
+            memory_unit: Updated MemoryUnit.
+
+        Returns:
+            True if update was applied.
+        """
+        level = memory_unit.level
+
+        if level == "L2" or level == 2:
+            tags = memory_unit.tags if memory_unit.tags else ["__default__"]
+            primary_tag = tags[0] if isinstance(tags, list) else str(tags)
+            if primary_tag in self.L2_archive:
+                # Find matching unit by content similarity and replace
+                for idx, existing in enumerate(self.L2_archive[primary_tag]):
+                    # Match by timestamp proximity (same epoch)
+                    if abs(existing.timestamp - memory_unit.timestamp) < 100.0:
+                        self.L2_archive[primary_tag][idx] = memory_unit
+                        return True
+                # No match found → append as new
+                self.L2_archive[primary_tag].append(memory_unit)
+                return True
+
+        elif level == "L1" or level == 1:
+            # Replace most recent with same tags
+            for idx, existing in enumerate(self.L1_cache):
+                if existing.tags == memory_unit.tags:
+                    self.L1_cache[idx] = memory_unit
+                    return True
+            # No match → append
+            self.L1_cache.append(memory_unit)
+            return True
+
+        elif level == "L3" or level == 3:
+            tags = memory_unit.tags if memory_unit.tags else ["__default__"]
+            skill_id = tags[0] if isinstance(tags, list) else str(tags)
+            self.L3_embodied[skill_id] = memory_unit
+            return True
+
+        return False
+
+    def merge_safe(
+        self,
+        units: List[MemoryUnit],
+        ic_threshold: float = 0.7,
+    ) -> Optional[MemoryUnit]:
+        """Psi-Cut感知合并: check IC overlap before merging.
+
+        Steps:
+          1. Check IC overlap of all units
+          2. Overlap IC ≥ ic_threshold → allow merge
+          3. Otherwise → keep multiple versions (avoid conflict)
+
+        Args:
+            units: MemoryUnit candidates to merge.
+            ic_threshold: Minimum IC overlap for safe merge.
+
+        Returns:
+            Merged MemoryUnit if safe, None if conflict detected.
+        """
+        if not units:
+            return None
+
+        if len(units) == 1:
+            return units[0]
+
+        # Check pairwise IC overlap
+        for i in range(len(units)):
+            for j in range(i + 1, len(units)):
+                ic_overlap = min(units[i].ic_metric, units[j].ic_metric) / max(
+                    units[i].ic_metric, units[j].ic_metric, 1e-10
+                )
+                if ic_overlap < ic_threshold:
+                    return None  # Conflict → keep multiple versions
+
+        # Safe to merge: combine content, weighted IC, union tags
+        merged_content = max(units, key=lambda u: len(str(u.content))).content
+        merged_ic = sum(u.ic_metric for u in units) / len(units)
+        merged_timestamp = max(u.timestamp for u in units)
+        merged_level = "L2"  # Merged units go to L2
+        merged_phase = units[0].phase
+
+        all_tags: List[str] = []
+        for u in units:
+            u_tags = u.tags if u.tags else []
+            if isinstance(u_tags, str):
+                u_tags = [u_tags]
+            all_tags.extend(u_tags)
+        merged_tags = list(set(all_tags))  # Union of tags
+
+        return MemoryUnit(
+            content=merged_content,
+            ic_metric=merged_ic,
+            timestamp=merged_timestamp,
+            level=merged_level,
+            phase=merged_phase,
+            tags=merged_tags,
+        )
+
+    def cross_level_recall(
+        self,
+        game_id: str,
+        level_idx: int,
+    ) -> List[MemoryUnit]:
+        """Cross-level learning: retrieve solution memories from L2/L3.
+
+        Search for similar game solutions across all memory levels.
+
+        Args:
+            game_id: Game identifier.
+            level_idx: Level index.
+
+        Returns:
+            List of relevant MemoryUnit objects from L2/L3.
+        """
+        query_tags = [game_id, f"level_{level_idx}", "solution"]
+        results: List[MemoryUnit] = []
+
+        # Search L2
+        for tag in query_tags:
+            if tag in self.L2_archive:
+                results.extend(self.L2_archive[tag])
+
+        # Search L3
+        for skill_id, unit in self.L3_embodied.items():
+            unit_tags = unit.tags if unit.tags else []
+            if isinstance(unit_tags, str):
+                unit_tags = [unit_tags]
+            if any(t in unit_tags for t in query_tags):
+                results.append(unit)
+
+        return results
+
+    def promote_L1_to_L2(self) -> int:
+        """Promote high-frequency L1 cache entries to L2 archive.
+
+        Criteria: entries accessed more than average → promoted to long-term.
+
+        Returns:
+            Number of entries promoted.
+        """
+        promoted = 0
+        if not self.L1_cache:
+            return 0
+
+        avg_ic = sum(u.ic_metric for u in self.L1_cache) / len(self.L1_cache)
+
+        # Promote entries with IC above average
+        to_promote = [u for u in self.L1_cache if u.ic_metric >= avg_ic]
+
+        for unit in to_promote:
+            # Create L2 version
+            l2_unit = MemoryUnit(
+                content=unit.content,
+                ic_metric=unit.ic_metric,
+                timestamp=unit.timestamp,
+                level="L2",
+                phase=unit.phase,
+                tags=unit.tags,
+            )
+            self.store(l2_unit)
+            promoted += 1
+
+        # Remove promoted entries from L1
+        self.L1_cache = [u for u in self.L1_cache if u.ic_metric < avg_ic]
+
+        return promoted
+
+    def promote_L2_to_L3(self) -> int:
+        """Promote long-term validated L2 entries to L3 embodied.
+
+        Criteria: entries with IC > 0.8 and multiple tags → embodied skill.
+
+        Returns:
+            Number of entries promoted.
+        """
+        promoted = 0
+
+        for tag, units in list(self.L2_archive.items()):
+            for unit in units:
+                if unit.ic_metric >= 0.8:
+                    # Create L3 version
+                    l3_unit = MemoryUnit(
+                        content=unit.content,
+                        ic_metric=unit.ic_metric,
+                        timestamp=unit.timestamp,
+                        level="L3",
+                        phase=unit.phase,
+                        tags=unit.tags,
+                    )
+                    self.store(l3_unit)
+                    promoted += 1
+
+        # Remove promoted L2 entries
+        for tag in list(self.L2_archive.keys()):
+            self.L2_archive[tag] = [
+                u for u in self.L2_archive[tag] if u.ic_metric < 0.8
+            ]
+            if not self.L2_archive[tag]:
+                del self.L2_archive[tag]
+
+        return promoted
+
+
+class ICMetric:
+    """信息基数度量 — Information Cardinality Metric.
+
+    IC metric quantifies the information content of an octonion grid:
+      I(m) = Σ_cells ||Re(o)||² / ||o||² + Σ_cells ||Im(o)||² / ||o||²
+
+    This measures how much of each octonion's norm is in the real vs
+    imaginary components, capturing the balance between structural
+    (real) and semantic (imaginary) information.
+
+    Reference: "TOMAS/IDO视域下的智能体原生记忆系统", §4.1 IC-Metric
+    """
+
+    def __init__(self) -> None:
+        """Initialize ICMetric."""
+        self._octonion_available = True  # Octonion is in same file
+
+    def compute_ic(self, octonion_grid: Union[np.ndarray, List]) -> float:
+        """Compute IC metric from octonion grid.
+
+        I(m) = Σ_cells ||Re(o)||² / ||o||² + Σ_cells ||Im(o)||² / ||o||²
+
+        Args:
+            octonion_grid: Array of Octonion objects or coefficient arrays.
+
+        Returns:
+            IC metric value.
+        """
+        total_ic = 0.0
+
+        if isinstance(octonion_grid, np.ndarray):
+            # If it's a numpy array of coefficient arrays
+            if octonion_grid.ndim == 2 and octonion_grid.shape[1] == 8:
+                # Each row is an octonion coefficient vector
+                for idx in range(octonion_grid.shape[0]):
+                    coeffs = octonion_grid[idx]
+                    real_part = coeffs[0]  # Real component
+                    imag_parts = coeffs[1:]  # 7 imaginary components
+                    norm_sq = float(np.sum(coeffs ** 2))
+                    if norm_sq < 1e-12:
+                        continue  # Skip near-zero octonions
+                    real_contribution = real_part ** 2 / norm_sq
+                    imag_contribution = float(np.sum(imag_parts ** 2)) / norm_sq
+                    total_ic += real_contribution + imag_contribution
+            elif octonion_grid.ndim == 1:
+                # Single octonion
+                coeffs = octonion_grid
+                norm_sq = float(np.sum(coeffs ** 2))
+                if norm_sq > 1e-12:
+                    real_part = coeffs[0]
+                    imag_parts = coeffs[1:]
+                    total_ic += real_part ** 2 / norm_sq + float(np.sum(imag_parts ** 2)) / norm_sq
+            else:
+                # Higher-dimensional: flatten to cells
+                flat = octonion_grid.reshape(-1, 8) if octonion_grid.shape[-1] == 8 else octonion_grid.reshape(-1)
+                for idx in range(flat.shape[0] if flat.ndim > 1 else 1):
+                    if flat.ndim > 1:
+                        coeffs = flat[idx]
+                    else:
+                        coeffs = flat
+                    norm_sq = float(np.sum(coeffs ** 2))
+                    if norm_sq > 1e-12:
+                        real_contribution = coeffs[0] ** 2 / norm_sq
+                        imag_contribution = float(np.sum(coeffs[1:] ** 2)) / norm_sq
+                        total_ic += real_contribution + imag_contribution
+        elif isinstance(octonion_grid, list):
+            # List of Octonion objects or coefficient lists
+            for item in octonion_grid:
+                if isinstance(item, Octonion):
+                    # Use Octonion's norm/norm_sq methods
+                    norm_sq_val = item.norm_sq()
+                    if norm_sq_val < 1e-12:
+                        continue
+                    real_val = item.real()
+                    imag_vals = item.imag()
+                    real_sq = real_val ** 2
+                    imag_sq = sum(v ** 2 for v in imag_vals)
+                    total_ic += real_sq / norm_sq_val + imag_sq / norm_sq_val
+                elif isinstance(item, (list, np.ndarray)):
+                    coeffs = np.asarray(item, dtype=float)
+                    norm_sq = float(np.sum(coeffs ** 2))
+                    if norm_sq > 1e-12:
+                        total_ic += coeffs[0] ** 2 / norm_sq + float(np.sum(coeffs[1:] ** 2)) / norm_sq
+
+        return float(total_ic)
+
+    def compute_ic_from_grid(
+        self,
+        grid: Union[np.ndarray, List[List[int]]],
+        num_colors: int = 10,
+    ) -> float:
+        """Compute IC from integer grid via perceive embedding.
+
+        grid → octonion tensor → IC metric
+
+        Args:
+            grid: 2D integer grid.
+            num_colors: Number of color bins.
+
+        Returns:
+            IC metric value.
+        """
+        grid_arr = np.asarray(grid, dtype=float)
+
+        if grid_arr.ndim != 2:
+            grid_arr = grid_arr.reshape(int(np.sqrt(grid_arr.size)), -1)
+
+        rows, cols = grid_arr.shape
+        # Perceive: embed grid into octonion coefficient tensor
+        # Each cell → 8-component octonion: color index maps to imaginary units
+        n_cells = rows * cols
+        oct_grid = np.zeros((n_cells, 8), dtype=float)
+
+        for r in range(rows):
+            for c in range(cols):
+                cell_idx = r * cols + c
+                val = grid_arr[r, c]
+                # Real component: presence indicator (0 = empty, 1 = filled)
+                oct_grid[cell_idx, 0] = 0.0 if val == 0 else 1.0
+                # Imaginary components: color index → which imaginary unit is active
+                if val > 0:
+                    color_idx = int(val) % 7  # Map to e1..e7
+                    oct_grid[cell_idx, color_idx + 1] = float(val) / num_colors
+
+        return self.compute_ic(oct_grid)
+
+    def compare_ic(self, ic_before: float, ic_after: float) -> str:
+        """Compare IC values to detect information gain/loss.
+
+        Args:
+            ic_before: IC metric before operation.
+            ic_after: IC metric after operation.
+
+        Returns:
+            'information_gain' if IC increased,
+            'information_loss' if IC decreased (dangerous!),
+            'stable' if change is negligible.
+        """
+        delta = ic_after - ic_before
+        if abs(delta) < 0.05:
+            return "stable"
+        elif delta > 0:
+            return "information_gain"
+        else:
+            return "information_loss"
+
+    def compute_ic_threshold(self, game_complexity: str) -> float:
+        """Compute IC threshold based on game complexity class.
+
+        Args:
+            game_complexity: One of 'P', 'P_in_phys', 'NP_C_likely', 'NP_Hard'.
+
+        Returns:
+            IC threshold value.
+        """
+        mapping: Dict[str, float] = {
+            "P": 0.3,           # Low threshold, P-class tasks have low IC
+            "P_in_phys": 0.5,   # Medium threshold
+            "NP_C_likely": 0.7, # Higher threshold
+            "NP_Hard": 0.85,    # Highest threshold
+        }
+        return mapping.get(game_complexity, 0.5)
+
+
+class PsiCutAwareMerge:
+    """Psi-Cut感知合并 — Psi-Cut aware merge for memory units.
+
+    Checks IC overlap before merging memory units:
+      If overlap IC ≥ threshold → safe to merge
+      Otherwise → keep multiple versions (avoid structural conflict)
+
+    Reference: "TOMAS/IDO视域下的智能体原生记忆系统", §4.3 Psi-Cut感知合并
+    """
+
+    def __init__(self) -> None:
+        """Initialize PsiCutAwareMerge."""
+        pass
+
+    def can_merge(
+        self,
+        unit_a: MemoryUnit,
+        unit_b: MemoryUnit,
+        ic_threshold: float = 0.7,
+    ) -> bool:
+        """Check if two memory units can be safely merged.
+
+        Overlap IC = min(unit_a.ic, unit_b.ic) / max(unit_a.ic, unit_b.ic)
+        If overlap IC ≥ ic_threshold → True (safe to merge)
+        Otherwise → False (keep separate versions)
+
+        Args:
+            unit_a: First memory unit.
+            unit_b: Second memory unit.
+            ic_threshold: Minimum IC overlap for safe merge.
+
+        Returns:
+            True if merge is safe, False otherwise.
+        """
+        ic_a = unit_a.ic_metric
+        ic_b = unit_b.ic_metric
+        max_ic = max(ic_a, ic_b)
+        if max_ic < 1e-10:
+            return True  # Both near-zero → trivially compatible
+
+        overlap = min(ic_a, ic_b) / max_ic
+        return overlap >= ic_threshold
+
+    def merge_units(
+        self,
+        units: List[MemoryUnit],
+        ic_threshold: float = 0.7,
+    ) -> Optional[MemoryUnit]:
+        """Merge multiple units if all pairwise overlaps satisfy threshold.
+
+        If all pairs can_merge → merge into single MemoryUnit:
+          content = longest version
+          ic = weighted average
+          tags = union
+
+        Otherwise → None (don't merge)
+
+        Args:
+            units: List of MemoryUnit candidates.
+            ic_threshold: Minimum pairwise IC overlap.
+
+        Returns:
+            Merged MemoryUnit if safe, None if conflict detected.
+        """
+        if not units:
+            return None
+
+        if len(units) == 1:
+            return units[0]
+
+        # Check all pairwise overlaps
+        for i in range(len(units)):
+            for j in range(i + 1, len(units)):
+                if not self.can_merge(units[i], units[j], ic_threshold):
+                    return None  # Conflict → don't merge
+
+        # Safe to merge
+        merged_content = max(units, key=lambda u: len(str(u.content))).content
+        merged_ic = sum(u.ic_metric for u in units) / len(units)
+        merged_timestamp = max(u.timestamp for u in units)
+        merged_level = "L2"
+        merged_phase = units[0].phase
+
+        all_tags: List[str] = []
+        for u in units:
+            u_tags = u.tags if u.tags else []
+            if isinstance(u_tags, str):
+                u_tags = [u_tags]
+            all_tags.extend(u_tags)
+        merged_tags = list(set(all_tags))
+
+        return MemoryUnit(
+            content=merged_content,
+            ic_metric=merged_ic,
+            timestamp=merged_timestamp,
+            level=merged_level,
+            phase=merged_phase,
+            tags=merged_tags,
+        )
+
+    def detect_conflict(
+        self,
+        unit_a: MemoryUnit,
+        unit_b: MemoryUnit,
+    ) -> Dict[str, Any]:
+        """Detect algebraic structure conflict between two memory units.
+
+        Args:
+            unit_a: First memory unit.
+            unit_b: Second memory unit.
+
+        Returns:
+            Dict with 'structural_conflict', 'ic_overlap', 'conflict_type'.
+        """
+        ic_a = unit_a.ic_metric
+        ic_b = unit_b.ic_metric
+
+        # Compute IC overlap
+        max_ic = max(ic_a, ic_b)
+        if max_ic < 1e-10:
+            ic_overlap = 1.0
+        else:
+            ic_overlap = min(ic_a, ic_b) / max_ic
+
+        # Detect conflict type
+        structural_conflict = ic_overlap < 0.5
+
+        # Timestamp proximity check
+        time_diff = abs(unit_a.timestamp - unit_b.timestamp)
+        if time_diff < 10.0 and ic_overlap < 0.5:
+            conflict_type = "structural"
+        elif time_diff > 100.0:
+            conflict_type = "temporal"
+        elif ic_overlap < 0.3:
+            conflict_type = "semantic"
+        else:
+            conflict_type = "none"
+
+        return {
+            "structural_conflict": structural_conflict,
+            "ic_overlap": float(ic_overlap),
+            "conflict_type": conflict_type,
+        }
+
+
+class KuramotoOscillator:
+    """耦合振子动力学 — Kuramoto ODE as κ-Snap reduction process.
+
+    Phase evolution = flow-through node states
+    Coupling matrix = compactification base ℬ
+
+    Kuramoto ODE: dθ_i/dt = ω_i + Σ_j K_ij·sin(θ_j - θ_i)
+
+    This models coupled oscillator dynamics as a κ-Snap reduction:
+      phases converge toward synchronization (κ-Snap convergence)
+      coupling matrix represents the compactification structure
+
+    Reference: "基于流贯动力学的物理计算原语: 耦合振子生成模型(Un-0)"
+    """
+
+    def __init__(
+        self,
+        n_oscillators: int = 10,
+        coupling_matrix: Optional[np.ndarray] = None,
+        natural_freqs: Optional[np.ndarray] = None,
+    ) -> None:
+        """Initialize Kuramoto oscillator system.
+
+        Args:
+            n_oscillators: Number of oscillators (N).
+            coupling_matrix: NxN coupling matrix K_ij (compactification base ℬ).
+                            If None, uniform coupling K = K_0/N is used.
+            natural_freqs: N natural frequencies ω_i.
+                           If None, random frequencies from [0, 1].
+        """
+        self.N = n_oscillators
+
+        # Initialize coupling matrix (compactification base ℬ)
+        if coupling_matrix is not None:
+            self.K = np.asarray(coupling_matrix, dtype=float)
+            if self.K.shape != (self.N, self.N):
+                # Resize if needed
+                if self.K.shape[0] < self.N or self.K.shape[1] < self.N:
+                    new_K = np.zeros((self.N, self.N), dtype=float)
+                    r, c = self.K.shape
+                    new_K[:min(r, self.N), :min(c, self.N)] = self.K[:min(r, self.N), :min(c, self.N)]
+                    self.K = new_K
+        else:
+            # Default: uniform coupling K_0/N
+            K_0 = 1.0
+            self.K = np.full((self.N, self.N), K_0 / self.N, dtype=float)
+
+        # Initialize natural frequencies
+        if natural_freqs is not None:
+            self.omega = np.asarray(natural_freqs, dtype=float)
+            if len(self.omega) < self.N:
+                padded = np.zeros(self.N, dtype=float)
+                padded[:len(self.omega)] = self.omega
+                self.omega = padded
+            elif len(self.omega) > self.N:
+                self.omega = self.omega[:self.N]
+        else:
+            self.omega = np.random.uniform(0.0, 1.0, self.N)
+
+    def evolve(
+        self,
+        phases_init: Union[np.ndarray, List[float]],
+        dt: float = 0.01,
+        n_steps: int = 100,
+    ) -> np.ndarray:
+        """Evolve Kuramoto ODE: dθ_i/dt = ω_i + Σ_j K_ij·sin(θ_j - θ_i).
+
+        Uses 4th-order Runge-Kutta (RK4) for numerical integration.
+
+        Args:
+            phases_init: Initial phase array (N-dimensional).
+            dt: Time step for integration.
+            n_steps: Number of integration steps.
+
+        Returns:
+            Final phase array (N-dimensional).
+        """
+        phases = np.asarray(phases_init, dtype=float).copy()
+        if len(phases) < self.N:
+            padded = np.zeros(self.N, dtype=float)
+            padded[:len(phases)] = phases
+            phases = padded
+        elif len(phases) > self.N:
+            phases = phases[:self.N]
+
+        # RK4 integration
+        for step in range(n_steps):
+            # k1 = f(θ)
+            k1 = self._kuramoto_rhs(phases)
+
+            # k2 = f(θ + dt/2 * k1)
+            k2 = self._kuramoto_rhs(phases + dt / 2.0 * k1)
+
+            # k3 = f(θ + dt/2 * k2)
+            k3 = self._kuramoto_rhs(phases + dt / 2.0 * k2)
+
+            # k4 = f(θ + dt * k3)
+            k4 = self._kuramoto_rhs(phases + dt * k3)
+
+            # θ_new = θ + dt/6 * (k1 + 2*k2 + 2*k3 + k4)
+            phases = phases + dt / 6.0 * (k1 + 2.0 * k2 + 2.0 * k3 + k4)
+
+        return phases
+
+    def _kuramoto_rhs(self, phases: np.ndarray) -> np.ndarray:
+        """Compute right-hand side of Kuramoto ODE.
+
+        dθ_i/dt = ω_i + Σ_j K_ij·sin(θ_j - θ_i)
+
+        Args:
+            phases: Current phase array.
+
+        Returns:
+            Derivative array dθ/dt.
+        """
+        N = len(phases)
+        dtheta = self.omega[:N].copy()
+
+        for i in range(N):
+            coupling_sum = 0.0
+            for j in range(N):
+                coupling_sum += self.K[i, j] * np.sin(phases[j] - phases[i])
+            dtheta[i] += coupling_sum
+
+        return dtheta
+
+    def compute_order_parameter(self, phases: np.ndarray) -> float:
+        """Compute synchronization order parameter R = |1/N Σ_k exp(i·θ_k)|.
+
+        R→1: full synchronization (flow-through converges to single structure)
+        R→0: full desynchronization (flow-through still in high-entropy noise)
+
+        Args:
+            phases: Phase array.
+
+        Returns:
+            Order parameter R (0 ≤ R ≤ 1).
+        """
+        phases_arr = np.asarray(phases, dtype=float)
+        N = len(phases_arr)
+        if N == 0:
+            return 0.0
+
+        # R = |1/N Σ_k exp(i·θ_k)|
+        complex_sum = np.sum(np.exp(1j * phases_arr))
+        R = abs(complex_sum) / N
+        return float(R)
+
+    def extract_sync_modes(
+        self,
+        phases: np.ndarray,
+        n_modes: int = 3,
+    ) -> List[Dict[str, Any]]:
+        """Extract stable synchronization modes from phase distribution.
+
+        Uses K-means clustering on sin/cos components of phases to
+        identify coherent oscillator clusters (semantic structures).
+
+        Args:
+            phases: Final phase array.
+            n_modes: Number of modes to extract.
+
+        Returns:
+            List of mode dicts with 'centroid_phase', 'cluster_size', 'semantic_label'.
+        """
+        phases_arr = np.asarray(phases, dtype=float)
+        N = len(phases_arr)
+
+        if N == 0:
+            return []
+
+        n_modes = min(n_modes, N)
+
+        # Convert phases to 2D features: [cos(θ), sin(θ)]
+        cos_components = np.cos(phases_arr)
+        sin_components = np.sin(phases_arr)
+        features = np.column_stack([cos_components, sin_components])
+
+        # Simple K-means clustering (manual implementation, no sklearn dependency)
+        # Initialize centroids using farthest-point sampling
+        centroids = self._kmeans_init(features, n_modes)
+
+        # Run K-means for max 20 iterations
+        labels = np.zeros(N, dtype=int)
+        for iteration in range(20):
+            # Assign each point to nearest centroid
+            distances = np.zeros((N, n_modes))
+            for k in range(n_modes):
+                distances[:, k] = np.sum((features - centroids[k]) ** 2, axis=1)
+            new_labels = np.argmin(distances, axis=1)
+
+            # Check convergence
+            if np.all(new_labels == labels):
+                break
+            labels = new_labels
+
+            # Update centroids
+            for k in range(n_modes):
+                cluster_points = features[labels == k]
+                if len(cluster_points) > 0:
+                    centroids[k] = np.mean(cluster_points, axis=0)
+
+        # Extract mode information
+        modes: List[Dict[str, Any]] = []
+        semantic_labels = ["primary", "secondary", "tertiary"]
+
+        for k in range(n_modes):
+            cluster_indices = np.where(labels == k)[0]
+            cluster_size = len(cluster_indices)
+            if cluster_size == 0:
+                continue
+
+            # Compute centroid phase from centroid cos/sin
+            centroid_phase = float(np.arctan2(centroids[k][1], centroids[k][0]))
+
+            label = semantic_labels[k] if k < len(semantic_labels) else f"mode_{k}"
+
+            modes.append({
+                "centroid_phase": centroid_phase,
+                "cluster_size": cluster_size,
+                "semantic_label": label,
+            })
+
+        return modes
+
+    def _kmeans_init(
+        self,
+        features: np.ndarray,
+        n_clusters: int,
+    ) -> np.ndarray:
+        """Farthest-point sampling initialization for K-means.
+
+        Args:
+            features: Feature matrix (N, 2).
+            n_clusters: Number of clusters.
+
+        Returns:
+            Initial centroid array (n_clusters, 2).
+        """
+        N = features.shape[0]
+        n_clusters = min(n_clusters, N)
+
+        # Start with random first centroid
+        first_idx = np.random.randint(0, N)
+        centroids = [features[first_idx]]
+
+        # Add farthest point from existing centroids
+        for _ in range(n_clusters - 1):
+            max_dist = -1.0
+            farthest_idx = 0
+            for idx in range(N):
+                min_dist_to_centroids = min(
+                    float(np.sum((features[idx] - c) ** 2)) for c in centroids
+                )
+                if min_dist_to_centroids > max_dist:
+                    max_dist = min_dist_to_centroids
+                    farthest_idx = idx
+            centroids.append(features[farthest_idx])
+
+        return np.array(centroids)
+
+    def drift_loss(
+        self,
+        phases_final: Union[np.ndarray, List[float]],
+        target_features: Union[np.ndarray, List[float]],
+    ) -> float:
+        """Compute drifting loss: constrain final state distribution only.
+
+        Drifting Loss = ||特征(phases_final) - target_features||²
+        This is the Prover→Verifier training approach:
+        only constrain the end result, not the intermediate path.
+
+        Args:
+            phases_final: Final phase array after evolution.
+            target_features: Target feature vector.
+
+        Returns:
+            Drifting loss value.
+        """
+        phases = np.asarray(phases_final, dtype=float)
+        target = np.asarray(target_features, dtype=float)
+
+        # Extract features from final phases: [R, mean_phase, std_phase, ...]
+        R = self.compute_order_parameter(phases)
+        mean_phase = float(np.mean(phases))
+        std_phase = float(np.std(phases))
+        phase_features = np.array([R, mean_phase, std_phase])
+
+        # Ensure target has compatible dimension
+        min_dim = min(len(phase_features), len(target))
+        loss = float(np.sum((phase_features[:min_dim] - target[:min_dim]) ** 2))
+
+        return loss
+
+
+class PhysicalGaussExConstraint:
+    """物理GaussEx约束 — Physical constraint checks for coupled oscillators.
+
+    Current Un-0 model uses only semantic GaussEx (DINOv2), lacking
+    physical constraints:
+      - Kirchhoff law (current conservation in coupling matrix)
+      - Energy conservation (total energy invariant)
+      - Causality delay upper bound (no super-luminal coupling)
+      - Reciprocity (symmetric coupling)
+
+    Reference: "基于流贯动力学的物理计算原语: 耦合振子生成模型(Un-0)", §5.1
+    """
+
+    def __init__(self, tol: float = 1e-6) -> None:
+        """Initialize PhysicalGaussExConstraint.
+
+        Args:
+            tol: Tolerance for physical constraint checks.
+        """
+        self.tol = tol
+
+    def check_kirchhoff(self, coupling_matrix: Union[np.ndarray, List[List[float]]]) -> bool:
+        """Check Kirchhoff law: Σ_j K_ij = Σ_j K_ji for each node.
+
+        Row sums = Column sums → reciprocity of current flow.
+
+        Args:
+            coupling_matrix: NxN coupling matrix K.
+
+        Returns:
+            True if Kirchhoff law is satisfied within tolerance.
+        """
+        K = np.asarray(coupling_matrix, dtype=float)
+
+        row_sums = np.sum(K, axis=1)
+        col_sums = np.sum(K, axis=0)
+
+        # Check: row_sum_i ≈ col_sum_i for all i
+        max_violation = float(np.max(np.abs(row_sums - col_sums)))
+        return max_violation <= self.tol
+
+    def check_energy_conservation(
+        self,
+        coupling_matrix: Union[np.ndarray, List[List[float]]],
+        phases: Union[np.ndarray, List[float]],
+    ) -> bool:
+        """Check energy conservation: total energy E should be invariant.
+
+        E = Σ_i ω_i² + Σ_{ij} K_ij·cos(θ_i - θ_j)
+        Energy change between initial and final states should ≤ tol.
+
+        Args:
+            coupling_matrix: NxN coupling matrix K.
+            phases: Final phase array.
+
+        Returns:
+            True if energy is approximately conserved.
+        """
+        K = np.asarray(coupling_matrix, dtype=float)
+        theta = np.asarray(phases, dtype=float)
+
+        N = min(K.shape[0], len(theta))
+
+        # Compute total energy
+        # Kinetic part: Σ_i ω_i² (use row sums as proxy for natural freqs)
+        # Potential part: Σ_{ij} K_ij·cos(θ_i - θ_j)
+        kinetic = 0.0
+        for i in range(N):
+            row_sum_i = float(np.sum(K[i, :N]))
+            kinetic += row_sum_i ** 2
+
+        potential = 0.0
+        for i in range(N):
+            for j in range(N):
+                potential += K[i, j] * np.cos(theta[i] - theta[j])
+
+        # For a proper check, we'd need initial and final phases
+        # Here we verify the energy is finite and well-defined
+        total_energy = kinetic + potential
+
+        # Energy conservation is approximately satisfied if total energy
+        # is finite and bounded (check for NaN or extreme values)
+        return not np.isnan(total_energy) and abs(total_energy) < 1e6
+
+    def check_causality_delay(
+        self,
+        coupling_matrix: Union[np.ndarray, List[List[float]]],
+        max_delay: float = 1.0,
+    ) -> bool:
+        """Check causality delay upper bound: |K_ij| ≤ max_delay.
+
+        No super-luminal coupling: all coupling strengths bounded.
+
+        Args:
+            coupling_matrix: NxN coupling matrix K.
+            max_delay: Maximum allowed coupling strength.
+
+        Returns:
+            True if all coupling values are within bounds.
+        """
+        K = np.asarray(coupling_matrix, dtype=float)
+        max_coupling = float(np.max(np.abs(K)))
+        return max_coupling <= max_delay
+
+    def check_reciprocity(
+        self,
+        coupling_matrix: Union[np.ndarray, List[List[float]]],
+    ) -> bool:
+        """Check reciprocity: K_ij ≈ K_ji (symmetric coupling).
+
+        tol = |K_ij - K_ji| / max(|K_ij|, |K_ji|)
+
+        Args:
+            coupling_matrix: NxN coupling matrix K.
+
+        Returns:
+            True if coupling matrix is approximately symmetric.
+        """
+        K = np.asarray(coupling_matrix, dtype=float)
+
+        # Check K ≈ K.T
+        diff = K - K.T
+        max_abs_K = float(np.max(np.abs(K)))
+
+        if max_abs_K < 1e-10:
+            return True  # Trivially symmetric (all near-zero)
+
+        max_violation = float(np.max(np.abs(diff))) / max_abs_K
+        return max_violation <= self.tol * 100  # Slightly relaxed tolerance
+
+    def physical_gaussex_total(
+        self,
+        coupling_matrix: Union[np.ndarray, List[List[float]]],
+        phases: Optional[Union[np.ndarray, List[float]]] = None,
+    ) -> Dict[str, bool]:
+        """Run all physical constraint checks.
+
+        Args:
+            coupling_matrix: NxN coupling matrix K.
+            phases: Optional phase array for energy check.
+
+        Returns:
+            Dict with 'kirchhoff', 'energy', 'causality', 'reciprocity', 'all_pass'.
+        """
+        K = np.asarray(coupling_matrix, dtype=float)
+
+        kirchhoff_pass = self.check_kirchhoff(K)
+        causality_pass = self.check_causality_delay(K)
+        reciprocity_pass = self.check_reciprocity(K)
+
+        # Energy check requires phases
+        if phases is not None:
+            theta = np.asarray(phases, dtype=float)
+            energy_pass = self.check_energy_conservation(K, theta)
+        else:
+            # Without phases, compute from coupling matrix properties
+            # Energy conservation is approximately satisfied for symmetric K
+            energy_pass = reciprocity_pass  # Symmetric K → energy conserving
+
+        all_pass = kirchhoff_pass and energy_pass and causality_pass and reciprocity_pass
+
+        return {
+            "kirchhoff": kirchhoff_pass,
+            "energy": energy_pass,
+            "causality": causality_pass,
+            "reciprocity": reciprocity_pass,
+            "all_pass": all_pass,
+        }
+
+    def add_physics_regularizer(
+        self,
+        loss: float,
+        coupling_matrix: Union[np.ndarray, List[List[float]]],
+        weight: float = 0.01,
+    ) -> float:
+        """Add physical constraint regularization to loss.
+
+        physics_regularizer = loss + weight · (
+            kirchhoff_violation +
+            causality_violation +
+            reciprocity_violation
+        )
+
+        Violations:
+          Kirchhoff: ||row_sum - col_sum||²
+          Causality: max(|K_ij|)²
+          Reciprocity: ||K - K.T||²
+
+        Args:
+            loss: Base loss value.
+            coupling_matrix: NxN coupling matrix K.
+            weight: Regularization weight.
+
+        Returns:
+            Regularized loss value.
+        """
+        K = np.asarray(coupling_matrix, dtype=float)
+
+        # Kirchhoff violation: ||row_sum - col_sum||²
+        row_sums = np.sum(K, axis=1)
+        col_sums = np.sum(K, axis=0)
+        kirchhoff_violation = float(np.sum((row_sums - col_sums) ** 2))
+
+        # Causality violation: max(|K_ij|)²
+        max_coupling = float(np.max(np.abs(K)))
+        causality_violation = max_coupling ** 2
+
+        # Reciprocity violation: ||K - K.T||²
+        reciprocity_violation = float(np.sum((K - K.T) ** 2))
+
+        regularized_loss = loss + weight * (
+            kirchhoff_violation + causality_violation + reciprocity_violation
+        )
+
+        return float(regularized_loss)

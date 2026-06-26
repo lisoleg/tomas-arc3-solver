@@ -94,6 +94,16 @@ from .tomas_learner import (
     IDOVonNeumannEntropy,
     MaximumEntropyReduction,
     IDOAgent,
+    # v3.12.0 — 局部质量贝叶斯 + 智能体记忆 + 耦合振子 (8 new concepts)
+    LocalMassBayesianInference,
+    REKLDirectionalEvaluator,
+    IDOGaussExVariationalObjective,
+    TOMASMemoryArchive,
+    MemoryUnit,
+    ICMetric,
+    PsiCutAwareMerge,
+    KuramotoOscillator,
+    PhysicalGaussExConstraint,
 )
 
 # ── MetaSnapNet可选集成 ──
@@ -203,6 +213,16 @@ __all__ = [
     "IDOVonNeumannEntropy",
     "MaximumEntropyReduction",
     "IDOAgent",
+    # v3.12.0 — 局部质量贝叶斯 + 智能体记忆 + 耦合振子 (8 new concepts)
+    "LocalMassBayesianInference",
+    "REKLDirectionalEvaluator",
+    "IDOGaussExVariationalObjective",
+    "TOMASMemoryArchive",
+    "MemoryUnit",
+    "ICMetric",
+    "PsiCutAwareMerge",
+    "KuramotoOscillator",
+    "PhysicalGaussExConstraint",
     # MetaSnapNet κ-Snap Beam Scoring (SPP集成)
     "TopoFeatureExtractor",
     "ProgramNodeFeatureExtractor",
