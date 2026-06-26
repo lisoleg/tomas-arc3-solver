@@ -6511,8 +6511,8 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
 
     t0 = _time.time()
     MAX_TOTAL_TIME = 45.0
-    MAX_BFS_STEPS = 100
-    MAX_TOTAL_STEPS = 80
+    MAX_BFS_STEPS = 200   # v3.18.1: 从100提升到200 — LS20迷宫复杂需要更多搜索
+    MAX_TOTAL_STEPS = 200  # v3.18.1: 从80提升到200 — L5/L6 baseline需要192/186步
 
     # ── RHAE Budget Controller ──
     human_steps_est = ls20_estimate_human_steps(level_idx)
@@ -6631,7 +6631,7 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         return False  # 无法收集任何金币
 
     # ── 主循环: changer/goal优先, trigger间紧急coin收集 ──
-    MIN_RESERVE = 5  # 每次action后remaining<5时紧急收集金币
+    MIN_RESERVE = 8  # v3.18.1: 从5提升到8 — 给BFS到changer/goal留更多余量
 
     for iteration in range(30):
         if _time.time() - t0 > MAX_TOTAL_TIME:
@@ -6985,9 +6985,9 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
         return kappa_pri
 
     LIU_EPSILON = 0.01
-    MAX_NODES = 5000
-    MAX_BFS_TIME = 60.0
-    MAX_PATH_LEN = 80
+    MAX_NODES = 20000    # v3.18.1: 从5000提升到20000 — LS20 κ-PS需要更多搜索节点
+    MAX_BFS_TIME = 90.0  # v3.18.1: 从60提升到90 — Stage 4 fallback需要更多时间
+    MAX_PATH_LEN = 200   # v3.18.1: 从80提升到200 — L5/L6需要接近200步路径
 
     # ── 复合状态 visited set ──
     visited_composite: set[tuple[int, int, int, int, int]] = {

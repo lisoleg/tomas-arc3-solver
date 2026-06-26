@@ -382,14 +382,20 @@ def create_game_task(
 def ls20_estimate_human_steps(level_idx: int) -> int:
     """估算LS20各关卡的人类参考步数。
 
-    基于已知的通关数据:
-    - L0: 13步 (已验证)
-    - L1: ~25步 (预估, 需金币收集+旋转+导航)
-    - L2: 43步 (已验证)
-    - L3+: ~30步 (预估)
+    基于实际baseline通关数据（v3.18.0实测）:
+    - L0: 22步 (baseline实测)
+    - L1: 123步 (baseline实测, 此前预估25严重偏低)
+    - L2: 73步 (baseline实测, 此前预估43偏低)
+    - L3: 84步 (baseline实测, 此前预估30严重偏低)
+    - L4: 96步 (baseline实测, 此前预估35严重偏低)
+    - L5: 192步 (baseline实测, 此前预估40严重偏低)
+    - L6: 186步 (baseline实测, 此前预估45严重偏低)
 
     TOMAS语义：人类步数H是RHAE计算的基准
     无准确H → RHAE计算失真 → 算力分配偏差
+
+    v3.18.1修正：将所有预估值替换为实际baseline步数，
+    确保RHAE预算控制器不会过早终止搜索。
 
     Args:
         level_idx: LS20关卡索引（从0开始）
@@ -397,14 +403,14 @@ def ls20_estimate_human_steps(level_idx: int) -> int:
     Returns:
         估算的人类参考步数
     """
-    # 已验证数据 + 预估数据的混合映射
+    # 实际baseline步数映射（v3.18.1修正）
     estimates: Dict[int, int] = {
-        0: 13,   # 已验证
-        1: 25,   # 预估: 金币收集+旋转+导航
-        2: 43,   # 已验证
-        3: 30,   # 预估
-        4: 35,   # 预估
-        5: 40,   # 预估
-        6: 45,   # 预估
+        0: 22,   # baseline=22
+        1: 123,  # baseline=123 (从25修正到123)
+        2: 73,   # baseline=73 (从43修正)
+        3: 84,   # baseline=84 (从30修正)
+        4: 96,   # baseline=96 (从35修正)
+        5: 192,  # baseline=192 (从40修正)
+        6: 186,  # baseline=186 (从45修正)
     }
-    return estimates.get(level_idx, 30)
+    return estimates.get(level_idx, 100)
