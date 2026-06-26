@@ -68,7 +68,7 @@ from .neural_dsl import (
     estimate_alienation,
     estimate_structural_phase,
     yinlong_tensor_product,
-))
+)
 
 
 # ============================================================================
@@ -785,7 +785,7 @@ def solve_g50t(game: Any, level_idx: int) -> list | None:
 # KA59 Solver: Push blocks to targets with enemy chase
 # ============================================================================
 
-def _solve_ka59_hungarian_strategy(
+def _solve_ka59_sokoban_strategy(
     game: Any,
     original_level: int,
 ) -> list[tuple] | None:
@@ -1004,7 +1004,7 @@ def solve_ka59(game: Any, level_idx: int) -> list | None:
     # Assign blocks to targets via Hungarian algorithm, compute BFS paths,
     # generate macro-action sequences for each assignment
     try:
-        hungarian_plan = _solve_ka59_hungarian_strategy(game, original_level)
+        hungarian_plan = _solve_ka59_sokoban_strategy(game, original_level)
         if hungarian_plan is not None:
             return hungarian_plan
     except Exception:
