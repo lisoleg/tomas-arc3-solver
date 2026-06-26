@@ -61,6 +61,29 @@ from .tomas_learner import (
     EpisodeTrace,
 )
 
+# ── MetaSnapNet可选集成 ──
+try:
+    from .meta_snap_net import (
+        TopoFeatureExtractor,
+        ProgramNodeFeatureExtractor,
+        MetaSnapNet,
+        MetaSnapBeamScorer,
+        MetaSnapTrainingExample,
+        MetaSnapDataCollector,
+        SPPTrainer,
+        HAS_TORCH as META_SNAP_HAS_TORCH,
+    )
+except ImportError:
+    # meta_snap_net.py不可用时, 导出空值
+    TopoFeatureExtractor = None  # type: ignore
+    ProgramNodeFeatureExtractor = None  # type: ignore
+    MetaSnapNet = None  # type: ignore
+    MetaSnapBeamScorer = None  # type: ignore
+    MetaSnapTrainingExample = None  # type: ignore
+    MetaSnapDataCollector = None  # type: ignore
+    SPPTrainer = None  # type: ignore
+    META_SNAP_HAS_TORCH = False
+
 __all__ = [
     # Core agents
     "TomasAgent",
@@ -109,4 +132,12 @@ __all__ = [
     "MacroCandidate",
     "ActionTrace",
     "EpisodeTrace",
+    # MetaSnapNet κ-Snap Beam Scoring (SPP集成)
+    "TopoFeatureExtractor",
+    "ProgramNodeFeatureExtractor",
+    "MetaSnapNet",
+    "MetaSnapBeamScorer",
+    "MetaSnapTrainingExample",
+    "MetaSnapDataCollector",
+    "SPPTrainer",
 ]

@@ -18,17 +18,23 @@ Key principles:
 Architecture:
     TOMASLearner (主类)
     ├── CausalPatternExtractor (因果模式提取)
-    │   ├── extract_sprite_movement (检测sprite移动方向)
-    │   ├── extract_click_effect (检测点击切换)
-    │   └── extract_navigation_pattern (检测导航模式)
+    │   ├── extract_sprite_movement (检测sprite移动方向, dx/dy/action_type)
+    │   ├── extract_click_effect (检测点击切换, toggled_sprites)
+    │   ├── extract_navigation_pattern (检测导航模式)
+    │   └── extract_all (组合提取)
     ├── DSLMacroAbstractor (DSL宏抽象)
+    │   ├── abstract_sequence (动作序列→DSL抽象, repeat合并)
     │   ├── compress_repeated_actions (合并重复动作)
-    │   ├── compute_mdl_score (计算MDL评分)
+    │   ├── compute_mdl_score (计算MDL评分, DSL总字符数/原始步数)
     │   └── compute_tomas_fingerprint (八元体相位哈希)
+    ├── TopoFeatureExtractor (64维拓扑特征提取, meta_snap_net.py)
     ├── LibraryManager (宏库管理)
     │   ├── load_library / save_library (持久化)
     │   ├── query_by_fingerprint (TOMAS双存储检索)
     │   ├── prune_redundant (冗余修剪)
+    ├── FastPathDispatcher (快速宏派发)
+    │   ├── try_dispatch (拓扑+GaussEx检索派发)
+    │   ├── execute_dispatch (DSL序列执行, repeat解析)
     ├── MacroCandidate (宏候选数据结构)
     ├── ActionTrace (动作轨迹数据结构)
     └── EpisodeTrace (回合轨迹数据结构)
@@ -49,6 +55,9 @@ import numpy as np
 from dataclasses import dataclass, field, asdict
 from typing import Any, Dict, List, Optional, Set, Tuple, Union
 from pathlib import Path
+
+# ── 导入升级版特征提取器 ──
+from .meta_snap_net import TopoFeatureExtractor as _TopoFeatureExtractorClass
 
 
 # ============================================================================
@@ -155,6 +164,9 @@ def extract_topo_features(grid: np.ndarray) -> Dict[str, Any]:
         Bκ ≅ TOSAS ∪ PBPN ∪ FUNCATTN ∪ HAH_ONE_ELEMENT
     where topology features serve as the compact base Bκ descriptor.
 
+    NOTE: 此函数保持dict返回格式(向后兼容). 如需64维numpy array,
+    使用 TopoFeatureExtractor.extract() (from meta_snap_net.py).
+
     Args:
         grid: 2D numpy array representing the game state.
 
@@ -168,65 +180,25 @@ def extract_topo_features(grid: np.ndarray) -> Dict[str, Any]:
             hole_count: Number of topological holes.
             density: Fraction of non-zero cells in the grid.
     """
-    if grid is None or grid.size == 0:
-        return {
-            "euler_char": 0,
-            "period_rank": 0,
-            "symmetry": [],
-            "component_count": 0,
-            "hole_count": 0,
-            "density": 0.0,
-        }
+    # ── 使用TopoFeatureExtractor的dict方法(向后兼容) ──
+    extractor = _TopoFeatureExtractorClass()
+    return extractor.extract_dict(grid)
 
-    # ── Density ──
-    density = float(np.count_nonzero(grid)) / grid.size
 
-    # ── Connected components (4-connectivity) ──
-    binary = (grid != 0).astype(np.int32)
-    from scipy.ndimage import label as ndlabel
-    _, component_count = ndlabel(binary)
-    # Estimate holes: in a padded version, components that don't touch border
-    padded = np.pad(binary, 1, mode='constant', constant_values=1)
-    padded_labels, _ = ndlabel(padded)
-    border_labels = set(padded_labels[0, :]) | set(padded_labels[-1, :]) | \
-                    set(padded_labels[:, 0]) | set(padded_labels[:, -1])
-    hole_count = component_count - len(border_labels & set(range(1, component_count + 1)))
-    # Clamp hole_count to non-negative
-    hole_count = max(0, hole_count)
+def extract_topo_features_vec(grid: np.ndarray) -> np.ndarray:
+    """Extract 64-dim topology feature vector from a grid.
 
-    euler_char = component_count - hole_count
+    升级版extract_topo_features, 返回64维numpy array而非dict.
+    直接调用TopoFeatureExtractor.extract(), 可用于MetaSnapNet输入.
 
-    # ── Periodicity rank ──
-    period_rank = 0
-    if grid.shape[0] > 1:
-        row_hashes = [hash(grid[i].tobytes()) for i in range(grid.shape[0])]
-        if len(set(row_hashes)) <= 2:
-            period_rank = 1  # Row-periodic
-    if period_rank == 1 and grid.shape[1] > 1:
-        col_hashes = [hash(grid[:, j].tobytes()) for j in range(grid.shape[1])]
-        if len(set(col_hashes)) <= 2:
-            period_rank = 2  # Grid-periodic
+    Args:
+        grid: 2D numpy array representing the game state.
 
-    # ── Symmetry ──
-    symmetry = []
-    if grid.shape[0] > 1 and np.allclose(grid, grid[::-1], atol=0):
-        symmetry.append("horizontal")
-    if grid.shape[1] > 1 and np.allclose(grid, grid[:, ::-1], atol=0):
-        symmetry.append("vertical")
-    if grid.shape[0] == grid.shape[1] and grid.shape[0] > 1:
-        if np.allclose(grid, np.rot90(grid, 2), atol=0):
-            symmetry.append("rotational_180")
-        if np.allclose(grid, np.rot90(grid), atol=0):
-            symmetry.append("rotational_90")
-
-    return {
-        "euler_char": euler_char,
-        "period_rank": period_rank,
-        "symmetry": symmetry,
-        "component_count": component_count,
-        "hole_count": hole_count,
-        "density": density,
-    }
+    Returns:
+        64维float32 numpy array, 特征值归一化到[0,1]区间.
+    """
+    extractor = _TopoFeatureExtractorClass()
+    return extractor.extract(grid)
 
 
 # ============================================================================
@@ -366,6 +338,7 @@ class FastPathDispatcher:
         1. retrieve_for_topo: Find top-k matching macros by topology score
         2. GaussExGuard.check_precondition: Validate precondition for each
         3. dispatch: Return DSL sequence if both checks pass
+        4. execute_dispatch: Execute DSL sequence (repeat → N次, action → 1次)
 
     Falls back to κ-Snap search if no macro passes both gates.
 
@@ -429,6 +402,94 @@ class FastPathDispatcher:
         # Step 3: No macro passed — fall back to κ-Snap
         return None, None
 
+    def execute_dispatch(
+        self,
+        dsl_sequence: List[Dict[str, Any]],
+        game_state: Dict[str, Any],
+        step_executor: Optional[Any] = None,
+    ) -> Tuple[bool, float, Dict[str, Any]]:
+        """执行DSL序列, 解析repeat和action指令.
+
+        解析DSL序列中的每个元素:
+            - repeat('TYPE', N) → 执行N次TYPE动作
+            - action('TYPE') → 执行1次TYPE动作
+
+        返回执行结果: (done, total_reward, game_state).
+
+        Args:
+            dsl_sequence: DSL动作序列, 每个元素是dict.
+                格式: {"repeat": "LEFT", "count": 3} 或 {"action": "RIGHT"}.
+            game_state: 当前游戏状态dict.
+            step_executor: 可选的步执行器 (函数/对象).
+                如果提供, 调用其execute(action_type, action_params)
+                方法执行每一步. 如果None, 只做DSL解析不实际执行.
+
+        Returns:
+            Tuple of (done, total_reward, game_state):
+            - done: 是否完成 (bool). True = 序列全部成功执行.
+            - total_reward: 累计奖励 (float).
+            - game_state: 执行后的游戏状态 (dict).
+        """
+        done = True
+        total_reward = 0.0
+        current_state = dict(game_state)  # 拷贝, 不修改原始
+
+        for item in dsl_sequence:
+            if "repeat" in item:
+                # 解析 repeat('TYPE', N) → 执行N次
+                action_type = str(item.get("repeat", ""))
+                count = int(item.get("count", 1))
+                for _ in range(count):
+                    if step_executor is not None:
+                        try:
+                            result = step_executor(action_type, {})
+                            if isinstance(result, tuple):
+                                # (reward, new_state) 或 (done, reward, state)
+                                if len(result) == 2:
+                                    reward_val = float(result[0])
+                                    total_reward += reward_val
+                                elif len(result) >= 3:
+                                    done = bool(result[0])
+                                    total_reward += float(result[1])
+                                    if len(result) >= 3 and isinstance(result[2], dict):
+                                        current_state = result[2]
+                            elif isinstance(result, (int, float)):
+                                total_reward += float(result)
+                        except Exception:
+                            done = False
+                    else:
+                        # 无executor: 只记录, 不实际执行
+                        total_reward += 0.0
+
+            elif "action" in item:
+                # 解析 action('TYPE') → 执行1次
+                action_type = str(item.get("action", ""))
+                if step_executor is not None:
+                    try:
+                        result = step_executor(action_type, {})
+                        if isinstance(result, tuple):
+                            if len(result) == 2:
+                                reward_val = float(result[0])
+                                total_reward += reward_val
+                            elif len(result) >= 3:
+                                done = bool(result[0])
+                                total_reward += float(result[1])
+                                if len(result) >= 3 and isinstance(result[2], dict):
+                                    current_state = result[2]
+                        elif isinstance(result, (int, float)):
+                            total_reward += float(result)
+                    except Exception:
+                        done = False
+                else:
+                    # 无executor: 只记录
+                    total_reward += 0.0
+
+            else:
+                # 未知格式: 跳过
+                pass
+
+        return done, total_reward, current_state
+
 
 # ============================================================================
 # Causal Pattern Extractor
@@ -441,9 +502,14 @@ class CausalPatternExtractor:
     to identify causal relationships between actions and effects.
 
     Three core pattern types:
-    1. sprite_movement: Sprite position changes after keyboard actions
-    2. click_effect: Grid state changes after click actions (toggles, selections)
+    1. sprite_movement: Sprite position changes after keyboard actions (dx, dy)
+    2. click_effect: Grid state changes after click actions (toggled_sprites)
     3. navigation_pattern: Sequence of actions leading to goal achievement
+
+    Enhanced (v3.4.0 — SPP集成):
+    - extract_sprite_movement: 增加 dx, dy, action_type 精细字段
+    - extract_click_effect: 增加 toggled_sprites 列表
+    - extract_all: 组合提取所有模式
     """
 
     # Minimum change threshold for detecting meaningful state differences
@@ -459,15 +525,15 @@ class CausalPatternExtractor:
     ) -> Optional[Dict[str, Any]]:
         """Detect sprite movement direction from an action trace.
 
-        Analyzes the difference between pre_state and post_state to
-        determine if a keyboard action caused a sprite to move in a
-        consistent direction.
+        分析pre_state和post_state的差异, 确定键盘动作是否导致
+        sprite按一致方向移动. 增强版增加dx/dy/action_type精细字段.
 
         Args:
             trace: ActionTrace with pre/post state grids.
 
         Returns:
-            Pattern dict with keys: type, direction, distance, sprite_id.
+            Pattern dict with keys: type, direction, distance, sprite_id,
+            dx (行偏移量), dy (列偏移量), action_type (动作类型).
             None if no movement detected.
         """
         if trace.pre_state is None or trace.post_state is None:
@@ -501,12 +567,19 @@ class CausalPatternExtractor:
                 if distance > 0:
                     # Normalize direction to cardinal directions
                     dir_name = self._direction_to_name(direction)
+                    # ── 增强版: dx/dy/action_type ──
+                    dx = float(direction[0])  # 行偏移
+                    dy = float(direction[1])  # 列偏移
+                    action_type_str = trace.action_params.get("direction", trace.action_type)
                     return {
                         "type": "sprite_movement",
                         "direction": dir_name,
                         "distance": float(distance),
                         "sprite_color": int(color),
                         "action_params": trace.action_params,
+                        "dx": dx,
+                        "dy": dy,
+                        "action_type": action_type_str,
                     }
 
         return None
@@ -517,14 +590,15 @@ class CausalPatternExtractor:
     ) -> Optional[Dict[str, Any]]:
         """Detect click toggle effect from an action trace.
 
-        Analyzes whether a click action toggled or changed the state
-        of a specific grid element (switch, button, selector).
+        分析点击动作是否切换了grid元素的状态. 增强版增加
+        toggled_sprites列表, 记录所有被切换的sprite及其前后颜色.
 
         Args:
             trace: ActionTrace with pre/post state grids.
 
         Returns:
-            Pattern dict with keys: type, position, toggle_type, colors_changed.
+            Pattern dict with keys: type, position, toggle_type,
+            colors_changed, toggled_sprites (被切换的sprite列表).
             None if no click effect detected.
         """
         if trace.pre_state is None or trace.post_state is None:
@@ -562,6 +636,16 @@ class CausalPatternExtractor:
 
         color_pairs = set(zip(pre_colors, post_colors))
 
+        # ── 增强版: toggled_sprites列表 ──
+        toggled_sprites: List[Dict[str, Any]] = []
+        for i, cell in enumerate(nearby_changes):
+            toggled_sprites.append({
+                "position": (int(cell[0]), int(cell[1])),
+                "pre_color": int(pre_colors[i]),
+                "post_color": int(post_colors[i]),
+                "toggled": pre_colors[i] != post_colors[i],
+            })
+
         return {
             "type": "click_effect",
             "click_position": (click_row, click_col),
@@ -569,6 +653,48 @@ class CausalPatternExtractor:
             "colors_changed": [(int(p), int(q)) for p, q in color_pairs],
             "num_cells_changed": len(nearby_changes),
             "action_params": trace.action_params,
+            "toggled_sprites": toggled_sprites,
+        }
+
+    def extract_all(
+        self,
+        episode: EpisodeTrace,
+    ) -> Dict[str, Any]:
+        """组合提取episode中的所有因果模式.
+
+        遍历episode的每一步trace, 提取sprite_movement, click_effect,
+        和navigation_pattern, 返回组合结果.
+
+        Args:
+            episode: EpisodeTrace回合轨迹.
+
+        Returns:
+            Dict with keys:
+                movements: List of sprite_movement pattern dicts.
+                clicks: List of click_effect pattern dicts.
+                navigation: Optional navigation pattern dict.
+                positive_navigation: Optional positive navigation dict.
+        """
+        movements: List[Dict[str, Any]] = []
+        clicks: List[Dict[str, Any]] = []
+
+        for trace in episode.traces:
+            movement = self.extract_sprite_movement(trace)
+            if movement is not None:
+                movements.append(movement)
+
+            click = self.extract_click_effect(trace)
+            if click is not None:
+                clicks.append(click)
+
+        navigation = self.extract_navigation_pattern(episode)
+        positive_nav = self.extract_positive_navigation(episode)
+
+        return {
+            "movements": movements,
+            "clicks": clicks,
+            "navigation": navigation,
+            "positive_navigation": positive_nav,
         }
 
     def extract_navigation_pattern(
@@ -760,6 +886,8 @@ class DSLMacroAbstractor:
     - Compute MDL score: len(compressed) / len(original)
     - Generate TOMAS fingerprints for cross-game matching
     - Prune redundant macros via structural signature comparison
+    - abstract_sequence: 连续相同动作→repeat DSL抽象
+    - compute_mdl_score(dsl_seq, num_raw): DSL总字符数/原始步数
     """
 
     # MDL compression threshold — macros must achieve this compression ratio
@@ -768,6 +896,97 @@ class DSLMacroAbstractor:
     def __init__(self) -> None:
         """Initialize the macro abstractor."""
         self._macro_cache: Dict[str, MacroCandidate] = {}
+
+    def abstract_sequence(
+        self,
+        actions: List[str],
+    ) -> List[Dict[str, Any]]:
+        """将连续相同动作抽象为DSL序列 (repeat合并).
+
+        将原始动作序列(如['LEFT','LEFT','LEFT','RIGHT'])转换为
+        DSL格式(如[{'repeat':'LEFT','count':3},{'action':'RIGHT'}]).
+
+        规则: 连续3次及以上相同动作 → repeat('TYPE', N).
+        连续1-2次 → 保持为action('TYPE').
+
+        Args:
+            actions: 原始动作名称列表 (如['UP','UP','UP','RIGHT']).
+
+        Returns:
+            DSL动作序列, 每个元素是 {'repeat': TYPE, 'count': N}
+            或 {'action': TYPE}.
+        """
+        if not actions:
+            return []
+
+        dsl_sequence: List[Dict[str, Any]] = []
+        current_action = actions[0]
+        count = 1
+
+        for a in actions[1:]:
+            if a == current_action:
+                count += 1
+            else:
+                # 输出当前组
+                if count >= 3:
+                    dsl_sequence.append({"repeat": current_action, "count": count})
+                elif count == 2:
+                    dsl_sequence.append({"action": current_action})
+                    dsl_sequence.append({"action": current_action})
+                else:
+                    dsl_sequence.append({"action": current_action})
+                current_action = a
+                count = 1
+
+        # 处理最后一组
+        if count >= 3:
+            dsl_sequence.append({"repeat": current_action, "count": count})
+        elif count == 2:
+            dsl_sequence.append({"action": current_action})
+            dsl_sequence.append({"action": current_action})
+        else:
+            dsl_sequence.append({"action": current_action})
+
+        return dsl_sequence
+
+    def compute_mdl_score_dsl(
+        self,
+        dsl_seq: List[Dict[str, Any]],
+        num_raw: int,
+    ) -> float:
+        """计算MDL评分: DSL总字符数 / 原始步数.
+
+        MDL (Minimum Description Length) 衡量DSL序列的压缩效率:
+            mdl_score = total_chars(dsl_seq) / num_raw_steps
+
+        Lower mdl_score = 更好的压缩. 值 > 1.0 表示DSL比原始动作更长.
+
+        Args:
+            dsl_seq: DSL动作序列 (含repeat和action).
+            num_raw: 原始动作步数 (未压缩前的总步数).
+
+        Returns:
+            MDL评分 (float). 范围: 0.0 (完美压缩) → ∞ (无压缩).
+        """
+        if num_raw <= 0:
+            return 1.0
+
+        total_chars = 0
+        for item in dsl_seq:
+            if "repeat" in item:
+                # repeat块: "repeat('TYPE', N)" ≈ len(TYPE) + 数字字符数 + overhead
+                action_name = str(item.get("repeat", ""))
+                count_str = str(item.get("count", 1))
+                total_chars += len(action_name) + len(count_str) + 8  # overhead
+            elif "action" in item:
+                # action块: "action('TYPE')" ≈ len(TYPE) + overhead
+                action_name = str(item.get("action", ""))
+                total_chars += len(action_name) + 6  # overhead
+            else:
+                # 未知格式: 按JSON字符数计
+                total_chars += len(json.dumps(item))
+
+        return total_chars / num_raw
 
     def compress_repeated_actions(
         self,
@@ -1542,6 +1761,9 @@ class TOMASLearner:
         2. Empirical validity: Source episodes have sufficient evidence
         3. Anti-faking: Success rate is genuine (not evaluation-period artifact)
         4. Dead-Zero check: Macro doesn't produce null/meaningless output
+        5. Rule R1: DSL总字符数 > 500 → 拒绝 (过长无压缩)
+        6. Rule R2: 成功率 < 30% → 拒绝 (效果不足)
+        7. Rule R3: DSL序列长度 < 2 → 拒绝 (过短无意义)
 
         Args:
             macro: MacroCandidate to validate.
@@ -1555,6 +1777,64 @@ class TOMASLearner:
             "success_rate": macro.success_rate,
             "checks": {},
         }
+
+        # ── ψ-Audit三条规则 (硬性拒绝) ──
+
+        # Rule R1: DSL总字符数 > 500 → 拒绝
+        dsl_total_chars = 0
+        for item in macro.dsl_sequence:
+            if "repeat" in item:
+                dsl_total_chars += len(str(item.get("repeat", ""))) + len(str(item.get("count", 1))) + 8
+            elif "action" in item:
+                dsl_total_chars += len(str(item.get("action", ""))) + 6
+            else:
+                dsl_total_chars += len(json.dumps(item))
+        audit_report["checks"]["dsl_total_chars"] = dsl_total_chars
+        if dsl_total_chars > 500:
+            audit_report["checks"]["rule_r1_rejected"] = True
+            audit_report["overall_score"] = 0.0
+            self._psi_audit_log.append({
+                "macro_name": macro.name,
+                "overall_score": 0.0,
+                "validated": False,
+                "timestamp": time.time(),
+                "reason": f"DSL总字符数={dsl_total_chars} > 500",
+                "checks": audit_report["checks"],
+            })
+            return False, audit_report
+
+        # Rule R2: 成功率 < 30% → 拒绝
+        audit_report["checks"]["success_rate"] = macro.success_rate
+        if macro.success_rate < 0.30:
+            audit_report["checks"]["rule_r2_rejected"] = True
+            audit_report["overall_score"] = 0.0
+            self._psi_audit_log.append({
+                "macro_name": macro.name,
+                "overall_score": 0.0,
+                "validated": False,
+                "timestamp": time.time(),
+                "reason": f"成功率={macro.success_rate:.2f} < 0.30",
+                "checks": audit_report["checks"],
+            })
+            return False, audit_report
+
+        # Rule R3: DSL序列长度 < 2 → 拒绝
+        dsl_length = len(macro.dsl_sequence)
+        audit_report["checks"]["dsl_length"] = dsl_length
+        if dsl_length < 2:
+            audit_report["checks"]["rule_r3_rejected"] = True
+            audit_report["overall_score"] = 0.0
+            self._psi_audit_log.append({
+                "macro_name": macro.name,
+                "overall_score": 0.0,
+                "validated": False,
+                "timestamp": time.time(),
+                "reason": f"DSL序列长度={dsl_length} < 2",
+                "checks": audit_report["checks"],
+            })
+            return False, audit_report
+
+        # ── 柔性检查 (加权评分) ──
 
         # Check 1: Structural validity
         dsl_valid = self._check_dsl_validity(macro.dsl_sequence)

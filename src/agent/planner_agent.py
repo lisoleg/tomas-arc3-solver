@@ -67,6 +67,22 @@ from .tomas_learner import (
     ActionTrace,
 )
 
+# ── MetaSnapNet可选集成 (κ-Snap Beam评分) ──
+try:
+    from .meta_snap_net import (
+        MetaSnapNet,
+        MetaSnapBeamScorer,
+        TopoFeatureExtractor,
+        ProgramNodeFeatureExtractor,
+        HAS_TORCH as _HAS_META_SNAP_TORCH,
+    )
+    _HAS_META_SNAP: bool = True
+except ImportError:
+    _HAS_META_SNAP: bool = False
+    _HAS_META_SNAP_TORCH: bool = False
+    MetaSnapNet = None  # type: ignore
+    MetaSnapBeamScorer = None  # type: ignore
+
 
 # ============================================================================
 # Helper Functions (from Oracle v17, cleaned up)
@@ -1756,6 +1772,13 @@ class PlannerAgent:
         self._current_episode: Optional[EpisodeTrace] = None
         self._episode_action_traces: list[ActionTrace] = []
 
+        # ── MetaSnapNet可选集成 (κ-Snap Beam评分) ──
+        # 如果有checkpoint可用, 加载MetaSnapNet用于κ-Snap搜索评分
+        # 否则, 使用Fast-Path + κ-Snap fallback
+        self._meta_snap_scorer: Optional[Any] = None  # MetaSnapBeamScorer
+        self._meta_snap_checkpoint_path: Optional[str] = None
+        self._init_meta_snap_net()
+
         # Fallback agent (for when planning fails)
         self._fallback: Optional[DopamineExplorer] = None
         self._using_fallback = False
@@ -1834,6 +1857,103 @@ class PlannerAgent:
         if use_oracle is False:
             self.use_oracle = False
             self._oracle_checked = True
+
+    def _init_meta_snap_net(self) -> None:
+        """初始化MetaSnapNet可选组件.
+
+        查找可用的checkpoint文件, 如果存在且torch可用,
+        加载MetaSnapNet用于κ-Snap Beam搜索评分.
+        如果没有checkpoint或torch不可用, 使用numpy fallback.
+
+        MetaSnapNet在κ-Snap搜索中的作用:
+        当Fast-Path未能找到匹配宏时, κ-Snap生成候选DSL序列,
+        MetaSnapBeamScorer.score_candidates()对候选评分,
+        选择最高score的候选作为执行方案.
+        """
+        if not _HAS_META_SNAP:
+            # meta_snap_net模块不可用
+            self._meta_snap_scorer = None
+            return
+
+        # 查找checkpoint
+        checkpoint_dir = Path("checkpoints")
+        latest_ckpt = checkpoint_dir / "meta_snap_latest.pt"
+        sft_ckpt = checkpoint_dir / "meta_snap_sft.pt"
+
+        ckpt_path = None
+        if latest_ckpt.exists():
+            ckpt_path = str(latest_ckpt)
+        elif sft_ckpt.exists():
+            ckpt_path = str(sft_ckpt)
+
+        self._meta_snap_checkpoint_path = ckpt_path
+
+        try:
+            if ckpt_path is not None:
+                # 有checkpoint: 加载MetaSnapNet
+                net = MetaSnapNet(checkpoint_path=ckpt_path)
+                self._meta_snap_scorer = MetaSnapBeamScorer(net=net)
+                print(
+                    f"  [MetaSnap] ✅ Loaded checkpoint: {ckpt_path}, "
+                    f"torch={_HAS_META_SNAP_TORCH}"
+                )
+            else:
+                # 无checkpoint: 使用默认MetaSnapNet (随机权重或numpy fallback)
+                net = MetaSnapNet()
+                self._meta_snap_scorer = MetaSnapBeamScorer(net=net)
+                print(
+                    f"  [MetaSnap] Using default weights, "
+                    f"torch={_HAS_META_SNAP_TORCH}"
+                )
+        except Exception as e:
+            # MetaSnapNet初始化失败: 不使用评分
+            self._meta_snap_scorer = None
+            print(f"  [MetaSnap] ❌ Init failed: {e}, falling back to κ-Snap only")
+
+    def _meta_snap_score_candidates(
+        self,
+        grid: Optional[np.ndarray],
+        candidate_programs: Optional[list] = None,
+    ) -> Optional[list]:
+        """使用MetaSnapBeamScorer对候选DSL程序评分.
+
+        在κ-Snap搜索中使用: 当Fast-Path未命中时,
+        生成候选DSL序列, MetaSnapNet评分, 选择最高score的候选.
+
+        Args:
+            grid: 当前游戏状态网格 (64x64 int array).
+            candidate_programs: 候选DSL程序列表.
+
+        Returns:
+            排序后的候选列表 (按score降序), 或None (评分器不可用).
+        """
+        if self._meta_snap_scorer is None or grid is None:
+            return None
+
+        if not candidate_programs:
+            return None
+
+        try:
+            scores = self._meta_snap_scorer.score_candidates(
+                grid=grid,
+                topo_map=None,
+                candidate_programs=candidate_programs,
+            )
+
+            if not scores:
+                return None
+
+            # 按score降序排序候选
+            ranked = sorted(
+                zip(candidate_programs, scores),
+                key=lambda x: x[1][0],  # x[1][0] = score
+                reverse=True,
+            )
+
+            # 返回排序后的DSL序列
+            return [dsl for dsl, (s, c) in ranked]
+        except Exception:
+            return None
 
     def _check_oracle_availability(self) -> bool:
         """Check whether env._game is accessible for oracle mode.

@@ -159,6 +159,40 @@
         "density": 0.08
       },
       "gaussex_precond": "sprite_count('movable') == 1 AND NOT has_sprite_type('wall')"
+    },
+    {
+      "name": "macro_periodic_skew_fill",
+      "dsl_sequence": [
+        {
+          "action": "detect_period_vector"
+        },
+        {
+          "action": "fill_diagonal_periodic"
+        }
+      ],
+      "tomas_fingerprint": "f2c8a1d4b7e3",
+      "source_tasks": [
+        "type_b_periodic_01",
+        "type_b_skew_02"
+      ],
+      "avg_steps": 6.0,
+      "success_rate": 0.78,
+      "generalization_tags": [
+        "periodic_fill",
+        "skew_symmetry"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1719072000.0,
+      "validated": true,
+      "mdl_score": 88,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 1,
+        "symmetry": [
+          "diagonal_reflect"
+        ]
+      },
+      "gaussex_precond": "input_cell_count(colors) >= 2 AND goal_cells_exist(input)"
     }
   ]
 }
