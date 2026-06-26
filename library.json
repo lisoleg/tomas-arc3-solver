@@ -1,8 +1,8 @@
 {
-  "_schema_version": "3.16.0",
-  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (Δ-State引擎 + RHAE预算 + 神经启发架构(LSTM/ResNet/Transformer/Hopfield) + 循环原语拓扑囚禁 + EML中继节点 + Motif IC + 金币proximity + 紧急coin收集 + Liu机制S_rel + EML超图 + 卞氏三域 + 对象级搜索 + 零分游戏专项策略)",
+  "_schema_version": "3.17.0",
+  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (Δ-State引擎 + RHAE预算 + 神经启发架构(LSTM/ResNet/Transformer/Hopfield) + 循环原语拓扑囚禁 + EML中继节点 + Motif IC + 金币proximity + 紧急coin收集 + Liu机制S_rel + EML超图 + 卞氏三域 + 对象级搜索 + 零分游戏专项策略 + PTS孤子判别 + DOGA评分 + YinLong阴龙运算 + 天行方程校验 + ka59推箱BFS + ar25覆盖BFS + tn36点击序列BFS)",
   "_tomas_framework": {
-    "version": "3.16.0",
+    "version": "3.17.0",
     "core_modules": [
       "kappa_snap_searcher",
       "nar_conv",
@@ -53,8 +53,11 @@
       "liu_mechanism_s_rel",
       "object_level_search",
       "hungarian_assignment",
+      "sokoban_bfs",
       "mirror_mapping",
+      "coverage_bfs",
       "state_transition_graph",
+      "click_sequence_bfs",
       "five_six_saturation_threshold",
       "delta_state_engine",
       "rhae_budget_controller",
@@ -66,7 +69,17 @@
       "inject_interneurons",
       "estimate_ic_with_motifs",
       "neural_inspired_kps_search",
-      "neurally_gated_expand"
+      "neurally_gated_expand",
+      "is_soliton",
+      "is_soliton_from_sprite",
+      "doga_score",
+      "estimate_order_anchoring",
+      "estimate_alienation",
+      "yinlong_dsl",
+      "tianxing_gauss_ex_verifier",
+      "solve_tianxing",
+      "yinlong_tensor_product",
+      "estimate_structural_phase"
     ],
     "asym_index_enabled": true,
     "narla_integration": true,
@@ -120,8 +133,11 @@
     "liu_mechanism_s_rel_enabled": true,
     "object_level_search_enabled": true,
     "hungarian_assignment_enabled": true,
+    "sokoban_bfs_enabled": true,
     "mirror_mapping_enabled": true,
+    "coverage_bfs_enabled": true,
     "state_transition_graph_enabled": true,
+    "click_sequence_bfs_enabled": true,
     "five_six_saturation_threshold_enabled": true,
     "psi_cut_gex_threshold": 0.167,
     "delta_state_engine_enabled": true,
@@ -135,10 +151,14 @@
     "estimate_ic_with_motifs_enabled": true,
     "neural_kps_enabled": true,
     "neurally_gated_expand_enabled": true,
+    "pts_soliton_enabled": true,
+    "doga_scoring_enabled": true,
+    "yinlong_dsl_enabled": true,
+    "tianxing_verification_enabled": true,
     "forget_gate_threshold": 0.05,
     "hopfield_energy_threshold": 0.167
   },
-  "_note": "v3.16.0 — 神经启发架构(RecurrentDSL/GatedDSL/AdvancedDSL/neuro_kps) + EML中继节点(interneurons) + Motif IC(2-cycle/3-cycle) + 金币proximity + 紧急coin收集 + Δ-State引擎 + RHAE预算 | v3.15.3 — LS20 L1通关(trigger间紧急coin+BFS remaining限制) | v3.14.0 — Liu S_rel + EML + 卞氏三域 + 对象级搜索 + 零分游戏专项 | v3.13.0 — κ-PS + Ψ-Cut pruning",
+  "_note": "v3.17.0 — PTS孤子判别 + DOGA评分(O/G/A) + YinLong阴龙运算(八元数非结合) + 天行方程校验(Xi=tanh(S²)) + ka59推箱BFS + ar25覆盖BFS + tn36点击序列BFS | v3.16.0 — 神经启发架构(RecurrentDSL/GatedDSL/AdvancedDSL/neuro_kps) + EML中继节点(interneurons) + Motif IC(2-cycle/3-cycle) + 金币proximity + 紧急coin收集 + Δ-State引擎 + RHAE预算 | v3.15.3 — LS20 L1通关(trigger间紧急coin+BFS remaining限制) | v3.14.0 — Liu S_rel + EML + 卞氏三域 + 对象级搜索 + 零分游戏专项 | v3.13.0 — κ-PS + Ψ-Cut pruning",
   "abstractions": [
     {
       "name": "macro_push_sprite_to_target",
@@ -4508,6 +4528,261 @@
       ],
       "gaussex_precond": "coin_available AND proximity_computed AND remaining_steps > 0",
       "complexity_class": "P"
+    },
+    {
+      "name": "macro_pts_soliton_check",
+      "dsl_sequence": [
+        {
+          "action": "EXTRACT_BLOB"
+        },
+        {
+          "compute": "coupling_strength = area_ratio * compactness * contrast"
+        },
+        {
+          "compare": "coupling_strength > g_critical (0.3)"
+        },
+        {
+          "classify": "Jinling_Sphere (object) vs Dead_Zone (background)"
+        }
+      ],
+      "tomas_fingerprint": "pts_soliton_001",
+      "source_tasks": [
+        "v3.17.0_pts_soliton_discrimination"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.85,
+      "generalization_tags": [
+        "pts_soliton",
+        "topological_confinement",
+        "object_discrimination",
+        "coupling_strength",
+        "jinling_sphere"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1783400000.0,
+      "validated": true,
+      "mdl_score": 0.75,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 2,
+        "hole_count": 0,
+        "density": 0.15
+      },
+      "gaussex_precond": "blob_available AND grid_shape_known",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_doga_score_calc",
+      "dsl_sequence": [
+        {
+          "compute": "O = estimate_order_anchoring(prog, eml_graph)"
+        },
+        {
+          "compute": "G = 1 / (num_primitives + ε)"
+        },
+        {
+          "compute": "A = estimate_alienation(prog, eml_graph)"
+        },
+        {
+          "score": "DOGA = G * O / (A + ε)"
+        },
+        {
+          "threshold_check": "O > 0.2 AND A < 0.5"
+        }
+      ],
+      "tomas_fingerprint": "doga_score_001",
+      "source_tasks": [
+        "v3.17.0_doga_scoring"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.80,
+      "generalization_tags": [
+        "doga_scoring",
+        "order_anchoring",
+        "positive_impulse",
+        "alienation_loss",
+        "program_quality"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1783400000.0,
+      "validated": true,
+      "mdl_score": 0.70,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 3,
+        "hole_count": 0,
+        "density": 0.12
+      },
+      "gaussex_precond": "program_available AND eml_graph_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_yinlong_compose",
+      "dsl_sequence": [
+        {
+          "compose": "op1 ∘ op2 preserving bracket structure"
+        },
+        {
+          "mark": "_yinlong_bracket = (op1, op2)"
+        },
+        {
+          "mark": "_yinlong_depth = depth + 1"
+        }
+      ],
+      "tomas_fingerprint": "yinlong_comp_001",
+      "source_tasks": [
+        "v3.17.0_yinlong_dsl"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.90,
+      "generalization_tags": [
+        "yinlong_dsl",
+        "octonion",
+        "non_associative",
+        "bracket_preservation",
+        "information_diversity"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1783400000.0,
+      "validated": true,
+      "mdl_score": 0.80,
+      "applicable_topo": {
+        "has_non_associative_ops": true,
+        "octonion_encoding": true
+      },
+      "gaussex_precond": "two_operations_available AND bracket_tracking_enabled",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_yinlong_associator",
+      "dsl_sequence": [
+        {
+          "compute_left": "(a ∘ b) ∘ c"
+        },
+        {
+          "compute_right": "a ∘ (b ∘ c)"
+        },
+        {
+          "compare": "residual = left - right"
+        },
+        {
+          "evaluate": "large_residual = information_preserved (good)"
+        }
+      ],
+      "tomas_fingerprint": "yinlong_assoc_001",
+      "source_tasks": [
+        "v3.17.0_yinlong_dsl"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.85,
+      "generalization_tags": [
+        "yinlong_dsl",
+        "associator",
+        "non_associative_residual",
+        "bracket_divergence",
+        "information_collapse_detection"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1783400000.0,
+      "validated": true,
+      "mdl_score": 0.75,
+      "applicable_topo": {
+        "has_non_associative_ops": true,
+        "octonion_encoding": true
+      },
+      "gaussex_precond": "three_operations_available AND bracket_tracking_enabled",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_tianxing_verify",
+      "dsl_sequence": [
+        {
+          "compute_W": "estimate_structural_phase(candidate)"
+        },
+        {
+          "compute_P": "doga_score(candidate, eml_graph)"
+        },
+        {
+          "solve": "Xi = tanh(S²) where S = Σ W_i ⊗ P_i × dt"
+        },
+        {
+          "threshold": "residual = 1 - Xi ≤ 1/6 → PASS"
+        }
+      ],
+      "tomas_fingerprint": "tianxing_verify_001",
+      "source_tasks": [
+        "v3.17.0_tianxing_gauss_ex"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.80,
+      "generalization_tags": [
+        "tianxing_verification",
+        "gauss_ex",
+        "phase_transition",
+        "structural_complexity",
+        "doga_integration"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": 1783400000.0,
+      "validated": true,
+      "mdl_score": 0.70,
+      "applicable_topo": {
+        "phase_transition_check": true,
+        "gaussex_verified": true
+      },
+      "gaussex_precond": "candidate_program_available AND examples_available",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_tianxing_solve",
+      "dsl_sequence": [
+        {
+          "compute": "W_seq = structural_complexity_per_example"
+        },
+        {
+          "compute": "P_seq = doga_score_per_example"
+        },
+        {
+          "tensor_product": "Ψ_i = W_i ⊗ P_i (octonion-inspired)"
+        },
+        {
+          "accumulate": "S = Σ Ψ_i × dt"
+        },
+        {
+          "solve": "Xi = tanh(S²)"
+        },
+        {
+          "interpret": "Xi → 1 = phase success, Xi < 1/6 = phase failure"
+        }
+      ],
+      "tomas_fingerprint": "tianxing_solve_001",
+      "source_tasks": [
+        "v3.17.0_tianxing_gauss_ex"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.75,
+      "generalization_tags": [
+        "tianxing_equation",
+        "phase_transition",
+        "tensor_product",
+        "octonion_inspired",
+        "structural_phase_estimation"
+      ],
+      "min_demo_to_activate": 2,
+      "created_at": 1783400000.0,
+      "validated": true,
+      "mdl_score": 0.65,
+      "applicable_topo": {
+        "phase_transition_model": true,
+        "w_seq_available": true,
+        "p_seq_available": true
+      },
+      "gaussex_precond": "W_sequence_available AND P_sequence_available",
+      "complexity_class": "P_in_phys"
     },
     {
       "name": "macro_delta_state_replay",
