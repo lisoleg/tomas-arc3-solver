@@ -106,6 +106,13 @@ from .tomas_learner import (
     PhysicalGaussExConstraint,
 )
 
+# ── v3.13.0 — κ-Priority Search (κ-PS) from game_solvers ──
+from .game_solvers import (
+    solve_kappa_priority_search,
+    _estimate_ic_game_state,
+    _compute_gex_residual,
+)
+
 # ── MetaSnapNet可选集成 ──
 try:
     from .meta_snap_net import (
@@ -223,6 +230,10 @@ __all__ = [
     "PsiCutAwareMerge",
     "KuramotoOscillator",
     "PhysicalGaussExConstraint",
+    # v3.13.0 — κ-Priority Search (κ-PS) from game_solvers
+    "solve_kappa_priority_search",
+    "_estimate_ic_game_state",
+    "_compute_gex_residual",
     # MetaSnapNet κ-Snap Beam Scoring (SPP集成)
     "TopoFeatureExtractor",
     "ProgramNodeFeatureExtractor",

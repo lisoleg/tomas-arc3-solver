@@ -742,7 +742,7 @@ def solve_g50t(game: Any, level_idx: int) -> list | None:
 # ============================================================================
 
 def solve_ka59(game: Any, level_idx: int) -> list | None:
-    """Solve KA59: Push blocks to align with target positions using BFS.
+    """Solve KA59: Push blocks to align with target positions.
 
     Game mechanics:
         - Step size: 3 pixels
@@ -754,18 +754,33 @@ def solve_ka59(game: Any, level_idx: int) -> list | None:
         - ACTION6: switch active player
         - Win: all blocks adjacent to targets + all 0027jbgxilrocf adjacent to 0001uqqokjrptk
 
-    Strategy:
-        BFS with deepcopy that explores ALL valid actions including ACTION6
-        (player switching). Each BFS node stores the game deepcopy, and we
-        use _game_state_hash for deduplication to avoid revisiting states.
-        Uses the game engine's _get_valid_action_inputs() for reliable move
-        generation and _perform_action_safe() for safe state transitions.
+    Strategy (v3.13.0):
+        Primary: κ-Priority Search (κ-PS) with IC gradient guidance.
+        Fallback: BFS with deepcopy that explores ALL valid actions including
+        ACTION6 (player switching). Each BFS node stores the game deepcopy.
     """
     import copy
     import time
     from arcengine import ActionInput, GameAction, GameState
 
     original_level = game._current_level_index
+
+    # Quick check — already solved?
+    if _is_level_solved(game, original_level):
+        return []
+
+    # ── Primary: κ-Priority Search (v3.13.0) ──
+    # κ-PS follows information-gradient instead of blind FIFO expansion
+    try:
+        plan = solve_kappa_priority_search(
+            game, max_depth=60, max_nodes=80000, max_time=30.0, kappa_weight=10.0,
+        )
+        if plan is not None:
+            return plan
+    except Exception:
+        pass
+
+    # ── Fallback: BFS with deepcopy ──
     t0 = time.time()
     max_time_budget = 30.0
     max_depth = 60
@@ -1838,7 +1853,7 @@ def _tn36_progress_score(game: Any) -> int:
 
 
 def solve_tn36(game: Any, level_idx: int) -> list | None:
-    """Solve TN36: Multi-state animation click game with robust BFS.
+    """Solve TN36: Multi-state animation click game.
 
     Game mechanics:
         - Actions: [6] (CLICK only)
@@ -1846,12 +1861,11 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
         - Each has htntnzkbzu (current selection) and aqszntqeae (target)
         - Win: bzirenxmrg.htntnzkbzu matches aqszntqeae in x,y,scale,rotation,color
 
-    Strategy:
-        BFS/Best-first search using deepcopy for each node. Uses the
-        version-robust _tn36_internal_state_hash for dedup and
-        _tn36_progress_score for heuristic ordering. Gets dynamic
-        click targets via _get_valid_action_inputs() for reliability.
-        Falls back to sequential clicking if search exhausts budget.
+    Strategy (v3.13.0):
+        Primary: κ-Priority Search (κ-PS) with IC gradient guidance.
+        Fallback: BFS/Best-first search using deepcopy for each node. Uses
+        the version-robust _tn36_internal_state_hash for dedup and
+        _tn36_progress_score for heuristic ordering.
     """
     import copy
     import time
@@ -1859,14 +1873,26 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
     from arcengine import GameAction, ActionInput, GameState
 
     original_level = game._current_level_index
-    t0 = time.time()
-    max_time_budget = 45.0
-    max_depth = 50
-    max_nodes = 50000
 
     # Phase 0: Quick check — already solved?
     if _is_level_solved(game, original_level):
         return []
+
+    # ── Primary: κ-Priority Search (v3.13.0) ──
+    try:
+        plan = solve_kappa_priority_search(
+            game, max_depth=50, max_nodes=50000, max_time=45.0, kappa_weight=10.0,
+        )
+        if plan is not None:
+            return plan
+    except Exception:
+        pass
+
+    # ── Fallback: Best-first search (A*-like) ──
+    t0 = time.time()
+    max_time_budget = 45.0
+    max_depth = 50
+    max_nodes = 50000
 
     # Phase 1: Get engine-valid click targets from initial state
     initial_targets: list[tuple[int, int]] = []
@@ -2287,29 +2313,36 @@ def solve_ar25(game: Any, level_idx: int) -> list | None:
         - ACTION7: undo
         - Win: all target positions covered by reflection
 
-    Strategy:
-        BFS with deepcopy that explores ALL valid actions including ACTION5
-        (sprite switching) and ACTION6 (click). The game requires discovering
-        the correct sequence of sprite selections and movements/mirror
-        interactions to cover all target positions. BFS is the most reliable
-        approach since the game state is complex and the solution requires
-        coordinated action sequences.
+    Strategy (v3.13.0):
+        Primary: κ-Priority Search (κ-PS) with IC gradient guidance.
+        Fallback: BFS with deepcopy that explores ALL valid actions including
+        ACTION5 (sprite switching) and ACTION6 (click).
     """
     import copy
     import time
     from arcengine import ActionInput, GameAction, GameState
 
     original_level = game._current_level_index
-    t0 = time.time()
-    max_time_budget = 30.0
-    max_depth = 80
-    max_nodes = 80000
 
     # Quick check — already solved?
     if _is_level_solved(game, original_level):
         return []
 
-    # BFS with deepcopy — each node stores game state directly
+    # ── Primary: κ-Priority Search (v3.13.0) ──
+    try:
+        plan = solve_kappa_priority_search(
+            game, max_depth=80, max_nodes=80000, max_time=30.0, kappa_weight=10.0,
+        )
+        if plan is not None:
+            return plan
+    except Exception:
+        pass
+
+    # ── Fallback: BFS with deepcopy ──
+    t0 = time.time()
+    max_time_budget = 30.0
+    max_depth = 80
+    max_nodes = 80000
     initial_hash = _game_state_hash(game)
     queue: deque[tuple[Any, list[tuple], str]] = deque()
     queue.append((copy.deepcopy(game), [], initial_hash))
@@ -2660,10 +2693,460 @@ def solve_sp80(game: Any, level_idx: int) -> list | None:
 
 
 # ============================================================================
-# Main dispatch function
+# κ-Priority Search (κ-PS) Helper Functions — v3.13.0
+# Based on IDO/TOMAS article: "基于TOMAS/IDO的ARC-3非均匀搜索算法：从盲目BFS到κ-优先梯度归约"
 # ============================================================================
 
-# Registry of game solvers
+
+def _estimate_ic_game_state(
+    game: Any,
+    prev_game: Any | None,
+    action: tuple,
+) -> float:
+    """Estimate Information Cardinality of a game state transition.
+
+    Based on κ-PS article §3.2, adapted from program-synthesis context to
+    game-state context. IC measures how much *meaningful* information the
+    state transition carries — transitions that change structure, maintain
+    entity identity, or use complex operations have higher IC.
+
+    Three components:
+    - StructDepth (0.0–0.4): How much grid *structure* changes (not just
+      pixels). Fewer regions/colors = simplification progress → higher.
+    - EntityLink (0.0–0.3): Whether sprites maintain logical relationships /
+      object persistence. Coordinated movement → higher.
+    - OpComplexity (0.0–0.3): Action complexity. Switch/click > simple move.
+
+    Anti-monotonicity axiom (article §3.4): compact solutions are preferred,
+    so we apply a depth penalty: ic *= 1/(1+depth*0.1).
+
+    Args:
+        game: Current game state (after action).
+        prev_game: Previous game state (before action), or None for initial.
+        action: The action tuple (action_id, click_data) that produced this state.
+
+    Returns:
+        IC estimate in [0, 1]. Higher = more informative transition.
+    """
+    import numpy as np
+
+    # ── StructDepth (0.0–0.4) ──
+    struct_depth = 0.0
+
+    if prev_game is not None:
+        # Connected component / region count change
+        prev_grid = _get_game_grid(prev_game)
+        curr_grid = _get_game_grid(game)
+
+        if prev_grid is not None and curr_grid is not None:
+            # Region count: fewer distinct color regions = simplification
+            prev_unique = len(np.unique(prev_grid))
+            curr_unique = len(np.unique(curr_grid))
+            if curr_unique < prev_unique:
+                # Simplification progress — higher StructDepth
+                struct_depth += min(0.3, (prev_unique - curr_unique) * 0.05)
+
+            # Pixel change ratio (structural, not just random noise)
+            if prev_grid.shape == curr_grid.shape:
+                changed = np.sum(prev_grid != curr_grid)
+                total = prev_grid.size
+                change_ratio = changed / max(total, 1)
+                if change_ratio > 0.01:
+                    # Meaningful structural change
+                    struct_depth += min(0.1, change_ratio * 0.5)
+
+        # Sprite count change (fewer sprites = matching/removal progress)
+        prev_sprites = _get_all_sprites(prev_game)
+        curr_sprites = _get_all_sprites(game)
+        n_prev = len(prev_sprites)
+        n_curr = len(curr_sprites)
+        if n_curr < n_prev:
+            struct_depth += min(0.15, (n_prev - n_curr) * 0.05)
+
+    # Score-based progress (many games track internal score)
+    prev_score = float(getattr(prev_game, '_score', 0)) if prev_game is not None else 0.0
+    curr_score = float(getattr(game, '_score', 0))
+    if curr_score > prev_score:
+        struct_depth += min(0.1, (curr_score - prev_score) * 0.02)
+
+    # ── EntityLink (0.0–0.3) ──
+    entity_link = 0.0
+
+    if prev_game is not None:
+        # Check if specific progress attributes changed
+        for attr in ('okpvcjupabr', 'matched', 'paired', 'completed',
+                     'nsevyuople', 'zmqreragji', 'pigtralzpb'):
+            prev_val = getattr(prev_game, attr, None)
+            curr_val = getattr(game, attr, None)
+            if prev_val is not None and curr_val is not None:
+                # Dict/set: more entries = more pairing progress
+                if isinstance(curr_val, (dict, set, list)):
+                    if len(curr_val) > len(prev_val) if hasattr(prev_val, '__len__') else True:
+                        entity_link += 0.1
+                # Int: increasing = progress
+                elif isinstance(curr_val, int) and isinstance(prev_val, int):
+                    if curr_val > prev_val:
+                        entity_link += 0.05
+
+        # Sprite tag grouping consistency — coordinated sprite movement
+        prev_tagged = {}
+        for s in _get_all_sprites(prev_game):
+            for t in getattr(s, 'tags', []):
+                prev_tagged.setdefault(t, []).append(_sprite_pos(s))
+        curr_tagged = {}
+        for s in _get_all_sprites(game):
+            for t in getattr(s, 'tags', []):
+                curr_tagged.setdefault(t, []).append(_sprite_pos(s))
+
+        # Check if same-tag sprites maintain relative positions (coordination)
+        for tag in set(prev_tagged.keys()) & set(curr_tagged.keys()):
+            if len(prev_tagged[tag]) == len(curr_tagged[tag]) and len(prev_tagged[tag]) > 1:
+                # Same number of sprites with same tag = entity persistence
+                entity_link += 0.05
+
+    # ── OpComplexity (0.0–0.3) ──
+    op_complexity = 0.0
+
+    action_id = action[0]
+    action_data = action[1]
+    aid_val = action_id.value if hasattr(action_id, 'value') else action_id
+
+    # ACTION6 (player switch / click) — highest complexity
+    if aid_val == 6:
+        op_complexity = 0.3
+    # ACTION5 (sprite switch) — high complexity
+    elif aid_val == 5:
+        op_complexity = 0.25
+    # Click with specific coordinates — moderate complexity
+    elif action_data is not None and isinstance(action_data, dict) and ('x' in action_data or 'y' in action_data):
+        op_complexity = 0.2
+    # Simple directional moves — low complexity
+    elif aid_val in (1, 2, 3, 4):
+        op_complexity = 0.05
+
+    # ── Total IC with depth penalty (anti-monotonicity axiom) ──
+    depth = 0  # Default; solver will pass depth context separately
+    ic_raw = min(struct_depth + entity_link + op_complexity, 1.0)
+    depth_penalty = 1.0 / (1.0 + depth * 0.1)
+    ic = ic_raw * depth_penalty
+
+    return max(0.0, min(ic, 1.0))
+
+
+def _estimate_ic_game_state_with_depth(
+    game: Any,
+    prev_game: Any | None,
+    action: tuple,
+    depth: int,
+) -> float:
+    """Estimate IC with explicit depth for anti-monotonicity penalty.
+
+    Same as _estimate_ic_game_state but applies depth penalty.
+    Small subtree can have high IC — true solutions are often compact
+    (2-3 high-dimensional primitives), per anti-monotonicity axiom.
+
+    Args:
+        game: Current game state (after action).
+        prev_game: Previous game state (before action), or None for initial.
+        action: The action tuple (action_id, click_data).
+        depth: Current search depth (for depth penalty).
+
+    Returns:
+        IC estimate in [0, 1] with depth penalty applied.
+    """
+    ic_raw = _estimate_ic_game_state(game, prev_game, action)
+    depth_penalty = 1.0 / (1.0 + depth * 0.1)
+    return max(0.0, min(ic_raw * depth_penalty, 1.0))
+
+
+def _get_game_grid(game: Any) -> np.ndarray | None:
+    """Extract grid/observation data from game as numpy array.
+
+    Many ARC-AGI-3 games store state in numpy grid arrays.
+    This function tries multiple attribute paths to find the grid.
+
+    Args:
+        game: The game object.
+
+    Returns:
+        2D numpy array of grid data, or None if unavailable.
+    """
+    import numpy as np
+
+    # Try common attribute paths for grid data
+    for attr_path in ('grid', 'current_state.grid', 'observation',
+                      '_observation', '_grid'):
+        obj = game
+        for part in attr_path.split('.'):
+            obj = getattr(obj, part, None)
+            if obj is None:
+                break
+        if obj is not None and isinstance(obj, np.ndarray):
+            return obj
+
+    # Try current_level grid
+    cl = getattr(game, 'current_level', None)
+    if cl is not None:
+        for attr in ('grid', '_grid', 'observation'):
+            g = getattr(cl, attr, None)
+            if g is not None and isinstance(g, np.ndarray):
+                return g
+
+    return None
+
+
+def _compute_gex_residual(
+    game: Any,
+    original_game: Any,
+    ic_metric: Any = None,
+    gex_constraint: Any = None,
+) -> float:
+    """Compute GaussEx residual between current state and initial state.
+
+    Based on κ-PS article §3.3: GEX measures structural/phase distance,
+    not just pixel Hamming distance. High GEX = large deviation from
+    expected physical evolution (bad).
+
+    Uses octonion embedding when ICMetric is available, falls back to
+    structural distance computation.
+
+    Args:
+        game: Current game state.
+        original_game: Initial/original game state (reference point).
+        ic_metric: Optional ICMetric instance for octonion-based distance.
+        gex_constraint: Optional PhysicalGaussExConstraint for GEX residual.
+
+    Returns:
+        GEX residual in [0, ∞). Lower = closer to expected evolution (good).
+    """
+    import numpy as np
+
+    # ── Try octonion-based GEX via ICMetric ──
+    if ic_metric is not None:
+        try:
+            curr_grid = _get_game_grid(game)
+            orig_grid = _get_game_grid(original_game)
+            if curr_grid is not None and orig_grid is not None:
+                # ICMetric can compute octonion embedding distance
+                ic_curr = ic_metric.compute_ic_from_grid(curr_grid)
+                ic_orig = ic_metric.compute_ic_from_grid(orig_grid)
+                # Octonion phase distance: how much the IC embedding has shifted
+                gex = abs(ic_curr - ic_orig)
+                return gex
+        except Exception:
+            pass  # Fall through to structural distance
+
+    # ── Try PhysicalGaussExConstraint ──
+    if gex_constraint is not None:
+        try:
+            gex = gex_constraint.compute_residual(game, original_game)
+            if isinstance(gex, (int, float)) and gex >= 0:
+                return float(gex)
+        except Exception:
+            pass  # Fall through to structural distance
+
+    # ── Fallback: structural distance ──
+    # Compute weighted structural distance between grids
+    curr_grid = _get_game_grid(game)
+    orig_grid = _get_game_grid(original_game)
+
+    if curr_grid is not None and orig_grid is not None:
+        if curr_grid.shape == orig_grid.shape:
+            # Pixel Hamming distance weighted by region impact
+            changed_cells = np.sum(curr_grid != orig_grid)
+            total_cells = max(orig_grid.size, 1)
+            hamming_ratio = float(changed_cells) / total_cells
+
+            # Weight by region diversity change
+            orig_unique = len(np.unique(orig_grid))
+            curr_unique = len(np.unique(curr_grid))
+            diversity_penalty = abs(curr_unique - orig_unique) / max(orig_unique, 1)
+
+            gex = hamming_ratio + diversity_penalty * 0.5
+            return gex
+        else:
+            # Shape mismatch — significant deviation
+            return 1.0
+
+    # ── Sprite-based fallback ──
+    orig_sprites = _get_all_sprites(original_game)
+    curr_sprites = _get_all_sprites(game)
+    n_orig = len(orig_sprites)
+    n_curr = len(curr_sprites)
+
+    if n_orig > 0:
+        sprite_change = abs(n_curr - n_orig) / max(n_orig, 1)
+        # Position deviation for persistent sprites
+        position_deviation = 0.0
+        for cs in curr_sprites:
+            for os in orig_sprites:
+                if getattr(cs, 'name', '') == getattr(os, 'name', ''):
+                    dx = abs(int(getattr(cs, 'x', 0)) - int(getattr(os, 'x', 0)))
+                    dy = abs(int(getattr(cs, 'y', 0)) - int(getattr(os, 'y', 0)))
+                    position_deviation += (dx + dy) / 64.0
+        return sprite_change + position_deviation * 0.1
+
+    # Default: no structural data available, assume moderate GEX
+    return 0.5
+
+
+# ============================================================================
+# κ-Priority Search (κ-PS) — v3.13.0
+# Replaces BFS FIFO with information-gradient priority queue.
+# Based on article: "基于TOMAS/IDO的ARC-3非均匀搜索算法：从盲目BFS到κ-优先梯度归约"
+# ============================================================================
+
+
+def solve_kappa_priority_search(
+    game: Any,
+    max_depth: int = 40,
+    max_nodes: int = 500000,
+    max_time: float = 30.0,
+    phys_pruner: Any = None,
+    kappa_weight: float = 10.0,
+    psi_cut_ic_threshold: float = 0.05,
+    psi_cut_gex_threshold: float = 0.1,
+    ic_metric: Any = None,
+    gex_constraint: Any = None,
+) -> list[tuple] | None:
+    """κ-Priority Search solver — replaces BFS FIFO with information-gradient priority.
+
+    Based on article §3.4: "基于TOMAS/IDO的ARC-3非均匀搜索算法：从盲目BFS到κ-优先梯度归约"
+
+    Key differences from BFS:
+    1. Uses heapq priority queue instead of FIFO deque
+    2. Priority = IC_est × κ_weight - GEX_residual (article §3.4)
+    3. Ψ-Cut pruning: skip nodes with low IC and high GEX (article §3.4)
+    4. Anti-monotonicity: compact solutions preferred (depth penalty on IC)
+
+    Theorem 4.1 (IDO归约定理): κ-PS reduces NP-Hard search to P-class gradient
+    descent in expectation, with effective branching factor b_eff = b × (1-η).
+
+    The heapq is a min-heap, so we negate the priority: higher IC × κ - lower GEX
+    → higher priority → lower negated value → popped first.
+
+    Args:
+        game: The game object (will NOT be modified - uses deepcopy).
+        max_depth: Maximum search depth.
+        max_nodes: Maximum total states to explore.
+        max_time: Time limit in seconds.
+        phys_pruner: Optional PhysicalCompactificationReduction instance
+            for Φ_phys pruning of expansion candidates.
+        kappa_weight: κ weight for IC in priority function (default 10.0,
+            article §3.4).
+        psi_cut_ic_threshold: Ψ-Cut: prune if IC < this AND GEX > threshold.
+        psi_cut_gex_threshold: Ψ-Cut: prune if GEX > this AND IC < threshold.
+        ic_metric: Optional ICMetric instance for octonion-based IC.
+        gex_constraint: Optional PhysicalGaussExConstraint for GEX residual.
+
+    Returns:
+        List of (GameAction, data) tuples, or None if no solution found.
+    """
+    import time as _time
+    import heapq
+    from arcengine import GameState, ActionInput
+
+    t0 = _time.time()
+    original_level = game._current_level_index
+    total_nodes = 0
+    counter = 0  # Tiebreaker for heapq (stable ordering)
+
+    # Save original game for GEX reference
+    original_game = copy.deepcopy(game)
+
+    # Priority queue: (neg_priority, counter, game_copy, path, state_hash, parent_game)
+    # heapq is min-heap → lower neg_priority = higher actual priority
+    initial_hash = _game_state_hash(game)
+    initial_priority = 0.0  # Start node has neutral priority
+    pq: list[tuple[float, int, Any, list[tuple], str]] = []
+    heapq.heappush(pq, (initial_priority, counter, copy.deepcopy(game), [], initial_hash))
+    visited: set[str] = {initial_hash}
+
+    while pq:
+        if _time.time() - t0 > max_time:
+            break
+        if total_nodes > max_nodes:
+            break
+
+        neg_priority, cnt, g, path, prev_hash = heapq.heappop(pq)
+        total_nodes += 1
+        current_depth = len(path)
+
+        # Get valid actions from the engine at current state
+        actions = _get_valid_action_inputs(g)
+        if not actions:
+            continue
+
+        for ai in actions:
+            if current_depth + 1 > max_depth:
+                break
+
+            g_copy = copy.deepcopy(g)
+            if not _perform_action_safe(g_copy, ai):
+                continue  # GAME_OVER or invalid
+
+            # Build action tuple for the plan
+            aid = ai.id
+            aid_val = aid.value if hasattr(aid, 'value') else aid
+            if aid_val == 6 and ai.data:
+                action_tuple = (aid, dict(ai.data) if ai.data else {})
+            else:
+                action_tuple = (aid, None)
+
+            new_path = path + [action_tuple]
+            new_depth = len(new_path)
+
+            # Check if solved → return immediately
+            if _is_level_solved(g_copy, original_level):
+                return new_path
+
+            # Dedup by state hash
+            state_h = _game_state_hash(g_copy)
+            if state_h in visited:
+                continue
+            visited.add(state_h)
+
+            # Skip states that didn't change (ineffective action)
+            if state_h == prev_hash:
+                continue
+
+            # v3.7.0 — Φ_phys pruning: reject expansion candidates that violate physics
+            if phys_pruner is not None:
+                try:
+                    if phys_pruner.should_prune_game_state(g_copy, g):
+                        continue  # Pruned by PhysicalCompactificationReduction
+                except Exception:
+                    pass  # If pruning fails, accept the candidate anyway
+
+            # ── κ-PS: Compute IC estimate (article §3.2) ──
+            ic_est = _estimate_ic_game_state_with_depth(
+                g_copy, g, action_tuple, new_depth,
+            )
+
+            # ── κ-PS: Compute GEX residual (article §3.3) ──
+            gex_residual = _compute_gex_residual(
+                g_copy, original_game, ic_metric=ic_metric,
+                gex_constraint=gex_constraint,
+            )
+
+            # ── Ψ-Cut pruning (article §3.4) ──
+            # Low IC + high GEX → prune immediately
+            if ic_est < psi_cut_ic_threshold and gex_residual > psi_cut_gex_threshold:
+                continue  # Ψ-Cut: skip this node
+
+            # ── κ-PS priority computation (article §3.4) ──
+            # Priority = IC_est × κ_weight - GEX_residual - depth × 0.1
+            # Higher priority = more promising state
+            # Negate for heapq (min-heap → lowest neg_priority popped first)
+            priority = ic_est * kappa_weight - gex_residual - new_depth * 0.1
+            neg_priority_new = -priority
+
+            counter += 1
+            heapq.heappush(pq, (neg_priority_new, counter, g_copy, new_path, state_h))
+
+    return None
+
+
 # ============================================================================
 # Generic Simulation-Based Solver (replaces heuristic solvers for most games)
 # ============================================================================
@@ -4951,6 +5434,7 @@ def solve_game(
     Phase 0: Game-specific heuristic solver (SOLVERS dict — highest RHAE)
     Phase 1: UniversalSolverPipeline (zero-config, works on Private Set)
     Phase 2: BFS for small action spaces (shortest solution first)
+    Phase 2.5: κ-Priority Search (information-gradient, v3.13.0)
     Phase 3: Beam search (fast parallel exploration)
     Phase 4: IDFS (thorough with snapshot/restore)
     Phase 5: DFS fallback (deep search with state dedup)
@@ -5368,6 +5852,28 @@ def solve_game(
             plan = solve_generic_bfs(
                 game, max_depth=bfs_depth, max_nodes=bfs_nodes, max_time=bfs_time,
                 phys_pruner=phys_pruner if use_phys_pruning else None,
+            )
+            plan = _normalize_plan(plan)
+            if plan is not None and _verify_plan(plan):
+                return plan
+        except Exception:
+            pass
+
+    # Phase 2.5: κ-Priority Search (v3.13.0) — information-gradient search
+    # Replaces blind BFS exploration with κ-PS that follows IC gradient.
+    # Uses priority = IC_est × κ_weight - GEX_residual (article §3.4)
+    # with Ψ-Cut pruning and anti-monotonicity depth penalty.
+    if not skip_search_phases and _time_remaining() > 2.0:
+        try:
+            kps_time = min(15.0, _time_remaining() - 1.0)
+            plan = solve_kappa_priority_search(
+                game, max_depth=40, max_nodes=300000, max_time=kps_time,
+                phys_pruner=phys_pruner if use_phys_pruning else None,
+                kappa_weight=10.0,
+                psi_cut_ic_threshold=0.05,
+                psi_cut_gex_threshold=0.1,
+                ic_metric=ic_metric,  # from v3.12.0 ICMetric
+                gex_constraint=phys_gaussex,  # from v3.12.0 PhysicalGaussExConstraint
             )
             plan = _normalize_plan(plan)
             if plan is not None and _verify_plan(plan):
