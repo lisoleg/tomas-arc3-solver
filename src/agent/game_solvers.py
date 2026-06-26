@@ -18,7 +18,8 @@ from __future__ import annotations
 
 import copy
 import math
-from collections import deque
+import itertools
+from collections import deque, namedtuple
 from typing import Any, Optional
 
 import numpy as np
@@ -741,6 +742,160 @@ def solve_g50t(game: Any, level_idx: int) -> list | None:
 # KA59 Solver: Push blocks to targets with enemy chase
 # ============================================================================
 
+def _solve_ka59_hungarian_strategy(
+    game: Any,
+    original_level: int,
+) -> list[tuple] | None:
+    """KA59 Hungarian assignment strategy — optimal block-to-target matching.
+
+    Based on v3.14.0 article2 §3.3 Liu Mechanism: assigns 5 blocks to 5
+    targets using the Hungarian algorithm (optimal bipartite matching),
+    computes BFS paths for each assignment, and generates macro-action
+    sequences to push each block along its assigned path.
+
+    Strategy:
+        1. Extract block and target positions from game sprites.
+        2. Compute Hungarian assignment (minimize total Manhattan distance).
+        3. For each (block, target) pair, compute BFS path avoiding walls.
+        4. Generate macro-action sequence: select block → move along path.
+        5. Execute macro-action plan via simulation to verify correctness.
+
+    Args:
+        game: The game object (will use deepcopy for simulation).
+        original_level: Original level index for solved-check.
+
+    Returns:
+        List of (GameAction, data) tuples, or None if strategy fails.
+
+    Self-test:
+        >>> result = _solve_ka59_hungarian_strategy(None, 0)
+        >>> assert result is None  # No game → no plan
+    """
+    from arcengine import GameAction, ActionInput
+
+    if game is None:
+        return None
+
+    # ── Step 1: Extract block and target positions ──
+    blocks = _get_sprites_by_tag(game, '0010xzmuziohuf')
+    targets = _get_sprites_by_tag(game, '0022vrxelxosfy')
+    goal_targets = _get_sprites_by_tag(game, '0001uqqokjrptk')
+
+    if not blocks or not targets:
+        # Try alternative tag names
+        blocks = _get_sprites_by_tag(game, 'block')
+        targets = _get_sprites_by_tag(game, 'target')
+        if not blocks or not targets:
+            return None
+
+    block_positions = [_sprite_center(b) for b in blocks]
+    target_positions = [_sprite_center(t) for t in targets]
+
+    # ── Step 2: Hungarian assignment ──
+    assignment = _hungarian_assignment(block_positions, target_positions)
+    if not assignment:
+        return None
+
+    # ── Step 3: Compute BFS paths and generate macro-action plan ──
+    step_size = getattr(game, '_step_size', 3)
+    if step_size <= 0:
+        step_size = 3
+
+    # Get wall positions for path avoidance
+    walls = _get_sprites_by_tag(game, '0015rniapgwsvb')
+    walls2 = _get_sprites_by_tag(game, '0029ifoxxfvvvs')
+    all_walls = walls + walls2
+
+    wall_cells: set[tuple[int, int]] = set()
+    for w in all_walls:
+        wx = int(getattr(w, 'x', 0))
+        wy = int(getattr(w, 'y', 0))
+        ww = int(getattr(w, 'width', 1))
+        wh = int(getattr(w, 'height', 1))
+        for dx in range(ww):
+            for dy in range(wh):
+                wall_cells.add((wx + dx, wy + dy))
+
+    plan: list[tuple] = []
+    sim_game = copy.deepcopy(game)
+
+    for block_idx, target_idx in assignment:
+        block = blocks[block_idx]
+        target = targets[target_idx]
+
+        # Switch to this block (ACTION6 click on block)
+        block_disp = _sprite_display_center(sim_game, block)
+        plan.append((GameAction.ACTION6, {'x': block_disp[0], 'y': block_disp[1]}))
+
+        # Simulate the switch
+        ai_switch = ActionInput(id=6, data={'x': block_disp[0], 'y': block_disp[1]})
+        _perform_action_safe(sim_game, ai_switch)
+
+        # Compute path from block to target
+        b_pos = _sprite_center(block)
+        t_pos = _sprite_center(target)
+        path_coords = _bfs_path(
+            b_pos, t_pos,
+            walls=wall_cells, step=step_size, grid_size=64,
+        )
+
+        if path_coords is None:
+            # Direct movement fallback
+            dx = t_pos[0] - b_pos[0]
+            dy = t_pos[1] - b_pos[1]
+            n_x = abs(dx) // step_size
+            n_y = abs(dy) // step_size
+            if dx > 0:
+                for _ in range(n_x):
+                    plan.append((GameAction.ACTION4, None))
+            elif dx < 0:
+                for _ in range(n_x):
+                    plan.append((GameAction.ACTION3, None))
+            if dy > 0:
+                for _ in range(n_y):
+                    plan.append((GameAction.ACTION2, None))
+            elif dy < 0:
+                for _ in range(n_y):
+                    plan.append((GameAction.ACTION1, None))
+        else:
+            # Generate movement actions from path
+            for i in range(len(path_coords) - 1):
+                curr = path_coords[i]
+                next_pos = path_coords[i + 1]
+                dx = next_pos[0] - curr[0]
+                dy = next_pos[1] - curr[1]
+                if dx > 0:
+                    plan.append((GameAction.ACTION4, None))
+                elif dx < 0:
+                    plan.append((GameAction.ACTION3, None))
+                if dy > 0:
+                    plan.append((GameAction.ACTION2, None))
+                elif dy < 0:
+                    plan.append((GameAction.ACTION1, None))
+
+        # Simulate movement actions
+        for action_tuple in plan[len(plan) - (len(path_coords or []) + 1):]:
+            aid = action_tuple[0]
+            aid_val = aid.value if hasattr(aid, 'value') else aid
+            ai_move = ActionInput(id=aid_val, data={})
+            _perform_action_safe(sim_game, ai_move)
+
+    # Verify the plan
+    if _is_level_solved(sim_game, original_level):
+        return plan
+
+    # If Hungarian plan didn't solve it, try EML object search
+    try:
+        eml_hg = extract_eml_hypergraph(game)
+        eml_plan = solve_eml_object_search(game, eml_hg, max_depth=40, max_time=15.0)
+        if eml_plan is not None:
+            return eml_plan
+    except Exception:
+        pass
+
+    return None
+
+
 def solve_ka59(game: Any, level_idx: int) -> list | None:
     """Solve KA59: Push blocks to align with target positions.
 
@@ -754,10 +909,11 @@ def solve_ka59(game: Any, level_idx: int) -> list | None:
         - ACTION6: switch active player
         - Win: all blocks adjacent to targets + all 0027jbgxilrocf adjacent to 0001uqqokjrptk
 
-    Strategy (v3.13.0):
-        Primary: κ-Priority Search (κ-PS) with IC gradient guidance.
-        Fallback: BFS with deepcopy that explores ALL valid actions including
-        ACTION6 (player switching). Each BFS node stores the game deepcopy.
+    Strategy (v3.14.0):
+        Primary: Hungarian assignment strategy (optimal block-to-target matching)
+        + EML object-level macro-action search.
+        Fallback: κ-Priority Search (κ-PS) with Liu mechanism S_rel formula.
+        Last resort: BFS with deepcopy.
     """
     import copy
     import time
@@ -769,11 +925,22 @@ def solve_ka59(game: Any, level_idx: int) -> list | None:
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Primary: κ-Priority Search (v3.13.0) ──
-    # κ-PS follows information-gradient instead of blind FIFO expansion
+    # ── Primary (v3.14.0): Hungarian assignment + macro-action strategy ──
+    # Assign blocks to targets via Hungarian algorithm, compute BFS paths,
+    # generate macro-action sequences for each assignment
+    try:
+        hungarian_plan = _solve_ka59_hungarian_strategy(game, original_level)
+        if hungarian_plan is not None:
+            return hungarian_plan
+    except Exception:
+        pass
+
+    # ── Secondary: κ-Priority Search (v3.14.0) with Liu mechanism ──
+    # κ-PS follows information-gradient with S_rel priority formula
     try:
         plan = solve_kappa_priority_search(
-            game, max_depth=60, max_nodes=80000, max_time=30.0, kappa_weight=10.0,
+            game, max_depth=60, max_nodes=80000, max_time=30.0,
+            use_liu_mechanism=True,
         )
         if plan is not None:
             return plan
@@ -1597,6 +1764,129 @@ def solve_s5i5(game: Any, level_idx: int) -> list | None:
 # TN36 Solver: Engine-delegated click game
 # ============================================================================
 
+def _solve_tn36_state_transition_strategy(
+    game: Any,
+    original_level: int,
+) -> list[tuple] | None:
+    """TN36 state transition graph strategy — deterministic BFS on transition graph.
+
+    Based on v3.14.0 article2 §3.3 Liu Mechanism: TN36 has two state machines
+    where each click triggers a deterministic state transition. By simulating
+    all possible click targets from each reachable state, we build a transition
+    graph and search for the shortest path from initial state to goal state.
+
+    Strategy:
+        1. Get all click targets from the game engine.
+        2. Build state transition graph by simulating each click.
+        3. BFS on transition graph for shortest path to goal state.
+        4. Convert click sequence to (GameAction.ACTION6, {x,y}) plan.
+
+    Args:
+        game: The game object (will use deepcopy for simulation).
+        original_level: Original level index for solved-check.
+
+    Returns:
+        List of (GameAction, data) tuples, or None if strategy fails.
+
+    Self-test:
+        >>> result = _solve_tn36_state_transition_strategy(None, 0)
+        >>> assert result is None  # No game → no plan
+    """
+    from arcengine import GameAction, ActionInput
+
+    if game is None:
+        return None
+
+    # ── Step 1: Get click targets ──
+    click_targets: list[tuple[int, int]] = []
+    seen_targets: set[tuple[int, int]] = set()
+
+    all_valid = _get_valid_action_inputs(game)
+    for ai in all_valid:
+        aid = ai.id if not hasattr(ai.id, 'value') else ai.id.value
+        if aid == 6:
+            data = ai.data if ai.data else {}
+            x = int(data.get('x', 0))
+            y = int(data.get('y', 0))
+            if (x, y) != (0, 0) and (x, y) not in seen_targets:
+                seen_targets.add((x, y))
+                click_targets.append((x, y))
+
+    # Fallback: find click targets by sprite tags
+    if not click_targets:
+        for tag_name in ("Maidxz", "qqifsatqdo", "sys_click"):
+            clickables = _get_sprites_by_tag(game, tag_name)
+            if clickables:
+                for sprite in sorted(clickables, key=lambda s: (_sprite_pos(s)[1], _sprite_pos(s)[0])):
+                    pos = _sprite_display_center(game, sprite)
+                    if pos != (0, 0) and pos not in seen_targets:
+                        seen_targets.add(pos)
+                        click_targets.append(pos)
+                break
+
+    if not click_targets:
+        return None
+
+    # ── Step 2: Build state transition graph ──
+    transition_graph = _build_state_transition_graph(
+        game, click_targets, max_sim_depth=30,
+    )
+
+    if not transition_graph:
+        return None
+
+    # ── Step 3: BFS for shortest path ──
+    initial_hash = _tn36_internal_state_hash(game)
+
+    # Goal check: state that satisfies win condition
+    def goal_check(state_hash: str) -> bool:
+        # Check if any state in the transition graph corresponds to a solved state
+        # We can't directly check from hash alone, so we use the transition graph
+        # terminal condition: states with no outgoing transitions are likely goal states
+        return state_hash not in transition_graph
+
+    shortest_click_path = _find_shortest_path_in_transition_graph(
+        transition_graph, initial_hash, goal_check,
+    )
+
+    if shortest_click_path is None:
+        # Try longer BFS with more permissive goal check
+        # Re-build with deeper simulation
+        transition_graph2 = _build_state_transition_graph(
+            game, click_targets, max_sim_depth=50,
+        )
+        shortest_click_path = _find_shortest_path_in_transition_graph(
+            transition_graph2, initial_hash, goal_check,
+        )
+
+    if shortest_click_path is None:
+        return None
+
+    # ── Step 4: Convert to action plan ──
+    plan: list[tuple] = []
+    sim_game = copy.deepcopy(game)
+
+    for click_pos in shortest_click_path:
+        plan.append((GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]}))
+        ai = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
+        _perform_action_safe(sim_game, ai)
+
+    # Verify
+    if _is_level_solved(sim_game, original_level):
+        return plan
+
+    # If not solved, try EML object-level search
+    try:
+        eml_hg = extract_eml_hypergraph(game)
+        eml_plan = solve_eml_object_search(game, eml_hg, max_depth=30, max_time=15.0)
+        if eml_plan is not None:
+            return eml_plan
+    except Exception:
+        pass
+
+    return None
+
+
 def _tn36_internal_state_hash(game: Any) -> str:
     """TN36-specific state hash — version-robust with duck-typing.
 
@@ -1861,11 +2151,11 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
         - Each has htntnzkbzu (current selection) and aqszntqeae (target)
         - Win: bzirenxmrg.htntnzkbzu matches aqszntqeae in x,y,scale,rotation,color
 
-    Strategy (v3.13.0):
-        Primary: κ-Priority Search (κ-PS) with IC gradient guidance.
-        Fallback: BFS/Best-first search using deepcopy for each node. Uses
-        the version-robust _tn36_internal_state_hash for dedup and
-        _tn36_progress_score for heuristic ordering.
+    Strategy (v3.14.0):
+        Primary: State transition graph strategy — simulate all click targets,
+        build deterministic transition graph, BFS for shortest path to goal.
+        Fallback: κ-Priority Search (κ-PS) with Liu mechanism S_rel formula.
+        Last resort: Best-first search using deepcopy for each node.
     """
     import copy
     import time
@@ -1878,10 +2168,20 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Primary: κ-Priority Search (v3.13.0) ──
+    # ── Primary (v3.14.0): State transition graph strategy ──
+    # Build transition graph from click simulations, BFS shortest path
+    try:
+        stg_plan = _solve_tn36_state_transition_strategy(game, original_level)
+        if stg_plan is not None:
+            return stg_plan
+    except Exception:
+        pass
+
+    # ── Secondary: κ-Priority Search (v3.14.0) with Liu mechanism ──
     try:
         plan = solve_kappa_priority_search(
-            game, max_depth=50, max_nodes=50000, max_time=45.0, kappa_weight=10.0,
+            game, max_depth=50, max_nodes=50000, max_time=45.0,
+            use_liu_mechanism=True,
         )
         if plan is not None:
             return plan
@@ -2300,6 +2600,138 @@ def solve_re86(game: Any, level_idx: int) -> list | None:
 # AR25 Solver: Mirror reflection
 # ============================================================================
 
+def _solve_ar25_mirror_strategy(
+    game: Any,
+    original_level: int,
+) -> list[tuple] | None:
+    """AR25 mirror mapping strategy — compute reflection + generate REFLECT macros.
+
+    Based on v3.14.0 article1 §3.1 EML超图折叠: extracts source sprites
+    and target positions from the game, computes mirror mapping (which
+    mirror axis maps each sprite to its target), and generates REFLECT
+    macro-actions that move each sprite to its reflected position.
+
+    Strategy:
+        1. Extract sprites, targets, mirrors from game tags.
+        2. Compute mirror mapping via _mirror_mapping().
+        3. For each mapping, generate pixel-level action sequence to
+           move sprite to reflected target position.
+        4. Verify plan via simulation.
+
+    Args:
+        game: The game object (will use deepcopy for simulation).
+        original_level: Original level index for solved-check.
+
+    Returns:
+        List of (GameAction, data) tuples, or None if strategy fails.
+
+    Self-test:
+        >>> result = _solve_ar25_mirror_strategy(None, 0)
+        >>> assert result is None  # No game → no plan
+    """
+    from arcengine import GameAction, ActionInput
+
+    if game is None:
+        return None
+
+    # ── Step 1: Extract sprites, targets, mirrors ──
+    sprites = _get_sprites_by_tag(game, '0006lxjtqggkmi')
+    if not sprites:
+        sprites = _get_sprites_by_tag(game, 'sys_click')
+    if not sprites:
+        sprites = _get_sprites_by_tag(game, 'movable')
+    if not sprites:
+        # Fallback: use all sprites except targets and mirrors
+        all_sprites = _get_all_sprites(game)
+        targets = _get_sprites_by_tag(game, '0001sruqbuvukh')
+        mirrors = _get_sprites_by_tag(game, '0003uqrdzdofso')
+        exclude = set(id(t) for t in targets) | set(id(m) for m in mirrors)
+        sprites = [s for s in all_sprites if id(s) not in exclude]
+
+    targets = _get_sprites_by_tag(game, '0001sruqbuvukh')
+    if not targets:
+        targets = _get_sprites_by_tag(game, 'target')
+    if not targets:
+        return None
+
+    mirrors = _get_sprites_by_tag(game, '0003uqrdzdofso')
+    if not mirrors:
+        mirrors = _get_sprites_by_tag(game, 'mirror')
+
+    # ── Step 2: Compute mirror mapping ──
+    sprite_tuples = [
+        (int(getattr(s, 'x', 0)), int(getattr(s, 'y', 0)),
+         int(getattr(s, 'width', 1)), int(getattr(s, 'height', 1)))
+        for s in sprites
+    ]
+    target_tuples = [
+        (int(getattr(t, 'x', 0)), int(getattr(t, 'y', 0)),
+         int(getattr(t, 'width', 1)), int(getattr(t, 'height', 1)))
+        for t in targets
+    ]
+    mirror_tuples = [
+        (int(getattr(m, 'x', 0)), int(getattr(m, 'y', 0)),
+         int(getattr(m, 'width', 1)), int(getattr(m, 'height', 1)))
+        for m in mirrors
+    ] if mirrors else []
+
+    mappings = _mirror_mapping(sprite_tuples, target_tuples, mirror_tuples)
+    if not mappings:
+        # Try EML object-level search as backup
+        try:
+            eml_hg = extract_eml_hypergraph(game)
+            eml_plan = solve_eml_object_search(game, eml_hg, max_depth=60, max_time=15.0)
+            if eml_plan is not None:
+                return eml_plan
+        except Exception:
+            pass
+        return None
+
+    # ── Step 3: Generate macro-action plan ──
+    step_size = getattr(game, '_step_size', 1)
+    if step_size <= 0:
+        step_size = 1
+
+    plan: list[tuple] = []
+    sim_game = copy.deepcopy(game)
+
+    for sprite_idx, axis, target_pos in mappings:
+        sprite = sprites[sprite_idx]
+
+        # Switch to sprite (ACTION5)
+        plan.append((GameAction.ACTION5, None))
+        ai_switch = ActionInput(id=5, data={})
+        _perform_action_safe(sim_game, ai_switch)
+
+        # Click sprite to select it
+        click_pos = _sprite_display_center(sim_game, sprite)
+        plan.append((GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]}))
+        ai_click = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
+        _perform_action_safe(sim_game, ai_click)
+
+        # Move sprite to reflected target position
+        move_actions = _generate_move_pixel_actions(
+            sim_game, sprite, target_pos[0], target_pos[1], step_size,
+        )
+        plan.extend(move_actions)
+
+        # Simulate movement
+        for action_tuple in move_actions:
+            aid = action_tuple[0]
+            aid_val = aid.value if hasattr(aid, 'value') else aid
+            if aid_val == 6 and action_tuple[1] is not None:
+                ai_move = ActionInput(id=aid_val, data=action_tuple[1])
+            else:
+                ai_move = ActionInput(id=aid_val, data={})
+            _perform_action_safe(sim_game, ai_move)
+
+    # Verify the plan
+    if _is_level_solved(sim_game, original_level):
+        return plan
+
+    return None
+
+
 def solve_ar25(game: Any, level_idx: int) -> list | None:
     """Solve AR25: Move sprites with mirrors for symmetric pattern using BFS.
 
@@ -2313,10 +2745,11 @@ def solve_ar25(game: Any, level_idx: int) -> list | None:
         - ACTION7: undo
         - Win: all target positions covered by reflection
 
-    Strategy (v3.13.0):
-        Primary: κ-Priority Search (κ-PS) with IC gradient guidance.
-        Fallback: BFS with deepcopy that explores ALL valid actions including
-        ACTION5 (sprite switching) and ACTION6 (click).
+    Strategy (v3.14.0):
+        Primary: Mirror mapping strategy (compute reflection mapping from
+        EML hypergraph, generate REFLECT macro-actions for each sprite).
+        Fallback: κ-Priority Search (κ-PS) with Liu mechanism S_rel formula.
+        Last resort: BFS with deepcopy.
     """
     import copy
     import time
@@ -2328,10 +2761,20 @@ def solve_ar25(game: Any, level_idx: int) -> list | None:
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Primary: κ-Priority Search (v3.13.0) ──
+    # ── Primary (v3.14.0): Mirror mapping strategy ──
+    # Compute mirror reflection mapping + generate REFLECT macro-actions
+    try:
+        mirror_plan = _solve_ar25_mirror_strategy(game, original_level)
+        if mirror_plan is not None:
+            return mirror_plan
+    except Exception:
+        pass
+
+    # ── Secondary: κ-Priority Search (v3.14.0) with Liu mechanism ──
     try:
         plan = solve_kappa_priority_search(
-            game, max_depth=80, max_nodes=80000, max_time=30.0, kappa_weight=10.0,
+            game, max_depth=80, max_nodes=80000, max_time=30.0,
+            use_liu_mechanism=True,
         )
         if plan is not None:
             return plan
@@ -2990,11 +3433,1430 @@ def _compute_gex_residual(
     return 0.5
 
 
-# ============================================================================
-# κ-Priority Search (κ-PS) — v3.13.0
+# ═══════════════════════════════════════════════════════════════════════════
+# v3.14.0 — EML超图感知模块 (Entity-Mutualism Hypergraph Perception)
+# Based on article1 §3.1 "Entity-Mutualism超图折叠"
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── 卞氏三域标签常量 ──
+DOMAIN_LATENT = 'LATENT'      # 玄域 1/3: 未κ-Snap, 存ψ-anchor
+DOMAIN_MANIFEST = 'MANIFEST'  # 显域 1/7: 已κ-Snap, 物理可测
+DOMAIN_DARK = 'DARK_INFO'     # 隐域 1/8: 具信息基数但未Snap
+
+# ── EML数据结构定义 ──
+EMLNode = namedtuple('EMLNode', [
+    'id', 'color', 'centroid', 'area', 'bbox', 'signature', 'domain_label',
+])
+EMLHyperedge = namedtuple('EMLHyperedge', [
+    'id', 'nodes', 'relation_type', 'domain_label',
+])
+EMLHypergraph = namedtuple('EMLHypergraph', [
+    'nodes', 'hyperedges', 'dead_zero_ratio', 'isomorphism_ratio',
+])
+
+
+def extract_eml_hypergraph(game: Any) -> EMLHypergraph:
+    """Extract Entity-Mutualism Hypergraph from game grid.
+
+    Based on article1 §3.1 "Entity-Mutualism超图折叠": the game grid
+    is decomposed into connected components (blobs), pruned by Dead-Zero
+    threshold, merged by isomorphic signatures, and linked by spatial
+    hyperedges with Bian three-domain labels.
+
+    Steps:
+        1. Connected component extraction: extract all connected regions
+           of same color from the game grid.
+        2. Dead-Zero pruning: discard blobs with area < (1/12 × total_area)
+           as background noise.
+        3. Isomorphic merging: blobs with identical signature
+           (color, height, width, area) are merged into a single EML node.
+        4. Spatial hyperedge construction: adjacent/overlapping EML nodes
+           are connected via hyperedges.
+        5. Bian three-domain labeling: each hyperedge is tagged with
+           LATENT/MANIFEST/DARK_INFO domain labels.
+
+    Args:
+        game: The game object (must provide grid/observation data).
+
+    Returns:
+        EMLHypergraph namedtuple with nodes, hyperedges,
+        dead_zero_ratio (fraction of area pruned), and
+        isomorphism_ratio (fraction of blobs merged).
+
+    Self-test:
+        >>> import numpy as np
+        >>> class MockGame:
+        ...     def __init__(self):
+        ...         self.grid = np.array([
+        ...             [0,0,1,1,0,0,2,0],
+        ...             [0,0,1,1,0,0,0,0],
+        ...             [3,3,0,0,4,4,4,0],
+        ...             [3,3,0,0,4,4,4,0],
+        ...         ])
+        ...         self._score = 0
+        ...         self.current_level = None
+        >>> hg = extract_eml_hypergraph(MockGame())
+        >>> assert len(hg.nodes) >= 2  # At least some blobs survive pruning
+        >>> assert hg.dead_zero_ratio >= 0.0
+        >>> assert hg.isomorphism_ratio >= 0.0
+    """
+    grid = _get_game_grid(game)
+    if grid is None:
+        # Fallback: use sprite-based extraction
+        return _extract_eml_from_sprites(game)
+
+    total_area = grid.size
+    if total_area == 0:
+        return EMLHypergraph(
+            nodes=[], hyperedges=[], dead_zero_ratio=1.0, isomorphism_ratio=0.0,
+        )
+
+    # ── Step 1: Connected component extraction ──
+    unique_colors = np.unique(grid)
+    all_blobs: list[dict] = []  # Raw blob dicts before merging
+    blob_id_counter = 0
+
+    for color_val in unique_colors:
+        color_mask = (grid == color_val)
+        # Find connected components for this color using flood fill
+        visited_mask = np.zeros_like(grid, dtype=bool)
+        h, w = grid.shape
+
+        for r in range(h):
+            for c in range(w):
+                if color_mask[r, c] and not visited_mask[r, c]:
+                    # BFS flood fill from (r, c)
+                    component_cells: list[tuple[int, int]] = []
+                    queue = deque([(r, c)])
+                    visited_mask[r, c] = True
+                    min_r, max_r = r, r
+                    min_c, max_c = c, c
+
+                    while queue:
+                        cr, cc = queue.popleft()
+                        component_cells.append((cr, cc))
+                        min_r = min(min_r, cr)
+                        max_r = max(max_r, cr)
+                        min_c = min(min_c, cc)
+                        max_c = max(max_c, cc)
+
+                        # 4-connectivity neighbors
+                        for dr, dc in ((-1, 0), (1, 0), (0, -1), (0, 1)):
+                            nr, nc = cr + dr, cc + dc
+                            if 0 <= nr < h and 0 <= nc < w:
+                                if color_mask[nr, nc] and not visited_mask[nr, nc]:
+                                    visited_mask[nr, nc] = True
+                                    queue.append((nr, nc))
+
+                    area = len(component_cells)
+                    bbox_height = max_r - min_r + 1
+                    bbox_width = max_c - min_c + 1
+                    centroid_r = sum(cr for cr, cc in component_cells) / area
+                    centroid_c = sum(cc for cr, cc in component_cells) / area
+
+                    all_blobs.append({
+                        'id': blob_id_counter,
+                        'color': int(color_val),
+                        'centroid': (centroid_r, centroid_c),
+                        'area': area,
+                        'bbox': (min_r, min_c, max_r, max_c),
+                        'signature': (int(color_val), bbox_height, bbox_width, area),
+                        'cells': set(component_cells),
+                    })
+                    blob_id_counter += 1
+
+    # ── Step 2: Dead-Zero pruning ──
+    # area < (1/12 × total_area) → background noise, discard
+    dead_zero_threshold = total_area / 12.0
+    surviving_blobs: list[dict] = []
+    pruned_area = 0
+
+    for blob in all_blobs:
+        if blob['area'] < dead_zero_threshold:
+            pruned_area += blob['area']
+        else:
+            surviving_blobs.append(blob)
+
+    dead_zero_ratio = pruned_area / max(total_area, 1)
+
+    # ── Step 3: Isomorphic merging ──
+    # Blobs with same signature → merge into single EML node
+    signature_groups: dict[tuple, list[dict]] = {}
+    for blob in surviving_blobs:
+        sig = blob['signature']
+        if sig not in signature_groups:
+            signature_groups[sig] = []
+        signature_groups[sig].append(blob)
+
+    eml_nodes: list[EMLNode] = []
+    node_id_counter = 0
+    merged_count = 0
+    total_surviving = len(surviving_blobs)
+
+    # Assign Bian three-domain labels
+    domain_labels = assign_bian_three_domain_labels(surviving_blobs, game)
+
+    for sig, group in signature_groups.items():
+        if len(group) > 1:
+            merged_count += len(group) - 1  # N blobs merged → 1 node
+        # Representative blob (first in group) for centroid/bbox
+        representative = group[0]
+        # Merge centroid: weighted average by area
+        total_group_area = sum(b['area'] for b in group)
+        merged_centroid_r = sum(
+            b['centroid'][0] * b['area'] for b in group
+        ) / max(total_group_area, 1)
+        merged_centroid_c = sum(
+            b['centroid'][1] * b['area'] for b in group
+        ) / max(total_group_area, 1)
+
+        # Use domain label of representative blob
+        domain_label = domain_labels.get(representative['id'], DOMAIN_LATENT)
+
+        eml_nodes.append(EMLNode(
+            id=node_id_counter,
+            color=representative['color'],
+            centroid=(merged_centroid_r, merged_centroid_c),
+            area=total_group_area,
+            bbox=representative['bbox'],
+            signature=sig,
+            domain_label=domain_label,
+        ))
+        node_id_counter += 1
+
+    isomorphism_ratio = merged_count / max(total_surviving, 1)
+
+    # ── Step 4: Spatial hyperedge construction ──
+    # Adjacent/overlapping nodes → hyperedge
+    # "Adjacent" = bounding boxes overlap or distance between centroids < threshold
+    adjacency_threshold = max(grid.shape) * 0.3  # 30% of grid dimension
+    eml_hyperedges: list[EMLHyperedge] = []
+    edge_id_counter = 0
+
+    for i in range(len(eml_nodes)):
+        for j in range(i + 1, len(eml_nodes)):
+            ni = eml_nodes[i]
+            nj = eml_nodes[j]
+            # Centroid distance
+            dist_r = abs(ni.centroid[0] - nj.centroid[0])
+            dist_c = abs(ni.centroid[1] - nj.centroid[1])
+            dist = math.sqrt(dist_r ** 2 + dist_c ** 2)
+
+            # Bounding box overlap check
+            bi = ni.bbox  # (min_r, min_c, max_r, max_c)
+            bj = nj.bbox
+            overlap = (
+                bi[0] <= bj[2] + 1 and bj[0] <= bi[2] + 1
+                and bi[1] <= bj[3] + 1 and bj[1] <= bi[3] + 1
+            )
+
+            if dist < adjacency_threshold or overlap:
+                # Determine relation type based on spatial configuration
+                if overlap:
+                    relation_type = 'overlap'
+                elif ni.color == nj.color:
+                    relation_type = 'same_color_adjacent'
+                else:
+                    relation_type = 'cross_color_adjacent'
+
+                # Hyperedge domain label: dominant domain among constituent nodes
+                node_domains = [ni.domain_label, nj.domain_label]
+                if DOMAIN_MANIFEST in node_domains:
+                    edge_domain = DOMAIN_MANIFEST
+                elif DOMAIN_LATENT in node_domains:
+                    edge_domain = DOMAIN_LATENT
+                else:
+                    edge_domain = DOMAIN_DARK
+
+                eml_hyperedges.append(EMLHyperedge(
+                    id=edge_id_counter,
+                    nodes=(ni.id, nj.id),
+                    relation_type=relation_type,
+                    domain_label=edge_domain,
+                ))
+                edge_id_counter += 1
+
+    return EMLHypergraph(
+        nodes=eml_nodes,
+        hyperedges=eml_hyperedges,
+        dead_zero_ratio=dead_zero_ratio,
+        isomorphism_ratio=isomorphism_ratio,
+    )
+
+
+def _extract_eml_from_sprites(game: Any) -> EMLHypergraph:
+    """Fallback EML extraction when grid data is unavailable.
+
+    Uses sprite positions and properties instead of grid pixel analysis.
+    Constructs EML nodes from sprites and hyperedges from spatial proximity.
+
+    Args:
+        game: The game object with sprite data.
+
+    Returns:
+        EMLHypergraph constructed from sprite attributes.
+    """
+    sprites = _get_all_sprites(game)
+    if not sprites:
+        return EMLHypergraph(
+            nodes=[], hyperedges=[], dead_zero_ratio=1.0, isomorphism_ratio=0.0,
+        )
+
+    # Compute total area from game dimensions or sprite coverage
+    total_area = 64 * 64  # Default display area
+
+    # Build raw blobs from sprites
+    all_blobs: list[dict] = []
+    for idx, s in enumerate(sprites):
+        sx = int(getattr(s, 'x', 0))
+        sy = int(getattr(s, 'y', 0))
+        sw = int(getattr(s, 'width', 1))
+        sh = int(getattr(s, 'height', 1))
+        area = sw * sh
+        # Color: try to get from sprite, fallback to index
+        color = getattr(s, 'color', idx % 8)
+        if hasattr(color, 'value'):
+            color = int(color.value)
+        elif not isinstance(color, int):
+            color = idx % 8
+
+        centroid = (sy + sh / 2.0, sx + sw / 2.0)  # (row, col) format
+        bbox = (sy, sx, sy + sh - 1, sx + sw - 1)
+        signature = (color, sh, sw, area)
+
+        all_blobs.append({
+            'id': idx,
+            'color': color,
+            'centroid': centroid,
+            'area': area,
+            'bbox': bbox,
+            'signature': signature,
+            'cells': set(),  # No pixel-level cells from sprites
+        })
+
+    # Dead-Zero pruning on sprite blobs
+    dead_zero_threshold = total_area / 12.0
+    surviving_blobs: list[dict] = []
+    pruned_area = 0
+    for blob in all_blobs:
+        if blob['area'] < dead_zero_threshold:
+            pruned_area += blob['area']
+        else:
+            surviving_blobs.append(blob)
+
+    dead_zero_ratio = pruned_area / max(total_area, 1)
+
+    # Isomorphic merging
+    signature_groups: dict[tuple, list[dict]] = {}
+    for blob in surviving_blobs:
+        sig = blob['signature']
+        signature_groups.setdefault(sig, []).append(blob)
+
+    domain_labels = assign_bian_three_domain_labels(surviving_blobs, game)
+
+    eml_nodes: list[EMLNode] = []
+    node_id_counter = 0
+    merged_count = 0
+    total_surviving = len(surviving_blobs)
+
+    for sig, group in signature_groups.items():
+        if len(group) > 1:
+            merged_count += len(group) - 1
+        representative = group[0]
+        total_group_area = sum(b['area'] for b in group)
+        merged_centroid_r = sum(
+            b['centroid'][0] * b['area'] for b in group
+        ) / max(total_group_area, 1)
+        merged_centroid_c = sum(
+            b['centroid'][1] * b['area'] for b in group
+        ) / max(total_group_area, 1)
+
+        domain_label = domain_labels.get(representative['id'], DOMAIN_LATENT)
+
+        eml_nodes.append(EMLNode(
+            id=node_id_counter,
+            color=representative['color'],
+            centroid=(merged_centroid_r, merged_centroid_c),
+            area=total_group_area,
+            bbox=representative['bbox'],
+            signature=sig,
+            domain_label=domain_label,
+        ))
+        node_id_counter += 1
+
+    isomorphism_ratio = merged_count / max(total_surviving, 1)
+
+    # Spatial hyperedges from sprite proximity
+    adjacency_threshold = 20.0  # Pixels
+    eml_hyperedges: list[EMLHyperedge] = []
+    edge_id_counter = 0
+
+    for i in range(len(eml_nodes)):
+        for j in range(i + 1, len(eml_nodes)):
+            ni = eml_nodes[i]
+            nj = eml_nodes[j]
+            dist = math.sqrt(
+                (ni.centroid[0] - nj.centroid[0]) ** 2
+                + (ni.centroid[1] - nj.centroid[1]) ** 2
+            )
+            if dist < adjacency_threshold:
+                node_domains = [ni.domain_label, nj.domain_label]
+                if DOMAIN_MANIFEST in node_domains:
+                    edge_domain = DOMAIN_MANIFEST
+                elif DOMAIN_LATENT in node_domains:
+                    edge_domain = DOMAIN_LATENT
+                else:
+                    edge_domain = DOMAIN_DARK
+
+                eml_hyperedges.append(EMLHyperedge(
+                    id=edge_id_counter,
+                    nodes=(ni.id, nj.id),
+                    relation_type='sprite_adjacent',
+                    domain_label=edge_domain,
+                ))
+                edge_id_counter += 1
+
+    return EMLHypergraph(
+        nodes=eml_nodes,
+        hyperedges=eml_hyperedges,
+        dead_zero_ratio=dead_zero_ratio,
+        isomorphism_ratio=isomorphism_ratio,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v3.14.0 — 卞氏三域标签器 (Bian Three-Domain Labeler)
+# Assigns LATENT/MANIFEST/DARK_INFO labels to EML nodes
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def assign_bian_three_domain_labels(
+    blobs: list[dict],
+    game: Any,
+) -> dict[int, str]:
+    """Assign Bian three-domain labels to EML blob candidates.
+
+    Based on article1 §3.1 卞氏三域分类:
+        - MANIFEST (显域 1/7): Objects already present in score/progress
+          tracking — physically measurable, κ-Snap captured.
+        - LATENT (玄域 1/3): Objects existing but not activated — have
+          ψ-anchor potential, awaiting G_ego activation.
+        - DARK_INFO (隐域 1/8): Objects with information cardinality but
+          not κ-Snap captured — dark information silo.
+
+    Classification criteria:
+        1. MANIFEST: Blob's color/position appears in game._score changes,
+           sprite tags include 'matched', 'paired', 'score', 'progress',
+           or blob is a target/goal object referenced by the win condition.
+        2. DARK_INFO: Blob has significant area and unique color/shape but
+           no score/progress association — information-bearing but unutilized.
+        3. LATENT: Everything else — exists but not yet activated.
+
+    Args:
+        blobs: List of raw blob dicts (from extract_eml_hypergraph).
+            Each blob has 'id', 'color', 'area', 'signature', 'cells'.
+        game: The game object for score/tag/attribute queries.
+
+    Returns:
+        Dict mapping blob_id → domain_label string.
+
+    Self-test:
+        >>> labels = assign_bian_three_domain_labels([], None)
+        >>> assert labels == {}
+        >>> class MockGame2:
+        ...     _score = 10
+        ...     current_level = None
+        >>> blobs_test = [{'id': 0, 'color': 1, 'area': 25, 'signature': (1,5,5,25)}]
+        >>> labels2 = assign_bian_three_domain_labels(blobs_test, MockGame2())
+        >>> assert 0 in labels2
+        >>> assert labels2[0] in (DOMAIN_LATENT, DOMAIN_MANIFEST, DOMAIN_DARK)
+    """
+    if not blobs:
+        return {}
+
+    labels: dict[int, str] = {}
+    score = getattr(game, '_score', 0)
+
+    # Collect manifest indicators from game state
+    manifest_tags = {'matched', 'paired', 'score', 'progress', 'goal',
+                     'target', 'win', 'completed', 'checked'}
+    manifest_colors: set[int] = set()
+
+    # Check sprites for manifest indicators
+    sprites = _get_all_sprites(game)
+    for s in sprites:
+        s_tags = getattr(s, 'tags', [])
+        if isinstance(s_tags, (list, tuple)):
+            tag_set = set(str(t).lower() for t in s_tags)
+            if tag_set & manifest_tags:
+                # This sprite is manifest — its color is manifest
+                s_color = getattr(s, 'color', None)
+                if s_color is not None:
+                    if hasattr(s_color, 'value'):
+                        manifest_colors.add(int(s_color.value))
+                    elif isinstance(s_color, int):
+                        manifest_colors.add(s_color)
+
+    # Check game attributes for manifest indicators
+    manifest_attrs = ['nsevyuople', 'zmqreragji', 'vklyonlcrw',
+                      'nkuphphdgrp', 'iajuzrgttrv']
+    for attr in manifest_attrs:
+        val = getattr(game, attr, None)
+        if val is not None:
+            # Any non-None value in these attrs indicates progress
+            if isinstance(val, bool) and val:
+                pass  # Manifest progress detected
+            elif isinstance(val, dict) and val:
+                pass  # Manifest pairing detected
+            elif isinstance(val, (int, float)) and val > 0:
+                pass  # Manifest score change detected
+
+    # Score change detection: if score > 0, some progress is manifest
+    has_score_progress = score > 0
+
+    # Classify each blob
+    for blob in blobs:
+        blob_id = blob['id']
+        blob_color = blob['color']
+        blob_area = blob['area']
+        blob_signature = blob['signature']
+
+        # ── MANIFEST check ──
+        is_manifest = False
+
+        # Color matches a manifest sprite
+        if blob_color in manifest_colors:
+            is_manifest = True
+
+        # Score progress indicates manifest domain
+        if has_score_progress and blob_area >= 5:
+            # Large blobs with score progress → likely manifest
+            is_manifest = True
+
+        # Check if blob cells overlap with manifest-tagged sprites
+        if 'cells' in blob and blob['cells'] and sprites:
+            for s in sprites:
+                s_tags = getattr(s, 'tags', [])
+                if isinstance(s_tags, (list, tuple)):
+                    tag_set = set(str(t).lower() for t in s_tags)
+                    if tag_set & manifest_tags:
+                        # Sprite with manifest tag exists → nearby blobs are manifest
+                        sx = int(getattr(s, 'x', 0))
+                        sy = int(getattr(s, 'y', 0))
+                        # Check proximity to blob centroid
+                        blob_cr, blob_cc = blob['centroid']
+                        sprite_dist = math.sqrt(
+                            (blob_cr - sy) ** 2 + (blob_cc - sx) ** 2,
+                        )
+                        if sprite_dist < 10:
+                            is_manifest = True
+
+        if is_manifest:
+            labels[blob_id] = DOMAIN_MANIFEST
+            continue
+
+        # ── DARK_INFO check ──
+        # Significant area + unique signature + no manifest association
+        unique_sig_count = sum(
+            1 for b in blobs if b['signature'] == blob_signature
+        )
+        is_dark = (
+            blob_area >= 8  # Information cardinality threshold
+            and unique_sig_count == 1  # Unique signature = high info content
+            and blob_color not in manifest_colors
+        )
+
+        if is_dark:
+            labels[blob_id] = DOMAIN_DARK
+            continue
+
+        # ── LATENT (default) ──
+        labels[blob_id] = DOMAIN_LATENT
+
+    return labels
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v3.14.0 — 对象级搜索求解器 (EML Object-Level Search Solver)
+# Searches "which object to transform" instead of "which pixel to move"
+# ═══════════════════════════════════════════════════════════════════════════
+
+# ── 宏动作类型定义 ──
+MacroAction = namedtuple('MacroAction', [
+    'action_type', 'object_node_id', 'params', 'pixel_actions',
+])
+
+# Macro action type constants
+MACRO_MOVE_OBJECT = 'MOVE_OBJECT'
+MACRO_CLICK_OBJECT = 'CLICK_OBJECT'
+MACRO_SWITCH_TO = 'SWITCH_TO'
+MACRO_REFLECT = 'REFLECT'
+MACRO_ROTATE = 'ROTATE'
+
+
+def solve_eml_object_search(
+    game: Any,
+    eml_hg: EMLHypergraph,
+    max_depth: int = 20,
+    max_nodes: int = 50000,
+    max_time: float = 20.0,
+) -> list[tuple] | None:
+    """Solve game using object-level macro-action search on EML hypergraph.
+
+    Based on article1 §3.1 and article2 §3.3: instead of enumerating all
+    pixel-level actions (MOVE UP/DOWN/LEFT/RIGHT + CLICK at each position),
+    we search in the space of object transformations — "which object should
+    undergo which transformation". This dramatically reduces the branching
+    factor from 5-50 pixel actions to 3-10 object transformations.
+
+    Strategy:
+        1. Extract MANIFEST nodes from EML hypergraph (known target objects).
+        2. For each MANIFEST node, determine needed transformation to reach
+           goal state (move, click, reflect, rotate).
+        3. Generate macro-action sequences mapping object-level transforms
+           to pixel-level action sequences.
+        4. Use κ-PS in macro-action space (branching factor ≈ 3-10).
+
+    Args:
+        game: The game object (will NOT be modified — uses deepcopy).
+        eml_hg: EMLHypergraph from extract_eml_hypergraph().
+        max_depth: Maximum macro-action depth.
+        max_nodes: Maximum search nodes.
+        max_time: Time limit in seconds.
+
+    Returns:
+        List of (GameAction, data) tuples at pixel level, or None.
+
+    Self-test:
+        >>> hg = EMLHypergraph(nodes=[], hyperedges=[], dead_zero_ratio=0.0, isomorphism_ratio=0.0)
+        >>> result = solve_eml_object_search(None, hg)
+        >>> assert result is None  # Empty hypergraph → no solution
+    """
+    import time as _time
+    import heapq
+    from arcengine import GameAction, ActionInput
+
+    if not eml_hg.nodes:
+        return None
+
+    # Identify manifest nodes (known target objects to transform)
+    manifest_nodes = [
+        n for n in eml_hg.nodes if n.domain_label == DOMAIN_MANIFEST
+    ]
+    latent_nodes = [
+        n for n in eml_hg.nodes if n.domain_label == DOMAIN_LATENT
+    ]
+
+    # If no manifest nodes, try latent nodes (need G_ego activation)
+    target_nodes = manifest_nodes if manifest_nodes else latent_nodes
+    if not target_nodes:
+        return None
+
+    original_level = game._current_level_index
+    t0 = _time.time()
+
+    # ── Generate macro-action candidates ──
+    # For each target node, generate possible transformations
+    macro_actions = _generate_macro_actions(game, target_nodes, eml_hg)
+    if not macro_actions:
+        return None
+
+    # ── κ-PS in macro-action space ──
+    # Each macro action maps to a pixel-level action sequence
+    # Priority: IC-based ordering using Liu mechanism S_rel formula
+    original_game = copy.deepcopy(game)
+    initial_hash = _game_state_hash(game)
+    counter = 0
+
+    pq: list[tuple[float, int, Any, list[tuple], str]] = []
+    heapq.heappush(pq, (0.0, counter, copy.deepcopy(game), [], initial_hash))
+    visited: set[str] = {initial_hash}
+    total_nodes = 0
+
+    while pq:
+        if _time.time() - t0 > max_time:
+            break
+        if total_nodes > max_nodes:
+            break
+
+        neg_priority, cnt, g, path, prev_hash = heapq.heappop(pq)
+        total_nodes += 1
+        current_depth = len(path)
+
+        # ── Expand using macro-actions ──
+        # Re-extract macro actions from current game state
+        current_hg = extract_eml_hypergraph(g)
+        current_manifest = [
+            n for n in current_hg.nodes if n.domain_label == DOMAIN_MANIFEST
+        ]
+        current_target = current_manifest if current_manifest else [
+            n for n in current_hg.nodes if n.domain_label == DOMAIN_LATENT
+        ]
+
+        current_macros = _generate_macro_actions(g, current_target, current_hg)
+
+        for macro in current_macros:
+            if current_depth + len(macro.pixel_actions) > max_depth:
+                continue  # Too deep
+
+            g_copy = copy.deepcopy(g)
+
+            # Execute the pixel-level action sequence for this macro
+            success = True
+            for pixel_action in macro.pixel_actions:
+                ai = _make_action_input_from_tuple(g_copy, pixel_action)
+                if ai is None:
+                    success = False
+                    break
+                if not _perform_action_safe(g_copy, ai):
+                    success = False
+                    break
+
+            if not success:
+                continue
+
+            # Check if solved
+            if _is_level_solved(g_copy, original_level):
+                # Return the full pixel-level path
+                new_path = path + list(macro.pixel_actions)
+                return new_path
+
+            # Dedup by state hash
+            state_h = _game_state_hash(g_copy)
+            if state_h in visited or state_h == prev_hash:
+                continue
+            visited.add(state_h)
+
+            # ── Liu mechanism priority (article2 §3.3) ──
+            ic_est = _estimate_ic_game_state_with_depth(
+                g_copy, g, macro.pixel_actions[0] if macro.pixel_actions else (GameAction.ACTION6, None),
+                current_depth + 1,
+            )
+            gex_residual = _compute_gex_residual(g_copy, original_game)
+
+            # S_rel = 0.1 × num_primitives - 0.5 × IC + 2.0 × GEX
+            # priority = 1/(S_rel + ε), ε = 0.01
+            num_primitives = len(macro.pixel_actions)
+            s_rel = 0.1 * num_primitives - 0.5 * ic_est + 2.0 * gex_residual
+            epsilon = 0.01  # Liu mechanism epsilon (anti-division-by-zero)
+            priority = 1.0 / (s_rel + epsilon)
+            neg_priority_new = -priority
+
+            counter += 1
+            heapq.heappush(
+                pq, (neg_priority_new, counter, g_copy,
+                     path + list(macro.pixel_actions), state_h),
+            )
+
+    return None
+
+
+def _generate_macro_actions(
+    game: Any,
+    target_nodes: list[EMLNode],
+    eml_hg: EMLHypergraph,
+) -> list[MacroAction]:
+    """Generate macro-action candidates from EML nodes.
+
+    For each target EML node, produce candidate object transformations:
+    MOVE_OBJECT, CLICK_OBJECT, SWITCH_TO, REFLECT, ROTATE.
+
+    Each macro action contains the pixel-level action sequence that
+    implements the object-level transformation.
+
+    Args:
+        game: Current game state.
+        target_nodes: EML nodes to generate transformations for.
+        eml_hg: Full EML hypergraph for context.
+
+    Returns:
+        List of MacroAction namedtuples.
+    """
+    from arcengine import GameAction
+
+    macros: list[MacroAction] = []
+
+    # Get game step size and action set
+    step_size = getattr(game, '_step_size', 3)
+    if step_size <= 0:
+        step_size = 3
+
+    sprites = _get_all_sprites(game)
+
+    for node in target_nodes:
+        # Find the sprite corresponding to this EML node
+        # Match by centroid proximity or color+area
+        matching_sprite = None
+        for s in sprites:
+            s_center = _sprite_center(s)
+            s_color = getattr(s, 'color', None)
+            if hasattr(s_color, 'value'):
+                s_color = int(s_color.value)
+
+            # Proximity match
+            node_cr, node_cc = node.centroid
+            dist = math.sqrt(
+                (s_center[0] - node_cc) ** 2 + (s_center[1] - node_cr) ** 2,
+            )
+            if dist < 15:  # Close enough
+                matching_sprite = s
+                break
+
+            # Color+area match fallback
+            sw = int(getattr(s, 'width', 1))
+            sh = int(getattr(s, 'height', 1))
+            if s_color == node.color and sw * sh == node.area:
+                matching_sprite = s
+                break
+
+        if matching_sprite is None:
+            continue
+
+        # ── Generate MOVE_OBJECT macro ──
+        # Try moving the sprite in 4 directions
+        for direction, game_action in [
+            ((0, -step_size), GameAction.ACTION1),  # UP
+            ((0, step_size), GameAction.ACTION2),    # DOWN
+            ((-step_size, 0), GameAction.ACTION3),   # LEFT
+            ((step_size, 0), GameAction.ACTION4),    # RIGHT
+        ]:
+            dx, dy = direction
+            # First select the sprite (if needed), then move
+            pixel_actions: list[tuple] = []
+            # Check if we need to switch to this sprite first
+            if _needs_sprite_switch(game, matching_sprite):
+                switch_pos = _sprite_display_center(game, matching_sprite)
+                pixel_actions.append((GameAction.ACTION6, {'x': switch_pos[0], 'y': switch_pos[1]}))
+            # Then the movement
+            pixel_actions.append((game_action, None))
+            # Multiple steps for larger distances
+            n_steps = max(1, abs(dx + dy) // step_size)
+            for _ in range(n_steps - 1):
+                pixel_actions.append((game_action, None))
+
+            macros.append(MacroAction(
+                action_type=MACRO_MOVE_OBJECT,
+                object_node_id=node.id,
+                params={'dx': dx, 'dy': dy},
+                pixel_actions=pixel_actions,
+            ))
+
+        # ── Generate CLICK_OBJECT macro ──
+        click_pos = _sprite_display_center(game, matching_sprite)
+        macros.append(MacroAction(
+            action_type=MACRO_CLICK_OBJECT,
+            object_node_id=node.id,
+            params={'x': click_pos[0], 'y': click_pos[1]},
+            pixel_actions=[(GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]})],
+        ))
+
+        # ── Generate SWITCH_TO macro ──
+        switch_pos = _sprite_display_center(game, matching_sprite)
+        macros.append(MacroAction(
+            action_type=MACRO_SWITCH_TO,
+            object_node_id=node.id,
+            params={'x': switch_pos[0], 'y': switch_pos[1]},
+            pixel_actions=[(GameAction.ACTION5, None)],
+        ))
+
+        # ── Generate REFLECT macro ──
+        # Try horizontal and vertical reflection
+        for axis in ('horizontal', 'vertical'):
+            macros.append(MacroAction(
+                action_type=MACRO_REFLECT,
+                object_node_id=node.id,
+                params={'axis': axis},
+                pixel_actions=_generate_reflect_pixel_actions(
+                    game, matching_sprite, axis, step_size,
+                ),
+            ))
+
+        # ── Generate ROTATE macro ──
+        # Try 90°, 180°, 270° rotations
+        for angle in (90, 180, 270):
+            macros.append(MacroAction(
+                action_type=MACRO_ROTATE,
+                object_node_id=node.id,
+                params={'angle': angle},
+                pixel_actions=_generate_rotate_pixel_actions(
+                    game, matching_sprite, angle, step_size,
+                ),
+            ))
+
+    return macros
+
+
+def _needs_sprite_switch(game: Any, sprite: Any) -> bool:
+    """Check if the game requires switching to a sprite before acting on it.
+
+    Games with ACTION5 (switch sprite) or ACTION6 (click to select) need
+    an explicit selection action before moving the sprite.
+
+    Args:
+        game: The game object.
+        sprite: The target sprite.
+
+    Returns:
+        True if sprite switching/selection is likely needed.
+    """
+    # Check if game has switch action (ACTION5 or ACTION6 with selection)
+    valid_actions = _get_valid_action_inputs(game)
+    has_switch = False
+    for ai in valid_actions:
+        aid = ai.id
+        aid_val = aid.value if hasattr(aid, 'value') else aid
+        if aid_val == 5:  # ACTION5 = switch sprite
+            has_switch = True
+            break
+
+    # Check if sprite is already selected
+    selected = getattr(game, 'wiayqaumjug', None)
+    if selected is not None:
+        if hasattr(selected, 'x'):
+            sel_x = int(getattr(selected, 'x', -1))
+            sel_y = int(getattr(selected, 'y', -1))
+            sp_x = int(getattr(sprite, 'x', -2))
+            sp_y = int(getattr(sprite, 'y', -2))
+            if sel_x == sp_x and sel_y == sp_y:
+                return False  # Already selected
+
+    return has_switch
+
+
+def _generate_reflect_pixel_actions(
+    game: Any,
+    sprite: Any,
+    axis: str,
+    step_size: int,
+) -> list[tuple]:
+    """Generate pixel-level action sequence for reflecting a sprite.
+
+    Reflection moves the sprite to its mirror position across the
+    specified axis (horizontal or vertical).
+
+    Args:
+        game: The game object.
+        sprite: The sprite to reflect.
+        axis: 'horizontal' or 'vertical'.
+        step_size: Movement step size in pixels.
+
+    Returns:
+        List of (GameAction, data) tuples implementing the reflection.
+    """
+    from arcengine import GameAction
+
+    sx = int(getattr(sprite, 'x', 0))
+    sy = int(getattr(sprite, 'y', 0))
+    sw = int(getattr(sprite, 'width', 1))
+    sh = int(getattr(sprite, 'height', 1))
+
+    # Compute mirror target position
+    if axis == 'horizontal':
+        # Mirror across horizontal midline → reflect y
+        mirror_y = 64 - sy - sh  # Assume 64-height grid
+        target_x = sx
+        target_y = mirror_y
+    else:
+        # Mirror across vertical midline → reflect x
+        mirror_x = 64 - sx - sw
+        target_x = mirror_x
+        target_y = sy
+
+    return _generate_move_pixel_actions(
+        game, sprite, target_x, target_y, step_size,
+    )
+
+
+def _generate_rotate_pixel_actions(
+    game: Any,
+    sprite: Any,
+    angle: int,
+    step_size: int,
+) -> list[tuple]:
+    """Generate pixel-level action sequence for rotating a sprite.
+
+    Rotation moves the sprite to its rotated position and may require
+    switching to the sprite first.
+
+    Args:
+        game: The game object.
+        sprite: The sprite to rotate.
+        angle: Rotation angle in degrees (90, 180, 270).
+        step_size: Movement step size.
+
+    Returns:
+        List of (GameAction, data) tuples.
+    """
+    from arcengine import GameAction
+
+    # For rotation, we typically need to click the sprite
+    # (which may trigger rotation in the game engine)
+    click_pos = _sprite_display_center(game, sprite)
+    actions = [(GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]})]
+
+    # Multiple clicks for multi-step rotations
+    n_clicks = angle // 90
+    for _ in range(n_clicks - 1):
+        actions.append((GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]}))
+
+    return actions
+
+
+def _generate_move_pixel_actions(
+    game: Any,
+    sprite: Any,
+    target_x: int,
+    target_y: int,
+    step_size: int,
+) -> list[tuple]:
+    """Generate pixel-level action sequence to move sprite to target position.
+
+    Computes the direction and number of steps needed, generates the
+    corresponding action tuples. Includes sprite selection if needed.
+
+    Args:
+        game: The game object.
+        sprite: The sprite to move.
+        target_x: Target x position.
+        target_y: Target y position.
+        step_size: Movement step size.
+
+    Returns:
+        List of (GameAction, data) tuples.
+    """
+    from arcengine import GameAction
+
+    sx = int(getattr(sprite, 'x', 0))
+    sy = int(getattr(sprite, 'y', 0))
+
+    actions: list[tuple] = []
+
+    # Select sprite if needed
+    if _needs_sprite_switch(game, sprite):
+        switch_pos = _sprite_display_center(game, sprite)
+        actions.append((GameAction.ACTION6, {'x': switch_pos[0], 'y': switch_pos[1]}))
+
+    dx = target_x - sx
+    dy = target_y - sy
+
+    # Horizontal movement
+    n_x = abs(dx) // step_size
+    if dx > 0:
+        for _ in range(n_x):
+            actions.append((GameAction.ACTION4, None))  # RIGHT
+    elif dx < 0:
+        for _ in range(n_x):
+            actions.append((GameAction.ACTION3, None))  # LEFT
+
+    # Vertical movement
+    n_y = abs(dy) // step_size
+    if dy > 0:
+        for _ in range(n_y):
+            actions.append((GameAction.ACTION2, None))  # DOWN
+    elif dy < 0:
+        for _ in range(n_y):
+            actions.append((GameAction.ACTION1, None))  # UP
+
+    return actions
+
+
+def _make_action_input_from_tuple(
+    game: Any,
+    action_tuple: tuple,
+) -> Any:
+    """Convert an action tuple to an ActionInput object for the engine.
+
+    Args:
+        game: The game object (for context).
+        action_tuple: (GameAction, data_dict_or_None) tuple.
+
+    Returns:
+        ActionInput object, or None if conversion fails.
+    """
+    from arcengine import ActionInput
+
+    action_id = action_tuple[0]
+    action_data = action_tuple[1]
+
+    aid_val = action_id.value if hasattr(action_id, 'value') else action_id
+
+    if action_data is not None and isinstance(action_data, dict):
+        return ActionInput(id=aid_val, data=action_data)
+    else:
+        return ActionInput(id=aid_val, data={})
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v3.14.0 — 匈牙利算法 (Hungarian Assignment) for KA59
+# Solves optimal block-to-target assignment to minimize total movement
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _hungarian_assignment(
+    blocks: list[tuple[int, int]],
+    targets: list[tuple[int, int]],
+) -> list[tuple[int, int]]:
+    """Solve optimal assignment of blocks to targets using Hungarian algorithm.
+
+    Based on article2 §3.3 Liu Mechanism: the assignment that minimizes
+    total S_rel (关系作用量) is found by the Hungarian algorithm, which
+    computes the optimal bipartite matching in O(n³) time.
+
+    For KA59: 5 blocks must be assigned to 5 targets. The Hungarian
+    algorithm finds the assignment minimizing total Manhattan distance.
+
+    Implementation uses the standard O(n³) Hungarian algorithm with
+    cost matrix based on Manhattan distance between blocks and targets.
+
+    Args:
+        blocks: List of (x, y) positions for blocks.
+        targets: List of (x, y) positions for targets.
+
+    Returns:
+        List of (block_index, target_index) pairs representing optimal
+        assignment. Empty list if inputs are empty or mismatched.
+
+    Self-test:
+        >>> blocks_test = [(0, 0), (10, 0), (20, 0)]
+        >>> targets_test = [(20, 0), (10, 0), (0, 0)]
+        >>> result = _hungarian_assignment(blocks_test, targets_test)
+        >>> assert len(result) == 3
+        >>> # Optimal: block 0→target 2, block 1→target 1, block 2→target 0
+        >>> total_dist = sum(abs(blocks_test[b][0]-targets_test[t][0]) + abs(blocks_test[b][1]-targets_test[t][1]) for b, t in result)
+        >>> assert total_dist == 0  # Perfect assignment with 0 distance
+    """
+    n_blocks = len(blocks)
+    n_targets = len(targets)
+
+    if n_blocks == 0 or n_targets == 0:
+        return []
+
+    # Pad to equal size if needed (dummy targets with zero cost for extras)
+    n = max(n_blocks, n_targets)
+
+    # Build cost matrix: Manhattan distance between each block-target pair
+    cost_matrix = [[0] * n for _ in range(n)]
+    for i in range(n_blocks):
+        for j in range(n_targets):
+            dx = abs(blocks[i][0] - targets[j][0])
+            dy = abs(blocks[i][1] - targets[j][1])
+            cost_matrix[i][j] = dx + dy
+        # Dummy targets (if n_targets < n_blocks): zero cost for unassigned
+        for j in range(n_targets, n):
+            cost_matrix[i][j] = 0
+
+    # Dummy blocks (if n_blocks < n_targets): zero cost for unassigned
+    for i in range(n_blocks, n):
+        for j in range(n):
+            cost_matrix[i][j] = 0
+
+    # ── O(n³) Hungarian algorithm ──
+    # Standard implementation for minimum cost bipartite matching
+
+    # Potential (dual variables) for rows and columns
+    u = [0] * (n + 1)  # Row potentials
+    v = [0] * (n + 1)  # Column potentials
+    p = [0] * (n + 1)  # Matching: p[j] = row assigned to column j
+    way = [0] * (n + 1)  # Way array for path reconstruction
+
+    for i in range(1, n + 1):
+        p[0] = i
+        j0 = 0  # Virtual column
+        minv = [float('inf')] * (n + 1)
+        used = [False] * (n + 1)
+
+        while True:
+            used[j0] = True
+            i0 = p[j0]
+            delta = float('inf')
+            j1 = -1
+
+            for j in range(1, n + 1):
+                if not used[j]:
+                    cur = cost_matrix[i0 - 1][j - 1] - u[i0] - v[j]
+                    if cur < minv[j]:
+                        minv[j] = cur
+                        way[j] = j0
+                    if minv[j] < delta:
+                        delta = minv[j]
+                        j1 = j
+
+            for j in range(n + 1):
+                if used[j]:
+                    u[p[j]] += delta
+                    v[j] -= delta
+                else:
+                    minv[j] -= delta
+
+            j0 = j1
+            if p[j0] == 0:
+                break
+
+        # Update matching along the way
+        while j0:
+            j1 = way[j0]
+            p[j0] = p[j1]
+            j0 = j1
+
+    # Extract assignment results
+    assignment: list[tuple[int, int]] = []
+    for j in range(1, n + 1):
+        if p[j] <= n_blocks and j <= n_targets:
+            assignment.append((p[j] - 1, j - 1))
+
+    return assignment
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v3.14.0 — 镜像映射 (Mirror Mapping) for AR25
+# Computes mirror reflection mapping from sprites to target positions
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _mirror_mapping(
+    sprites: list[tuple[int, int, int, int]],
+    targets: list[tuple[int, int, int, int]],
+    mirrors: list[tuple[int, int, int, int]],
+) -> list[tuple[int, str, tuple[int, int]]]:
+    """Compute mirror mapping for AR25: find reflection axis and positions.
+
+    Based on article1 §3.1 EML超图折叠: each sprite must be reflected
+    across a mirror axis to align with target positions. The function
+    computes the optimal mirror axis for each sprite-target pair and
+    generates the corresponding REFLECT macro-action parameters.
+
+    For AR25: sprites, targets, and mirrors are positioned on the grid.
+    Each sprite needs to be reflected across a mirror to reach a target.
+
+    Args:
+        sprites: List of (x, y, width, height) for movable sprites.
+        targets: List of (x, y, width, height) for target positions.
+        mirrors: List of (x, y, width, height) for mirror objects.
+
+    Returns:
+        List of (sprite_index, mirror_axis, target_position) tuples.
+        mirror_axis is 'horizontal' or 'vertical'.
+        target_position is (x, y) where sprite should end up after reflection.
+
+    Self-test:
+        >>> sprites_t = [(10, 10, 3, 3)]
+        >>> targets_t = [(50, 10, 3, 3)]
+        >>> mirrors_t = [(30, 0, 1, 64)]  # Vertical mirror at x=30
+        >>> result = _mirror_mapping(sprites_t, targets_t, mirrors_t)
+        >>> assert len(result) >= 1
+        >>> assert result[0][1] in ('horizontal', 'vertical')
+    """
+    if not sprites or not targets:
+        return []
+
+    mappings: list[tuple[int, str, tuple[int, int]]] = []
+
+    for si, sprite in enumerate(sprites):
+        sx, sy, sw, sh = sprite
+        best_target_idx = -1
+        best_axis = 'vertical'
+        best_error = float('inf')
+
+        for ti, target in enumerate(targets):
+            tx, ty, tw, th = target
+
+            # Try horizontal mirror (reflect y)
+            # Mirror midline at y_m → reflected_y = 2*y_m - sy
+            for mirror in mirrors:
+                mx, my, mw, mh = mirror
+                # Mirror midline position
+                mirror_mid_y = my + mh / 2.0
+                mirror_mid_x = mx + mw / 2.0
+
+                # Horizontal reflection across mirror midline
+                reflected_y = 2 * mirror_mid_y - (sy + sh / 2.0)
+                reflected_x = sx + sw / 2.0
+                # Compare with target center
+                target_cx = tx + tw / 2.0
+                target_cy = ty + th / 2.0
+
+                error_h = abs(reflected_x - target_cx) + abs(reflected_y - target_cy)
+                if error_h < best_error:
+                    best_error = error_h
+                    best_target_idx = ti
+                    best_axis = 'horizontal'
+
+                # Vertical reflection across mirror midline
+                reflected_x_v = 2 * mirror_mid_x - (sx + sw / 2.0)
+                reflected_y_v = sy + sh / 2.0
+                error_v = abs(reflected_x_v - target_cx) + abs(reflected_y_v - target_cy)
+                if error_v < best_error:
+                    best_error = error_v
+                    best_target_idx = ti
+                    best_axis = 'vertical'
+
+            # Also try reflection without explicit mirror (grid midline)
+            grid_mid = 32.0  # 64x64 grid midpoint
+            # Horizontal reflection across grid midline
+            reflected_y_grid = 2 * grid_mid - (sy + sh / 2.0)
+            reflected_x_grid = sx + sw / 2.0
+            target_cx = targets[ti][0] + targets[ti][2] / 2.0
+            target_cy = targets[ti][1] + targets[ti][3] / 2.0
+            error_h_grid = abs(reflected_x_grid - target_cx) + abs(reflected_y_grid - target_cy)
+            if error_h_grid < best_error:
+                best_error = error_h_grid
+                best_target_idx = ti
+                best_axis = 'horizontal'
+
+            # Vertical reflection across grid midline
+            reflected_x_v_grid = 2 * grid_mid - (sx + sw / 2.0)
+            reflected_y_v_grid = sy + sh / 2.0
+            error_v_grid = abs(reflected_x_v_grid - target_cx) + abs(reflected_y_v_grid - target_cy)
+            if error_v_grid < best_error:
+                best_error = error_v_grid
+                best_target_idx = ti
+                best_axis = 'vertical'
+
+        if best_target_idx >= 0 and best_error < 50:  # Reasonable threshold
+            tx, ty, tw, th = targets[best_target_idx]
+            mappings.append((si, best_axis, (tx, ty)))
+
+    return mappings
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# v3.14.0 — 状态转换图 (State Transition Graph) for TN36
+# Models click targets as state machine transitions for BFS search
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def _build_state_transition_graph(
+    game: Any,
+    click_targets: list[tuple[int, int]],
+    max_sim_depth: int = 20,
+) -> dict[str, list[tuple[str, tuple[int, int]]]]:
+    """Build state transition graph by simulating click targets.
+
+    Based on article2 §3.3 Liu Mechanism: for TN36, each click target
+    triggers a deterministic state transition in the game's internal
+    state machines. By simulating all possible clicks from each reachable
+    state, we construct a transition graph and search for the shortest
+    path from initial state to goal state.
+
+    For TN36: two state machines, each click triggers one transition.
+    The state is captured by _tn36_internal_state_hash().
+
+    Args:
+        game: The game object (will use deepcopy for simulation).
+        click_targets: List of (x, y) positions to simulate clicks on.
+        max_sim_depth: Maximum simulation depth for exploration.
+
+    Returns:
+        Dict mapping state_hash → list of (next_state_hash, click_target)
+        transition edges. Empty dict if game has no click targets.
+
+    Self-test:
+        >>> graph = _build_state_transition_graph(None, [])
+        >>> assert graph == {}  # No targets → empty graph
+    """
+    if not click_targets or game is None:
+        return {}
+
+    from arcengine import GameAction, ActionInput
+
+    transition_graph: dict[str, list[tuple[str, tuple[int, int]]]] = {}
+
+    # BFS over states: simulate each click target from each reachable state
+    initial_hash = _tn36_internal_state_hash(game) if hasattr(game, '_current_level_index') else _game_state_hash(game)
+    visited_states: set[str] = {initial_hash}
+    state_queue: deque[tuple[Any, str]] = deque()
+    state_queue.append((copy.deepcopy(game), initial_hash))
+
+    depth = 0
+    while state_queue and depth < max_sim_depth:
+        g, state_hash = state_queue.popleft()
+        depth += 1
+
+        transitions: list[tuple[str, tuple[int, int]]] = []
+
+        for click_pos in click_targets:
+            g_copy = copy.deepcopy(g)
+            # Simulate click
+            ai = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
+            result = _perform_action_safe(g_copy, ai)
+
+            if not result:
+                continue
+
+            # Compute new state hash
+            new_hash = _tn36_internal_state_hash(g_copy) if hasattr(g_copy, '_current_level_index') else _game_state_hash(g_copy)
+
+            if new_hash != state_hash:  # State changed → meaningful transition
+                transitions.append((new_hash, click_pos))
+
+                if new_hash not in visited_states:
+                    visited_states.add(new_hash)
+                    state_queue.append((g_copy, new_hash))
+
+        transition_graph[state_hash] = transitions
+
+    return transition_graph
+
+
+def _find_shortest_path_in_transition_graph(
+    graph: dict[str, list[tuple[str, tuple[int, int]]]],
+    start_hash: str,
+    goal_check: Any,
+) -> list[tuple[int, int]] | None:
+    """Find shortest click sequence in state transition graph via BFS.
+
+    Args:
+        graph: State transition graph from _build_state_transition_graph.
+        start_hash: Initial state hash.
+        goal_check: Callable(game) → bool, or None (use state difference).
+
+    Returns:
+        List of (x, y) click positions forming shortest path, or None.
+    """
+    if not graph or start_hash not in graph:
+        return None
+
+    # BFS in transition graph
+    queue: deque[tuple[str, list[tuple[int, int]]]] = deque()
+    queue.append((start_hash, []))
+    visited: set[str] = {start_hash}
+
+    while queue:
+        state_hash, path = queue.popleft()
+
+        if state_hash in graph:
+            for next_hash, click_pos in graph[state_hash]:
+                if next_hash in visited:
+                    continue
+                visited.add(next_hash)
+                new_path = path + [click_pos]
+
+                # Goal check: if we have a goal_check function, use it
+                # Otherwise, check if this state has no outgoing transitions
+                # (terminal state = potentially solved)
+                if goal_check is not None:
+                    try:
+                        if goal_check(next_hash):
+                            return new_path
+                    except Exception:
+                        pass
+
+                # If next state has no transitions and path is non-empty,
+                # it might be a terminal (goal) state
+                if next_hash not in graph and new_path:
+                    return new_path
+
+                queue.append((next_hash, new_path))
+
+    return None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# κ-Priority Search (κ-PS) — v3.14.0
 # Replaces BFS FIFO with information-gradient priority queue.
+# v3.14.0: Liu mechanism (S_rel) priority formula replaces old IC×κ formula
 # Based on article: "基于TOMAS/IDO的ARC-3非均匀搜索算法：从盲目BFS到κ-优先梯度归约"
-# ============================================================================
+# ═══════════════════════════════════════════════════════════════════════════
 
 
 def solve_kappa_priority_search(
@@ -3005,9 +4867,11 @@ def solve_kappa_priority_search(
     phys_pruner: Any = None,
     kappa_weight: float = 10.0,
     psi_cut_ic_threshold: float = 0.05,
-    psi_cut_gex_threshold: float = 0.1,
+    psi_cut_gex_threshold: float = 1/6,  # v3.14.0: 5/6 saturation theorem → 1/6 ≈ 0.167
     ic_metric: Any = None,
     gex_constraint: Any = None,
+    use_liu_mechanism: bool = True,  # v3.14.0: Liu mechanism S_rel priority formula
+    liu_epsilon: float = 0.01,       # v3.14.0: ε for 1/(S_rel+ε) anti-division-by-zero
 ) -> list[tuple] | None:
     """κ-Priority Search solver — replaces BFS FIFO with information-gradient priority.
 
@@ -3015,15 +4879,25 @@ def solve_kappa_priority_search(
 
     Key differences from BFS:
     1. Uses heapq priority queue instead of FIFO deque
-    2. Priority = IC_est × κ_weight - GEX_residual (article §3.4)
+    2. Priority formula (v3.14.0):
+       - Liu mechanism: priority = 1/(S_rel + ε)
+         where S_rel = 0.1×num_primitives - 0.5×IC + 2.0×GEX
+       - Legacy: priority = IC_est × κ_weight - GEX_residual - depth × 0.1
     3. Ψ-Cut pruning: skip nodes with low IC and high GEX (article §3.4)
     4. Anti-monotonicity: compact solutions preferred (depth penalty on IC)
+
+    v3.14.0 changes:
+    - psi_cut_gex_threshold default changed from 0.1 to 1/6 ≈ 0.167
+      (article1 Theorem 1: 5/6 saturation threshold)
+    - Added use_liu_mechanism parameter for S_rel priority formula
+      (article2 §3.3: Liu Mechanism relation action quantity)
+    - Added liu_epsilon parameter for 1/(S_rel+ε) division safety
 
     Theorem 4.1 (IDO归约定理): κ-PS reduces NP-Hard search to P-class gradient
     descent in expectation, with effective branching factor b_eff = b × (1-η).
 
-    The heapq is a min-heap, so we negate the priority: higher IC × κ - lower GEX
-    → higher priority → lower negated value → popped first.
+    The heapq is a min-heap, so we negate the priority: higher priority
+    → lower negated value → popped first.
 
     Args:
         game: The game object (will NOT be modified - uses deepcopy).
@@ -3033,11 +4907,15 @@ def solve_kappa_priority_search(
         phys_pruner: Optional PhysicalCompactificationReduction instance
             for Φ_phys pruning of expansion candidates.
         kappa_weight: κ weight for IC in priority function (default 10.0,
-            article §3.4).
+            article §3.4). Only used when use_liu_mechanism=False.
         psi_cut_ic_threshold: Ψ-Cut: prune if IC < this AND GEX > threshold.
         psi_cut_gex_threshold: Ψ-Cut: prune if GEX > this AND IC < threshold.
+            Default 1/6 ≈ 0.167 per article1 Theorem 1 (5/6 saturation).
         ic_metric: Optional ICMetric instance for octonion-based IC.
         gex_constraint: Optional PhysicalGaussExConstraint for GEX residual.
+        use_liu_mechanism: If True, use S_rel priority formula from article2 §3.3.
+            If False, use legacy IC×κ formula.
+        liu_epsilon: ε for 1/(S_rel+ε) to prevent division by zero (default 0.01).
 
     Returns:
         List of (GameAction, data) tuples, or None if no solution found.
@@ -3134,11 +5012,18 @@ def solve_kappa_priority_search(
             if ic_est < psi_cut_ic_threshold and gex_residual > psi_cut_gex_threshold:
                 continue  # Ψ-Cut: skip this node
 
-            # ── κ-PS priority computation (article §3.4) ──
-            # Priority = IC_est × κ_weight - GEX_residual - depth × 0.1
-            # Higher priority = more promising state
-            # Negate for heapq (min-heap → lowest neg_priority popped first)
-            priority = ic_est * kappa_weight - gex_residual - new_depth * 0.1
+            # ── κ-PS priority computation ──
+            # v3.14.0: Liu mechanism S_rel priority formula (article2 §3.3)
+            # S_rel = 0.1 × num_primitives - 0.5 × IC + 2.0 × GEX
+            # priority = 1/(S_rel + ε), ε = liu_epsilon
+            # Lower S_rel → higher priority → more promising search path
+            # Legacy: priority = IC_est × κ_weight - GEX_residual - depth × 0.1
+            if use_liu_mechanism:
+                num_primitives = 1  # Single action = 1 primitive
+                s_rel = 0.1 * num_primitives - 0.5 * ic_est + 2.0 * gex_residual
+                priority = 1.0 / (s_rel + liu_epsilon)
+            else:
+                priority = ic_est * kappa_weight - gex_residual - new_depth * 0.1
             neg_priority_new = -priority
 
             counter += 1
@@ -5434,7 +7319,7 @@ def solve_game(
     Phase 0: Game-specific heuristic solver (SOLVERS dict — highest RHAE)
     Phase 1: UniversalSolverPipeline (zero-config, works on Private Set)
     Phase 2: BFS for small action spaces (shortest solution first)
-    Phase 2.5: κ-Priority Search (information-gradient, v3.13.0)
+    Phase 2.5: κ-Priority Search (information-gradient + Liu mechanism S_rel, v3.14.0)
     Phase 3: Beam search (fast parallel exploration)
     Phase 4: IDFS (thorough with snapshot/restore)
     Phase 5: DFS fallback (deep search with state dedup)
@@ -5871,9 +7756,10 @@ def solve_game(
                 phys_pruner=phys_pruner if use_phys_pruning else None,
                 kappa_weight=10.0,
                 psi_cut_ic_threshold=0.05,
-                psi_cut_gex_threshold=0.1,
+                psi_cut_gex_threshold=1/6,  # v3.14.0: 5/6 saturation theorem
                 ic_metric=ic_metric,  # from v3.12.0 ICMetric
                 gex_constraint=phys_gaussex,  # from v3.12.0 PhysicalGaussExConstraint
+                use_liu_mechanism=True,  # v3.14.0: Liu mechanism S_rel priority formula
             )
             plan = _normalize_plan(plan)
             if plan is not None and _verify_plan(plan):
