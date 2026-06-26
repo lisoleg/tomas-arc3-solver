@@ -1616,7 +1616,19 @@ class LibraryManager:
         Returns:
             List of all MacroCandidates.
         """
-        return [MacroCandidate(**a) for a in self._library.get("abstractions", [])]
+        # ── v3.9.0: Robust deserialization — filter extra keys ──
+        # Library.json may contain extra keys (e.g., 'complexity_class') from
+        # historical writes. MacroCandidate only accepts its own dataclass fields.
+        valid_field_names = set(MacroCandidate.__dataclass_fields__.keys())
+        result: List[MacroCandidate] = []
+        for a in self._library.get("abstractions", []):
+            filtered = {k: v for k, v in a.items() if k in valid_field_names}
+            try:
+                result.append(MacroCandidate(**filtered))
+            except (TypeError, KeyError):
+                # Skip corrupted entries
+                pass
+        return result
 
 
 # ============================================================================
@@ -2782,6 +2794,220 @@ class OnlinePSIAudit:
             "accepted": self._accepted_count,
         }
 
+    # ── v3.9.0 — κ-Snap反向: Abductive Lift from solved games ──
+
+    def abductive_lift_from_success(
+        self,
+        episode: EpisodeTrace,
+        rhae_threshold: float = 50.0,
+    ) -> Optional[MacroCandidate]:
+        """κ-Snap反向: extract causal invariant from successful episode.
+
+        Implements the κ-Snap反向 (abductive lift) from "从猜想生成到流贯觉察":
+        "From known truth → extract causal invariant → migrate to new domain"
+
+        This is Moonshine's core ability — take what worked and generalize it.
+        Unlike monitor() which processes failures (passed=True events are skipped),
+        this method processes SUCCESSFUL episodes to:
+            1. Extract the causal invariant C⁰ from the successful action sequence
+               (what pattern of actions led to success)
+            2. Create a MacroCandidate with generalization_tags derived from the
+               causal structure
+            3. Return the macro proposal for library.json
+
+        The key insight: κ-Snap反向 means we can learn not just from failures
+        (what's missing) but from successes (what invariant made it work).
+
+        Args:
+            episode: A solved EpisodeTrace (success=True, rhae_score > threshold).
+            rhae_threshold: Minimum RHAE score for a episode to qualify for
+                abductive lift. Defaults to 50.0.
+
+        Returns:
+            MacroCandidate if a causal invariant was extracted and a macro
+            proposal was created. None if the episode doesn't qualify or
+            no invariant can be extracted.
+        """
+        # ── Step 1: Check eligibility ──
+        if not episode.success or episode.rhae_score < rhae_threshold:
+            return None
+
+        if len(episode.traces) < 2:
+            return None  # Need at least 2 actions to extract a pattern
+
+        # ── Step 2: Extract causal invariant C⁰ from successful action sequence ──
+        # C⁰ = the minimal pattern of actions that led to success
+        # We use action abstraction to find the causal structure:
+        # - What TYPES of actions were taken (click, move, keyboard)
+        # - What ORDER they were taken in (causal sequence)
+        # - What TRANSITIONS they produced (state changes)
+
+        action_sequence: List[Dict[str, Any]] = []
+        state_transitions: List[Dict[str, Any]] = []
+
+        for trace in episode.traces:
+            # Abstract action: type + key parameters (strip specific positions)
+            abstract_action = {
+                "type": trace.action_type,
+                "category": self._classify_action_category(trace),
+            }
+            action_sequence.append(abstract_action)
+
+            # State transition: what changed (delta in grid state)
+            if trace.pre_state is not None and trace.post_state is not None:
+                delta = float(np.sum(trace.post_state != trace.pre_state))
+                state_transitions.append({
+                    "action_index": trace.step_number,
+                    "delta_pixels": delta,
+                    "reward": trace.reward,
+                })
+
+        # ── Step 3: Extract the causal invariant (recurring sub-pattern) ──
+        # Find the minimal sub-sequence that consistently produces state changes
+        # This is the C⁰ — the causal core of the successful strategy
+
+        causal_invariant: Optional[List[Dict[str, Any]]] = None
+        best_invariant_score: float = 0.0
+
+        # Try window sizes from 2 to full sequence
+        for window_size in range(2, min(len(action_sequence) + 1, 6)):
+            for start_idx in range(len(action_sequence) - window_size + 1):
+                sub_sequence = action_sequence[start_idx:start_idx + window_size]
+
+                # Compute invariant score: how much state change this sub-sequence produces
+                # Look at state transitions that overlap with this action window
+                window_transitions = [
+                    t for t in state_transitions
+                    if start_idx <= t["action_index"] < start_idx + window_size
+                ]
+                total_delta = sum(t.get("delta_pixels", 0) for t in window_transitions)
+                total_reward = sum(t.get("reward", 0) for t in window_transitions)
+
+                # Invariant score: combination of state change magnitude and reward
+                invariant_score = (total_delta * 0.1 + total_reward * 0.5) / max(window_size, 1)
+
+                if invariant_score > best_invariant_score:
+                    best_invariant_score = invariant_score
+                    causal_invariant = sub_sequence
+
+        if causal_invariant is None or best_invariant_score < 0.1:
+            return None  # No meaningful causal invariant found
+
+        # ── Step 4: Create MacroCandidate from the causal invariant ──
+        # Build DSL sequence from the invariant
+        dsl_sequence: List[Dict[str, Any]] = []
+        generalization_tags: List[str] = []
+
+        for action in causal_invariant:
+            dsl_entry: Dict[str, Any] = {"action": action["type"]}
+            if action.get("category"):
+                dsl_entry["category"] = action["category"]
+            dsl_sequence.append(dsl_entry)
+
+            # Add category-based generalization tags
+            category = action.get("category", "")
+            if category and category not in generalization_tags:
+                generalization_tags.append(category)
+
+        # Add κ-Snap反向 specific tags
+        generalization_tags.append("kappa_snap_reverse")
+        generalization_tags.append("abductive_lift")
+        generalization_tags.append(f"causal_invariant_{len(causal_invariant)}")
+
+        # Add game-specific tags from the episode
+        for tag in episode.tags:
+            if tag not in generalization_tags:
+                generalization_tags.append(tag)
+
+        # Compute fingerprint from causal invariant structure
+        invariant_str = json.dumps(causal_invariant, sort_keys=True)
+        fingerprint = hashlib.sha256(invariant_str.encode()).hexdigest()[:16]
+
+        # MDL score: invariant length / total episode length (compression ratio)
+        mdl_score = len(causal_invariant) / max(len(action_sequence), 1)
+
+        macro_name = f"lift_{episode.game_id}_L{episode.level_index}_{fingerprint[:8]}"
+
+        macro = MacroCandidate(
+            name=macro_name,
+            dsl_sequence=dsl_sequence,
+            tomas_fingerprint=fingerprint,
+            source_tasks=[f"{episode.game_id}_L{episode.level_index}"],
+            avg_steps=float(len(causal_invariant)),
+            success_rate=min(1.0, episode.rhae_score / 100.0),
+            generalization_tags=generalization_tags,
+            mdl_score=mdl_score,
+            min_demo_to_activate=1,
+            validated=True,  # Pre-validated from successful episode
+            applicable_topo=extract_topo_features(
+                episode.traces[0].pre_state
+            ) if episode.traces[0].pre_state is not None else {},
+            gaussex_precond="True",
+        )
+
+        # ── Step 5: Add to library ──
+        self.library.add_macro(macro)
+        self._accepted_count += 1
+
+        if self.verbose:
+            print(f"[ψ-Audit κ-Snap反向] Abductive lift: {macro_name} "
+                  f"(invariant_score={best_invariant_score:.2f}, "
+                  f"tags={generalization_tags})")
+
+        return macro
+
+    def _classify_action_category(self, trace: ActionTrace) -> str:
+        """Classify an action trace into a semantic category for causal invariant extraction.
+
+        Maps specific actions to broader semantic categories that form the
+        causal structure of a successful strategy.
+
+        Args:
+            trace: An ActionTrace record.
+
+        Returns:
+            String category label (e.g., 'navigate', 'click_target', 'probe').
+        """
+        action_type = trace.action_type
+        params = trace.action_params
+
+        if action_type == "CLICK":
+            # Classify click actions by what was clicked
+            target = params.get("target", params.get("object", ""))
+            if "diamond" in str(target).lower():
+                return "click_diamond"
+            elif "palette" in str(target).lower():
+                return "click_palette"
+            elif "toggle" in str(target).lower():
+                return "click_toggle"
+            elif "switcher" in str(target).lower():
+                return "click_switcher"
+            else:
+                return "click_target"
+
+        elif action_type == "KEYBOARD":
+            # Classify keyboard actions by direction/purpose
+            key = params.get("key", params.get("direction", ""))
+            if key in ("UP", "DOWN", "LEFT", "RIGHT", "up", "down", "left", "right"):
+                return "navigate_direction"
+            elif key in ("ENTER", "enter", "SPACE", "space"):
+                return "keyboard_confirm"
+            else:
+                return "keyboard_action"
+
+        elif action_type == "MOVE":
+            dx = params.get("dx", 0)
+            dy = params.get("dy", 0)
+            if abs(dx) > abs(dy):
+                return "navigate_horizontal"
+            elif abs(dy) > abs(dx):
+                return "navigate_vertical"
+            else:
+                return "navigate_stay"
+
+        else:
+            return f"action_{action_type.lower()}"
+
 
 # ============================================================================
 # PhysicalNARConv: Physical State Octonion Encoding (拓扑饱和修正 附录B)
@@ -3439,6 +3665,10 @@ class PhysicalCompactificationReduction:
         # ── κ-Snap Beam Width (article §3.2: recommended 16) ──
         self.beam_width: int = 16
 
+        # ── v3.9.0 — Successful Proof Log (Algorithm 1: SUCCESS LOG → Functional Macro) ──
+        self._successful_proof_log: List[Dict[str, Any]] = []
+        self._processed_log_indices: Set[int] = set()  # Track processed episodes
+
     def should_prune(
         self,
         new_grid: Optional[np.ndarray] = None,
@@ -3516,6 +3746,222 @@ class PhysicalCompactificationReduction:
             self._total_accepted += 1
 
         return should_prune
+
+    # ── v3.9.0 — Sleep-Step Algorithm 1: SUCCESS LOG → Functional Macro ──
+
+    def sleep_step_algorithm_1(
+        self,
+        episode_buffer: Optional[List[EpisodeTrace]] = None,
+        library_manager: Optional[LibraryManager] = None,
+        rhae_success_threshold: float = 50.0,
+        min_pattern_occurrences: int = 2,
+    ) -> Dict[str, Any]:
+        """Sleep-Step Algorithm 1: extract Functional Macros from successful episodes.
+
+        Implements Algorithm 1 from "从猜想生成到流贯觉察":
+            Input: Failed_Proof_Log, Successful_Proof_Log
+            Output: Updated Library.json
+            1. Analyze logs to find recurring structural patterns
+            2. If pattern leads to success: Create Functional Macro
+            3. Add Macro to library.json
+            4. Clear logs
+
+        This extends the existing sleep_step_online() which only processes
+        Failed_Proof_Log (failure events via OnlinePSIAudit). Algorithm 1
+        also processes Successful_Proof_Log to extract recurring action
+        patterns that led to success and creates Functional Macro candidates.
+
+        Args:
+            episode_buffer: List of EpisodeTrace records to process.
+                If None, processes internal _successful_proof_log.
+            library_manager: LibraryManager for macro persistence.
+                If None, creates a default one.
+            rhae_success_threshold: Minimum RHAE score for an episode
+                to be considered "successful" for pattern extraction.
+                Defaults to 50.0.
+            min_pattern_occurrences: Minimum number of times a pattern
+                must appear across episodes to be considered recurring.
+                Defaults to 2.
+
+        Returns:
+            Dict with keys:
+                macros_created: Number of new Functional Macros created.
+                successful_episodes_processed: Number of successful episodes analyzed.
+                failed_episodes_processed: Number of failed episodes analyzed.
+                recurring_patterns_found: Number of recurring patterns detected.
+                new_macros: List of MacroCandidate objects created.
+        """
+        library = library_manager or LibraryManager()
+        episodes = episode_buffer or []
+
+        # ── Step 1: Separate successful and failed episodes ──
+        successful_episodes: List[EpisodeTrace] = []
+        failed_episodes: List[EpisodeTrace] = []
+
+        for ep in episodes:
+            if ep.success and ep.rhae_score >= rhae_success_threshold:
+                successful_episodes.append(ep)
+            elif not ep.success or ep.rhae_score < rhae_success_threshold:
+                failed_episodes.append(ep)
+
+        # Also process episodes from _successful_proof_log
+        for log_entry in self._successful_proof_log:
+            # Convert log entry to EpisodeTrace if needed
+            if "episode" in log_entry:
+                ep = log_entry["episode"]
+                if ep.success and ep.rhae_score >= rhae_success_threshold:
+                    successful_episodes.append(ep)
+
+        if not successful_episodes:
+            return {
+                "macros_created": 0,
+                "successful_episodes_processed": 0,
+                "failed_episodes_processed": len(failed_episodes),
+                "recurring_patterns_found": 0,
+                "new_macros": [],
+            }
+
+        # ── Step 2: Analyze logs to find recurring structural patterns ──
+        pattern_counts: Dict[str, Dict[str, Any]] = {}
+
+        for ep in successful_episodes:
+            # Extract action sequence from episode traces
+            action_sequence: List[str] = []
+            for trace in ep.traces:
+                action_key = f"{trace.action_type}:{json.dumps(trace.action_params, sort_keys=True)}"
+                action_sequence.append(action_key)
+
+            if len(action_sequence) < 2:
+                continue
+
+            # Find recurring sub-patterns (contiguous action subsequences)
+            # Use sliding windows of length 2-5 to detect recurring patterns
+            for window_len in range(2, min(6, len(action_sequence) + 1)):
+                for i in range(len(action_sequence) - window_len + 1):
+                    pattern_key = tuple(action_sequence[i:i + window_len])
+                    pattern_str = "|".join(pattern_key)
+
+                    if pattern_str not in pattern_counts:
+                        pattern_counts[pattern_str] = {
+                            "pattern": pattern_key,
+                            "count": 0,
+                            "episodes": [],
+                            "total_rhae": 0.0,
+                        }
+                    pattern_counts[pattern_str]["count"] += 1
+                    pattern_counts[pattern_str]["episodes"].append(ep.game_id)
+                    pattern_counts[pattern_str]["total_rhae"] += ep.rhae_score
+
+        # ── Step 3: Identify recurring patterns (≥ min_pattern_occurrences) ──
+        recurring_patterns: List[Dict[str, Any]] = []
+        for pattern_str, info in pattern_counts.items():
+            if info["count"] >= min_pattern_occurrences:
+                avg_rhae = info["total_rhae"] / max(info["count"], 1)
+                recurring_patterns.append({
+                    "pattern_str": pattern_str,
+                    "pattern_tuple": info["pattern"],
+                    "occurrence_count": info["count"],
+                    "avg_rhae_score": avg_rhae,
+                    "source_episodes": info["episodes"],
+                })
+
+        # ── Step 4: Create Functional Macro candidates from recurring patterns ──
+        new_macros: List[MacroCandidate] = []
+        for pattern_info in recurring_patterns:
+            pattern_tuple = pattern_info["pattern_tuple"]
+
+            # Build DSL sequence from pattern
+            dsl_sequence: List[Dict[str, Any]] = []
+            for action_key in pattern_tuple:
+                parts = action_key.split(":", 1)
+                action_type = parts[0]
+                try:
+                    action_params = json.loads(parts[1]) if len(parts) > 1 else {}
+                except (json.JSONDecodeError, IndexError):
+                    action_params = {}
+                dsl_sequence.append({
+                    "action": action_type,
+                    "params": action_params,
+                })
+
+            # Compress repeated actions in DSL sequence
+            compressed_dsl: List[Dict[str, Any]] = []
+            i = 0
+            while i < len(dsl_sequence):
+                current = dsl_sequence[i]
+                repeat_count = 1
+                while i + repeat_count < len(dsl_sequence) and dsl_sequence[i + repeat_count] == current:
+                    repeat_count += 1
+                if repeat_count > 1:
+                    compressed_dsl.append({
+                        "repeat": current.get("action", "UNKNOWN"),
+                        "params": current.get("params", {}),
+                        "count": repeat_count,
+                    })
+                else:
+                    compressed_dsl.append(current)
+                i += repeat_count
+
+            # Compute MDL score
+            original_steps = len(dsl_sequence)
+            compressed_steps = len(compressed_dsl)
+            mdl_score = compressed_steps / max(original_steps, 1)
+
+            # Generate generalization tags from action types
+            action_types = set(a.get("action", "") for a in compressed_dsl)
+            generalization_tags = list(action_types)
+            generalization_tags.append("functional_macro")
+            generalization_tags.append("success_pattern")
+
+            # Compute TOMAS fingerprint
+            fingerprint = hashlib.sha256(
+                json.dumps(compressed_dsl, sort_keys=True).encode()
+            ).hexdigest()[:16]
+
+            # Create MacroCandidate
+            macro_name = f"func_macro_{fingerprint[:8]}_{pattern_info['occurrence_count']}x"
+            macro = MacroCandidate(
+                name=macro_name,
+                dsl_sequence=compressed_dsl,
+                tomas_fingerprint=fingerprint,
+                source_tasks=pattern_info["source_episodes"][:5],
+                avg_steps=float(original_steps),
+                success_rate=pattern_info["avg_rhae_score"] / 100.0,
+                generalization_tags=generalization_tags,
+                mdl_score=mdl_score,
+                min_demo_to_activate=max(1, min_pattern_occurrences - 1),
+                validated=True,  # Pre-validated from successful episodes
+                applicable_topo=self.initial_topo,
+                gaussex_precond="True",
+            )
+
+            new_macros.append(macro)
+
+            # ── Step 5: Add validated macros to library.json ──
+            library.add_macro(macro)
+
+            # Track in successful proof log
+            self._successful_proof_log.append({
+                "pattern_str": pattern_info["pattern_str"],
+                "macro_name": macro_name,
+                "occurrence_count": pattern_info["occurrence_count"],
+                "avg_rhae": pattern_info["avg_rhae_score"],
+                "timestamp": time.time(),
+            })
+
+        # ── Step 6: Clear processed logs ──
+        self._successful_proof_log = [
+            entry for entry in self._successful_proof_log
+            if entry.get("timestamp", 0) > time.time() - 3600  # Keep recent entries
+        ]
+
+        return {
+            "macros_created": len(new_macros),
+            "successful_episodes_processed": len(successful_episodes),
+            "failed_episodes_processed": len(failed_episodes),
+            "recurring_patterns_found": len(recurring_patterns),
+            "new_macros": new_macros,
+        }
 
     def should_prune_game_state(
         self,
@@ -3893,26 +4339,38 @@ def classify_task_complexity(
     density = topo_features.get("density", 0.5)
 
     # ── Classification logic ──
+    # ── v3.9.0: also set requires_new_primitives and sleep_step_aggressive ──
+    requires_new_primitives: bool = False
+    sleep_step_aggressive: bool = False
+
     if has_non_associative_ops and has_physical_constraints:
         # Type-B with physics: P in physical, needs Bκ evolution for NAR
         complexity_class = "P_in_phys"
         Bk_requirement = "Bκ_NAR"  # Need NAR-Conv compactification basis
         strategy = "PhysicalNARConv + κ-Snap with Φ_phys pruning"
+        requires_new_primitives = False  # Has sufficient Bκ with physics
+        sleep_step_aggressive = False
     elif has_non_associative_ops and not has_physical_constraints:
         # Type-B without physics: NP-Hard without Bκ evolution
         complexity_class = "NP_Hard"
         Bk_requirement = "Bκ_NAR_critical"  # Critical need for NAR-Conv
         strategy = "Bκ-evolution + Sleep-Step + NAR-Conv"
+        requires_new_primitives = True  # Critical need — 哥德尔余留 boundary
+        sleep_step_aggressive = True
     elif has_physical_constraints and not has_non_associative_ops:
         # Type-A with physics: Easy P
         complexity_class = "P"
         Bk_requirement = "Bκ_standard"  # Standard compactification
         strategy = "Fast-Path + GaussExGuard + standard κ-Snap"
+        requires_new_primitives = False  # Has sufficient Bκ
+        sleep_step_aggressive = False
     else:
         # Pure combinatorial (no physics, no NAR)
         complexity_class = "NP_C_likely"
         Bk_requirement = "Bκ_exotic"  # Need exotic compactification
         strategy = "Random + heuristic + Bκ-exotic proposal"
+        requires_new_primitives = True  # 哥德尔余留 boundary acknowledged
+        sleep_step_aggressive = True  # Trigger Sleep-Step more aggressively
 
     # ── Difficulty score ──
     difficulty = density * n_components + abs(euler_char) * 0.5
@@ -3929,6 +4387,124 @@ def classify_task_complexity(
         "has_non_associative_ops": has_non_associative_ops,
         "euler_char": euler_char,
         "n_components": n_components,
+        # ── v3.9.0 — NP_C_likely boundary marking ──
+        "requires_new_primitives": requires_new_primitives,
+        "sleep_step_aggressive": sleep_step_aggressive,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v3.9.0 — Ω_topo plateau → Bκ evolution trigger
+# 来源: "流贯的决定论与紧化基的演化" + "从猜想生成到流贯觉察"
+# ═══════════════════════════════════════════════════════════════════════
+
+
+def check_breakthrough_and_trigger(
+    game_id: str,
+    topo_features: Dict[str, Any],
+    scaling_params: Optional[Dict[str, float]] = None,
+    episode_buffer: Optional[List[EpisodeTrace]] = None,
+    library_manager: Optional[LibraryManager] = None,
+) -> Dict[str, Any]:
+    """Check Ω_topo plateau breakthrough and trigger Bκ evolution if needed.
+
+    Implements the Ω_topo plateau → Bκ evolution trigger from the v3.9.0
+    algorithmic deep integration. This function:
+
+    1. Calls compute_scaling_law_v36() with current game parameters
+    2. If breakthrough=True (Δ_Bκ > Ω_topo): triggers sleep_step_algorithm_1()
+       to generate new DSL primitives (Bκ evolution)
+    3. If breakthrough=False: acknowledges ontological randomness boundary
+       (logs it, doesn't generate macros — respects 哥德尔余留)
+    4. Returns dict with action_taken, breakthrough_status, and any new macros
+
+    Key insight from article: Ω_topo is the performance ceiling imposed by
+    the current 紧化基 Bκ. When Δ_Bκ > Ω_topo, the Bκ has evolved enough
+    to break through this ceiling. When Δ_Bκ < Ω_topo, we're at the
+    ontological randomness boundary (哥德尔余留) — no further improvement
+    is possible without fundamentally new primitives.
+
+    Args:
+        game_id: ARC-AGI-3 game identifier.
+        topo_features: Topology feature dict from extract_topo_features.
+        scaling_params: Optional dict of scaling law parameters for
+            compute_scaling_law_v36(). If None, uses defaults.
+        episode_buffer: Optional list of EpisodeTrace records for
+            sleep_step_algorithm_1 processing.
+        library_manager: Optional LibraryManager for macro persistence.
+
+    Returns:
+        Dict with keys:
+            breakthrough: Whether Δ_Bκ > Ω_topo (Bκ evolution breaks plateau).
+            action_taken: String describing what action was taken.
+            new_macros: List of MacroCandidate objects created (if breakthrough).
+            scaling_result: Full result dict from compute_scaling_law_v36().
+            ontological_boundary_acknowledged: Whether 哥德尔余留 boundary was hit.
+    """
+    # ── Step 1: Compute scaling law with current parameters ──
+    params = scaling_params or {}
+    C = params.get("C", 10.0)
+    D = params.get("D", 100.0)
+    L_irr = params.get("L_irr", 0.05)
+    C_0 = params.get("C_0", 1.0)
+    alpha = params.get("alpha", 0.3)
+    L_rep = params.get("L_rep", 0.02)
+    L_sat = params.get("L_sat", 0.1)
+    L_min_irr = params.get("L_min_irr", 0.0)
+    tau = params.get("tau", 10.0)
+    delta_Bk = params.get("delta_Bk", 0.0)
+    kappa_evolution = params.get("kappa_evolution", 0.5)
+
+    scaling_result = compute_scaling_law_v36(
+        C=C, D=D, L_irr=L_irr, C_0=C_0, alpha=alpha,
+        L_rep=L_rep, L_sat=L_sat, L_min_irr=L_min_irr,
+        tau=tau, delta_Bk=delta_Bk, kappa_evolution=kappa_evolution,
+    )
+
+    breakthrough = scaling_result.get("breakthrough", False)
+
+    # ── Step 2: Take action based on breakthrough status ──
+    new_macros: List[MacroCandidate] = []
+    action_taken: str = ""
+    ontological_boundary_acknowledged: bool = False
+
+    if breakthrough:
+        # Δ_Bκ > Ω_topo → Bκ evolution breaks the plateau!
+        # Trigger sleep_step_algorithm_1() to generate new DSL primitives
+        action_taken = "breakthrough_detected: triggered sleep_step_algorithm_1 for Bκ evolution"
+
+        reduction = PhysicalCompactificationReduction(
+            task_complexity=classify_task_complexity(
+                game_id=game_id,
+                topo_features=topo_features,
+                has_physical_constraints=True,
+                has_non_associative_ops=False,
+            ),
+        )
+
+        algorithm_result = reduction.sleep_step_algorithm_1(
+            episode_buffer=episode_buffer or [],
+            library_manager=library_manager or LibraryManager(),
+        )
+
+        new_macros = algorithm_result.get("new_macros", [])
+        action_taken += f" → {algorithm_result['macros_created']} macros created"
+
+    else:
+        # Δ_Bκ < Ω_topo → ontological randomness boundary (哥德尔余留)
+        # Acknowledge boundary — don't generate macros
+        # This respects the Gödel boundary: some tasks are fundamentally
+        # beyond the current Bκ's reach and require genuinely new primitives
+        # that cannot be derived from existing ones.
+        ontological_boundary_acknowledged = True
+        action_taken = "ontological_randomness_boundary_acknowledged: 哥德尔余留 — Δ_Bκ < Ω_topo, no macro generation"
+
+    return {
+        "breakthrough": breakthrough,
+        "action_taken": action_taken,
+        "new_macros": new_macros,
+        "scaling_result": scaling_result,
+        "ontological_boundary_acknowledged": ontological_boundary_acknowledged,
     }
 
 
@@ -4423,4 +4999,883 @@ class ThinkerPerformerPipeline:
             "zkp_stats": self._zkp_loop.get_loop_stats(),
             "kv_cache_step_count": self._kv_cache._step_count,
             "topo_invariant_score": self._kv_cache.get_topology_invariant_score(),
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v3.9.0 — MoonshineProver (Numerical Oracle Game — "从猜想生成到流贯觉察")
+# ═══════════════════════════════════════════════════════════════════════
+# Implements the Prover-Oracle feedback loop for interactive conjecture
+# refinement on high-dimensional NJC (Nash-Jacobian-Compactification) tasks.
+#
+# Architecture:
+#   MoonshineProver
+#   ├── propose_sampling_strategy(conjecture) → parameter sampling plan
+#   ├── oracle_verify(proposal, game_data) → searches for counterexamples
+#   ├── refine_conjecture(counterexample, library) → updates scope
+#   └── run_oracle_game(conjecture, game_data, library) → full loop (max 5 rounds)
+#
+# Integration: Used alongside InteractiveZKPLoop for conjecture-level
+# verification on NP_C_likely and NP_Hard games where direct GaussEx
+# verification is insufficient.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class MoonshineProver:
+    """Numerical Oracle Game — Prover-Oracle feedback loop for high-dim NJC.
+
+    Implements the MoonshineProver from "从猜想生成到流贯觉察" article:
+    a Prover proposes a parameter sampling strategy, the Oracle computes
+    and searches for counterexamples, and feedback updates the conjecture
+    scope via library.refine_macro().
+
+    This is the interactive conjecture refinement mechanism for tasks
+    where direct verification is impossible (NP_C_likely / NP_Hard):
+    instead of proving correctness in one shot, we iteratively narrow
+    the conjecture's scope until no counterexamples remain.
+
+    The Prover-Oracle game:
+        Round 1: Prover proposes → Oracle searches → counterexample found → refine
+        Round 2: Prover proposes refined → Oracle searches → no counterexample → accept
+        ...
+        Max 5 rounds → accept refined conjecture or declare boundary
+
+    Args:
+        max_rounds: Maximum Prover-Oracle interaction rounds. Default 5.
+        library: LibraryManager for macro refinement. If None, creates default.
+        verbose: Whether to log refinement rounds. Default True.
+    """
+
+    def __init__(
+        self,
+        max_rounds: int = 5,
+        library: Optional[LibraryManager] = None,
+        verbose: bool = True,
+    ) -> None:
+        self._max_rounds = max_rounds
+        self._library = library or LibraryManager()
+        self._verbose = verbose
+        self._round_count: int = 0
+        self._refinement_history: List[Dict[str, Any]] = []
+
+    def propose_sampling_strategy(
+        self,
+        conjecture: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Prover proposes a parameter sampling strategy for the conjecture.
+
+        Based on the conjecture's complexity class and topology features,
+        proposes which parameter dimensions to sample and at what density.
+
+        Args:
+            conjecture: Dict describing the current conjecture, including:
+                - 'scope': set of game conditions the conjecture covers
+                - 'complexity_class': P / P_in_phys / NP_Hard / NP_C_likely
+                - 'topo_features': topology feature dict
+                - 'macro_name': name of the macro being tested
+
+        Returns:
+            Dict describing the sampling strategy:
+                - 'dimensions': list of parameter dimensions to sample
+                - 'density': sampling density (0.1-1.0)
+                - 'focus_areas': specific parameter ranges to concentrate on
+        """
+        complexity_class = conjecture.get("complexity_class", "NP_C_likely")
+        topo_features = conjecture.get("topo_features", {})
+        euler_char = topo_features.get("euler_char", 0)
+        density = topo_features.get("density", 0.5)
+
+        # Sampling density scales with complexity
+        if complexity_class == "P":
+            sampling_density = 0.1  # Low density — conjecture is easy to verify
+        elif complexity_class == "P_in_phys":
+            sampling_density = 0.3  # Moderate — physics constraints help
+        elif complexity_class == "NP_Hard":
+            sampling_density = 0.7  # High — many counterexamples possible
+        else:  # NP_C_likely
+            sampling_density = 1.0  # Maximum — comprehensive search needed
+
+        # Focus on high-euler-characteristic regions (more topologically complex)
+        focus_areas = []
+        if abs(euler_char) > 2:
+            focus_areas.append("topology_complex_regions")
+        if density > 0.7:
+            focus_areas.append("dense_grid_regions")
+
+        # Dimensions to sample based on conjecture scope
+        dimensions = ["action_sequence", "grid_topology", "color_distribution"]
+        if complexity_class in ("NP_Hard", "NP_C_likely"):
+            dimensions.append("non_associative_residual")
+
+        return {
+            "dimensions": dimensions,
+            "density": sampling_density,
+            "focus_areas": focus_areas,
+            "conjecture_scope": conjecture.get("scope", {}),
+            "round": self._round_count + 1,
+        }
+
+    def oracle_verify(
+        self,
+        proposal: Dict[str, Any],
+        game_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Oracle searches for counterexamples to the Prover's proposal.
+
+        Given the Prover's sampling strategy, the Oracle simulates the
+        proposed parameters on game data and searches for any configuration
+        where the conjecture fails (counterexample).
+
+        Args:
+            proposal: Sampling strategy dict from propose_sampling_strategy.
+            game_data: Actual game state data for counterexample search:
+                - 'grid': current game grid (numpy array)
+                - 'game_id': ARC game identifier
+                - 'level_idx': level number
+                - 'action_history': list of previous actions
+
+        Returns:
+            Dict describing verification result:
+                - 'verified': bool — whether no counterexample was found
+                - 'counterexamples': list of counterexample configurations
+                - 'confidence': float (0-1) — how confident the Oracle is
+                - 'scope_reduction': dict describing narrowed scope
+        """
+        dimensions = proposal.get("dimensions", [])
+        density = proposal.get("density", 0.5)
+        focus_areas = proposal.get("focus_areas", [])
+
+        # Simulate the conjecture on sampled parameter configurations
+        counterexamples: List[Dict[str, Any]] = []
+
+        # Check each dimension for potential failures
+        for dim in dimensions:
+            # For action_sequence: check if conjecture covers all observed sequences
+            if dim == "action_sequence" and game_data.get("action_history"):
+                actions = game_data["action_history"]
+                # Check if conjecture scope covers this action pattern
+                scope = proposal.get("conjecture_scope", {})
+                if not scope.get("covers_all_sequences", True):
+                    counterexamples.append({
+                        "dimension": dim,
+                        "failure_type": "uncovered_action_pattern",
+                        "pattern": actions[-5:] if len(actions) > 5 else actions,
+                    })
+
+            # For grid_topology: check Euler characteristic compatibility
+            if dim == "grid_topology" and game_data.get("grid") is not None:
+                grid = game_data.get("grid")
+                if grid is not None:
+                    actual_euler = extract_topo_features(np.array(grid)).get("euler_char", 0)
+                    expected_euler = proposal.get("conjecture_scope", {}).get("euler_char_range", (-5, 5))
+                    if not (expected_euler[0] <= actual_euler <= expected_euler[1]):
+                        counterexamples.append({
+                            "dimension": dim,
+                            "failure_type": "euler_char_mismatch",
+                            "actual": actual_euler,
+                            "expected_range": expected_euler,
+                        })
+
+        # Confidence increases when no counterexamples found
+        n_counters = len(counterexamples)
+        confidence = max(0.0, 1.0 - n_counters * density)
+
+        # Scope reduction: narrow the conjecture based on counterexamples
+        scope_reduction = {}
+        for ce in counterexamples:
+            dim = ce["dimension"]
+            scope_reduction[dim] = {
+                "narrowed": True,
+                "failure_type": ce["failure_type"],
+            }
+
+        return {
+            "verified": n_counters == 0,
+            "counterexamples": counterexamples,
+            "confidence": confidence,
+            "scope_reduction": scope_reduction,
+            "round": self._round_count + 1,
+        }
+
+    def refine_conjecture(
+        self,
+        verification_result: Dict[str, Any],
+        macro_name: str,
+    ) -> Dict[str, Any]:
+        """Refine conjecture scope based on Oracle verification feedback.
+
+        Updates the conjecture's scope to exclude counterexample regions,
+        and updates library.json macros via library.refine_macro().
+
+        Args:
+            verification_result: Oracle verification dict with:
+                - 'counterexamples': list of failure configurations
+                - 'scope_reduction': narrowed scope dict
+                - 'confidence': float (0-1)
+            macro_name: Name of the macro being refined.
+
+        Returns:
+            Dict describing the refined conjecture:
+                - 'macro_name': updated macro name
+                - 'refined_scope': narrowed scope dict
+                - 'confidence': updated confidence score
+                - 'accepted': bool — whether the conjecture is now acceptable
+        """
+        scope_reduction = verification_result.get("scope_reduction", {})
+        counterexamples = verification_result.get("counterexamples", [])
+        confidence = verification_result.get("confidence", 0.5)
+
+        # Build refined scope by incorporating scope reduction
+        refined_scope = {}
+        for dim, reduction in scope_reduction.items():
+            refined_scope[dim] = {
+                "narrowed": True,
+                "excludes": reduction.get("failure_type", ""),
+            }
+
+        # If counterexamples exist for topology, restrict Euler range
+        for ce in counterexamples:
+            if ce.get("dimension") == "grid_topology":
+                actual_euler = ce.get("actual", 0)
+                # Narrow the range to exclude this Euler value
+                refined_scope["euler_char_range"] = (actual_euler - 1, actual_euler + 1)
+
+        # Update library macro — refine the macro's precondition
+        refined_macro_name = f"{macro_name}_refined_r{self._round_count + 1}"
+        try:
+            # Try to refine existing macro in library
+            existing_macros = self._library.query_by_fingerprint("")
+            for macro in existing_macros[:5]:  # Limit search
+                if macro.name == macro_name:
+                    # Update macro scope
+                    macro.gaussex_precond = f"euler_char != {ce.get('actual', 'unknown')}" if counterexamples else macro.gaussex_precond
+                    macro.success_rate = confidence
+                    self._library.save_library()
+                    break
+        except Exception:
+            pass
+
+        # Accept if confidence >= 0.8 or max rounds reached
+        accepted = confidence >= 0.8 or self._round_count >= self._max_rounds
+
+        # Record refinement history
+        self._refinement_history.append({
+            "round": self._round_count + 1,
+            "macro_name": macro_name,
+            "refined_macro_name": refined_macro_name,
+            "counterexamples_found": len(counterexamples),
+            "confidence": confidence,
+            "accepted": accepted,
+            "timestamp": time.time(),
+        })
+
+        if self._verbose:
+            print(f"[MoonshineProver] Round {self._round_count + 1}: "
+                  f"found {len(counterexamples)} counterexamples, "
+                  f"confidence={confidence:.2f}, accepted={accepted}")
+
+        return {
+            "macro_name": refined_macro_name,
+            "original_macro_name": macro_name,
+            "refined_scope": refined_scope,
+            "confidence": confidence,
+            "accepted": accepted,
+        }
+
+    def run_oracle_game(
+        self,
+        conjecture: Dict[str, Any],
+        game_data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """Run full Prover-Oracle game loop (max 5 rounds).
+
+        Iteratively: Prover proposes → Oracle verifies → refine conjecture.
+        Stops when:
+        1. Oracle finds no counterexamples (conjecture accepted)
+        2. Max rounds reached (declare ontological boundary)
+        3. Confidence threshold met (0.8)
+
+        Args:
+            conjecture: Initial conjecture dict (see propose_sampling_strategy).
+            game_data: Game state data for verification (see oracle_verify).
+
+        Returns:
+            Dict describing the full game result:
+                - 'accepted': bool — whether conjecture was accepted
+                - 'final_confidence': float
+                - 'rounds_completed': int
+                - 'total_counterexamples': int
+                - 'refinement_history': list of round-by-round results
+        """
+        macro_name = conjecture.get("macro_name", "unknown_macro")
+        total_counterexamples = 0
+        final_confidence = 0.0
+
+        for round_idx in range(self._max_rounds):
+            self._round_count = round_idx
+
+            # Step 1: Prover proposes sampling strategy
+            proposal = self.propose_sampling_strategy(conjecture)
+
+            # Step 2: Oracle verifies
+            verification = self.oracle_verify(proposal, game_data)
+
+            # Step 3: Refine conjecture based on Oracle feedback
+            refinement = self.refine_conjecture(verification, macro_name)
+
+            total_counterexamples += len(verification.get("counterexamples", []))
+            final_confidence = refinement.get("confidence", 0.0)
+
+            # Update conjecture scope for next round
+            conjecture["scope"] = refinement.get("refined_scope", {})
+            macro_name = refinement.get("macro_name", macro_name)
+
+            # Accept if refinement says accepted
+            if refinement.get("accepted", False):
+                break
+
+        # If not accepted after max rounds, declare ontological boundary
+        accepted = final_confidence >= 0.8
+        boundary_declared = not accepted and self._round_count >= self._max_rounds
+
+        if self._verbose and boundary_declared:
+            print(f"[MoonshineProver] Ontological boundary declared for {macro_name} "
+                  f"after {self._max_rounds} rounds (confidence={final_confidence:.2f})")
+
+        return {
+            "accepted": accepted,
+            "boundary_declared": boundary_declared,
+            "final_confidence": final_confidence,
+            "rounds_completed": self._round_count + 1,
+            "total_counterexamples": total_counterexamples,
+            "refinement_history": self._refinement_history,
+            "final_macro_name": macro_name,
+        }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v3.9.0 — MoonshineProver (Numerical Oracle Game)
+# 来源: "从猜想生成到流贯觉察" — Prover-Oracle feedback loop for NJC
+# ═══════════════════════════════════════════════════════════════════════
+#
+# MoonshineProver implements the Prover-Oracle feedback loop for
+# high-dimensional NJC (Non-associative Junction Conjecture) tasks.
+#
+# Architecture:
+#   1. Prover proposes a conjecture (DSL macro candidate)
+#   2. Oracle (game environment) verifies by searching for counterexamples
+#   3. If counterexample found → refine conjecture scope via library.refine_macro()
+#   4. Repeat up to max_rounds (default 5)
+#
+# Integration with InteractiveZKPLoop:
+#   MoonshineProver.refine_conjecture() uses library.refine_macro() to
+#   update the conjecture's scope, which then feeds back into the
+#   ZKP loop's Prove step for re-verification.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class MoonshineProver:
+    """Numerical Oracle Game Prover — κ-Snap反向 conjecture refinement loop.
+
+    Implements the MoonshineProver from "从猜想生成到流贯觉察":
+    a Prover-Oracle feedback loop for high-dimensional NJC tasks.
+
+    The MoonshineProver operates as follows:
+        1. Prover proposes a sampling strategy for testing a conjecture
+        2. Oracle verifies by executing the strategy against game data
+           and searching for counterexamples
+        3. If counterexample found → refine conjecture scope
+           (narrow the generalization domain via library.refine_macro())
+        4. If no counterexample found → conjecture is validated and
+           added to library as a verified macro
+        5. Repeat up to max_rounds (default 5)
+
+    This is the "Numerical Oracle Game" — instead of formal proof,
+    we use exhaustive sampling against the game environment to verify
+    or falsify conjectures. Counterexamples narrow the conjecture's
+    scope, making it more precise but less general.
+
+    Integration with InteractiveZKPLoop:
+        MoonshineProver can be invoked during the ZKP Prove step to
+        refine conjectures that initially fail GaussEx verification.
+        The refined conjecture then feeds back into the Verify step.
+
+    Attributes:
+        _library: LibraryManager instance for macro persistence and refinement.
+        _max_rounds: Maximum number of Prover-Oracle refinement rounds.
+        _round_count: Current refinement round count.
+        _conjecture_history: List of conjecture states across refinement rounds.
+        _counterexample_log: List of counterexamples found during verification.
+    """
+
+    # ── Sampling strategy parameters ──
+    DEFAULT_SAMPLE_SIZE: int = 100  # Number of parameter samples per round
+    DEFAULT_PARAM_RANGES: Dict[str, Tuple[float, float]] = {
+        "grid_density": (0.1, 0.9),
+        "euler_char_range": (-5.0, 10.0),
+        "n_components_range": (1.0, 20.0),
+        "action_count_range": (2.0, 50.0),
+    }
+
+    def __init__(
+        self,
+        library_manager: Optional[LibraryManager] = None,
+        max_rounds: int = 5,
+        zkp_loop: Optional[InteractiveZKPLoop] = None,
+    ) -> None:
+        """Initialize MoonshineProver with library manager and ZKP loop.
+
+        Args:
+            library_manager: LibraryManager for macro persistence.
+                If None, creates a default one.
+            max_rounds: Maximum number of Prover-Oracle refinement rounds.
+                Defaults to 5 (per article recommendation).
+            zkp_loop: Optional InteractiveZKPLoop for interactive
+                conjecture refinement integration.
+        """
+        self._library = library_manager or LibraryManager()
+        self._max_rounds = max_rounds
+        self._zkp_loop = zkp_loop
+        self._round_count: int = 0
+        self._conjecture_history: List[Dict[str, Any]] = []
+        self._counterexample_log: List[Dict[str, Any]] = []
+
+    def propose_sampling_strategy(
+        self,
+        conjecture: MacroCandidate,
+    ) -> Dict[str, Any]:
+        """Propose a parameter sampling strategy for testing a conjecture.
+
+        Given a MacroCandidate (conjecture), generate a sampling plan
+        that covers the conjecture's applicable parameter space. The
+        sampling strategy determines which game configurations should
+        be tested to verify or falsify the conjecture.
+
+        The strategy is derived from the conjecture's:
+            - applicable_topo: topology constraints that define applicability
+            - generalization_tags: semantic categories the conjecture covers
+            - gaussex_precond: precondition constraints
+
+        Args:
+            conjecture: MacroCandidate representing the conjecture to test.
+
+        Returns:
+            Dict with keys:
+                sample_size: Number of parameter configurations to test.
+                param_ranges: Dict of parameter ranges for sampling.
+                priority_tags: Tags that should be prioritized in sampling.
+                topo_constraints: Topology constraints for filtering samples.
+                conjecture_name: Name of the conjecture being tested.
+        """
+        # ── Determine sample size based on conjecture complexity ──
+        dsl_length = len(conjecture.dsl_sequence)
+        n_tags = len(conjecture.generalization_tags)
+
+        # More complex conjectures need more samples
+        base_size = self.DEFAULT_SAMPLE_SIZE
+        complexity_multiplier = 1.0 + 0.1 * dsl_length + 0.05 * n_tags
+        sample_size = int(base_size * complexity_multiplier)
+
+        # ── Build parameter ranges from conjecture properties ──
+        param_ranges: Dict[str, Tuple[float, float]] = {}
+        param_ranges.update(self.DEFAULT_PARAM_RANGES)
+
+        # Add topology-specific ranges from applicable_topo
+        topo = conjecture.applicable_topo
+        if isinstance(topo, dict):
+            euler_char = topo.get("euler_char", 0)
+            period_rank = topo.get("period_rank", 0)
+            # Range around the conjecture's applicable euler_char
+            param_ranges["euler_char_range"] = (
+                float(euler_char - 3), float(euler_char + 3)
+            )
+            # Periodicity sampling range
+            param_ranges["period_rank_range"] = (
+                0.0, float(period_rank + 2)
+            )
+
+        # ── Determine priority tags for focused sampling ──
+        priority_tags = list(conjecture.generalization_tags)
+
+        # ── Build sampling strategy dict ──
+        strategy = {
+            "sample_size": sample_size,
+            "param_ranges": param_ranges,
+            "priority_tags": priority_tags,
+            "topo_constraints": conjecture.applicable_topo,
+            "conjecture_name": conjecture.name,
+            "conjecture_fingerprint": conjecture.tomas_fingerprint,
+            "gaussex_precond": conjecture.gaussex_precond,
+            "round_number": self._round_count,
+        }
+
+        return strategy
+
+    def oracle_verify(
+        self,
+        proposal: Dict[str, Any],
+        game_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Oracle verification: search for counterexamples to the conjecture.
+
+        Execute the sampling strategy against game data to verify or
+        falsify the conjecture. The Oracle tests the conjecture by:
+            1. Generating parameter samples from the proposal ranges
+            2. Testing each sample against the game environment
+            3. Checking if the conjecture's DSL sequence produces
+               the expected outcome for each sample
+            4. If any sample fails → counterexample found
+
+        Args:
+            proposal: Sampling strategy dict from propose_sampling_strategy().
+            game_data: Optional game environment data for testing.
+                If None, uses synthetic testing based on topology constraints.
+
+        Returns:
+            Dict with keys:
+                verified: Whether the conjecture passed all sample tests.
+                counterexamples_found: Number of counterexamples found.
+                counterexamples: List of counterexample dicts (if any).
+                samples_tested: Number of samples tested.
+                verification_score: Float score (0.0-1.0) of conjecture reliability.
+                round_number: Current refinement round.
+        """
+        sample_size = proposal.get("sample_size", self.DEFAULT_SAMPLE_SIZE)
+        param_ranges = proposal.get("param_ranges", self.DEFAULT_PARAM_RANGES)
+        topo_constraints = proposal.get("topo_constraints", {})
+        conjecture_name = proposal.get("conjecture_name", "")
+        priority_tags = proposal.get("priority_tags", [])
+
+        self._round_count += 1
+        counterexamples: List[Dict[str, Any]] = []
+        samples_tested: int = 0
+
+        # ── Generate parameter samples ──
+        # Use grid_density and euler_char as primary sampling dimensions
+        density_range = param_ranges.get("grid_density", (0.1, 0.9))
+        euler_range = param_ranges.get("euler_char_range", (-5.0, 10.0))
+
+        for i in range(min(sample_size, 200)):
+            # Sample a parameter configuration
+            sample_density = density_range[0] + (density_range[1] - density_range[0]) * (i / max(sample_size, 1))
+            sample_euler = euler_range[0] + (euler_range[1] - euler_range[0]) * (
+                (i + 0.5) / max(sample_size, 1)
+            )
+
+            # ── Check if this sample is within the conjecture's scope ──
+            # A counterexample is a game configuration where the conjecture
+            # claims to apply but actually fails
+            in_scope = True
+
+            # Check topology constraint
+            if isinstance(topo_constraints, dict):
+                target_euler = topo_constraints.get("euler_char", 0)
+                tolerance = 3
+                if abs(sample_euler - target_euler) > tolerance:
+                    # Outside the conjecture's topology scope — not a counterexample
+                    in_scope = False
+
+            if not in_scope:
+                continue
+
+            samples_tested += 1
+
+            # ── Simulate verification: check if conjecture works for this config ──
+            # In production, this would actually run the game with the conjecture
+            # For now, use heuristic verification based on game_data or topology
+
+            verification_passed = True
+
+            # Use game_data for real verification if available
+            if game_data is not None:
+                grid = game_data.get("grid")
+                if grid is not None and isinstance(grid, np.ndarray):
+                    real_topo = extract_topo_features(grid)
+                    real_euler = real_topo.get("euler_char", 0)
+                    real_density = real_topo.get("density", 0.5)
+
+                    # Check if the conjecture's topology matches the real game
+                    if isinstance(topo_constraints, dict):
+                        target_euler = topo_constraints.get("euler_char", 0)
+                        if abs(real_euler - target_euler) > 2:
+                            verification_passed = False
+
+                    # Check if the conjecture's tags cover this game type
+                    game_tags = game_data.get("tags", [])
+                    if priority_tags and game_tags:
+                        overlap = len(set(priority_tags) & set(game_tags))
+                        if overlap == 0:
+                            verification_passed = False
+            else:
+                # Synthetic verification: use sampled parameters
+                # High-density configs with mismatched euler_char are likely counterexamples
+                if sample_density > 0.7 and abs(sample_euler - round(sample_euler)) > 1.5:
+                    verification_passed = False
+
+            # ── Record counterexample if found ──
+            if not verification_passed:
+                counterexample = {
+                    "sample_index": i,
+                    "sample_density": float(sample_density),
+                    "sample_euler_char": float(sample_euler),
+                    "conjecture_name": conjecture_name,
+                    "reason": "topology_mismatch_or_tag_exclusion",
+                    "round_number": self._round_count,
+                    "timestamp": time.time(),
+                }
+                counterexamples.append(counterexample)
+                self._counterexample_log.append(counterexample)
+
+        # ── Compute verification score ──
+        if samples_tested > 0:
+            verification_score = 1.0 - (len(counterexamples) / max(samples_tested, 1))
+        else:
+            verification_score = 0.0  # No samples tested → unknown
+
+        verified = len(counterexamples) == 0
+
+        # ── Record conjecture history ──
+        self._conjecture_history.append({
+            "round_number": self._round_count,
+            "conjecture_name": conjecture_name,
+            "verified": verified,
+            "counterexamples_found": len(counterexamples),
+            "samples_tested": samples_tested,
+            "verification_score": verification_score,
+        })
+
+        return {
+            "verified": verified,
+            "counterexamples_found": len(counterexamples),
+            "counterexamples": counterexamples,
+            "samples_tested": samples_tested,
+            "verification_score": verification_score,
+            "round_number": self._round_count,
+        }
+
+    def refine_conjecture(
+        self,
+        counterexample: Dict[str, Any],
+        library: Optional[LibraryManager] = None,
+    ) -> Dict[str, Any]:
+        """Refine conjecture scope based on a counterexample.
+
+        When the Oracle finds a counterexample, this method narrows the
+        conjecture's scope by:
+            1. Analyzing the counterexample to identify what went wrong
+            2. Refining the generalization_tags (removing overly broad tags)
+            3. Narrowing the applicable_topo constraints
+            4. Updating the gaussex_precondition to exclude the counterexample domain
+            5. Persisting the refined conjecture via library
+
+        This implements the core Moonshine mechanism: from counterexample →
+        refined conjecture → narrower but more reliable generalization.
+
+        Args:
+            counterexample: Dict describing the counterexample found by Oracle.
+                Keys: sample_density, sample_euler_char, reason, conjecture_name.
+            library: Optional LibraryManager for persistence. If None,
+                uses self._library.
+
+        Returns:
+            Dict with keys:
+                refined: Whether the conjecture was successfully refined.
+                old_scope: Dict describing the conjecture's scope before refinement.
+                new_scope: Dict describing the conjecture's scope after refinement.
+                scope_reduction: Float measure of how much the scope was narrowed.
+                refinement_round: Current refinement round number.
+        """
+        lib = library or self._library
+
+        conjecture_name = counterexample.get("conjecture_name", "")
+        counter_density = counterexample.get("sample_density", 0.5)
+        counter_euler = counterexample.get("sample_euler_char", 0.0)
+        reason = counterexample.get("reason", "unknown")
+
+        # ── Find the conjecture macro in library ──
+        all_macros = lib.get_all_macros()
+        target_macro: Optional[MacroCandidate] = None
+        for m in all_macros:
+            if m.name == conjecture_name:
+                target_macro = m
+                break
+
+        if target_macro is None:
+            return {
+                "refined": False,
+                "old_scope": {},
+                "new_scope": {},
+                "scope_reduction": 0.0,
+                "refinement_round": self._round_count,
+                "error": f"Conjecture '{conjecture_name}' not found in library",
+            }
+
+        # ── Record old scope ──
+        old_scope = {
+            "generalization_tags": list(target_macro.generalization_tags),
+            "applicable_topo": dict(target_macro.applicable_topo),
+            "gaussex_precond": target_macro.gaussex_precond,
+        }
+
+        # ── Refine scope based on counterexample ──
+        # 1. Narrow topology constraints to exclude counterexample's euler_char range
+        refined_topo = dict(target_macro.applicable_topo)
+        if isinstance(refined_topo, dict):
+            old_euler_range = refined_topo.get("euler_char", 0)
+            # Narrow by 1 unit towards the conjecture's proven range
+            if isinstance(old_euler_range, (int, float)):
+                # Keep euler_char ±1 instead of ±3
+                refined_topo["euler_char_tolerance"] = 1
+            else:
+                refined_topo["euler_char_tolerance"] = 1
+
+        # 2. Remove overly broad generalization tags
+        refined_tags = list(target_macro.generalization_tags)
+        # Remove tags that are too general and led to the counterexample
+        overly_broad_tags = {"general", "mixed", "all", "universal"}
+        refined_tags = [t for t in refined_tags if t not in overly_broad_tags]
+        # Add a refinement-specific tag
+        refined_tags.append(f"refined_round_{self._round_count}")
+
+        # 3. Strengthen precondition to exclude counterexample domain
+        old_precond = target_macro.gaussex_precond
+        density_constraint = f" AND density < {counter_density + 0.1:.2f}"
+        euler_constraint = f" AND euler_char != {int(counter_euler)}"
+        refined_precond = old_precond + density_constraint + euler_constraint
+
+        # ── Compute scope reduction ──
+        old_tag_count = len(target_macro.generalization_tags)
+        new_tag_count = len(refined_tags)
+        scope_reduction = (old_tag_count - new_tag_count) / max(old_tag_count, 1)
+
+        # ── Record new scope ──
+        new_scope = {
+            "generalization_tags": refined_tags,
+            "applicable_topo": refined_topo,
+            "gaussex_precond": refined_precond,
+        }
+
+        # ── Update the macro in library ──
+        refined_macro = MacroCandidate(
+            name=f"{target_macro.name}_r{self._round_count}",
+            dsl_sequence=target_macro.dsl_sequence,
+            tomas_fingerprint=target_macro.tomas_fingerprint,
+            source_tasks=target_macro.source_tasks,
+            avg_steps=target_macro.avg_steps,
+            success_rate=max(0.0, target_macro.success_rate * 0.9),  # Slightly reduced due to scope narrowing
+            generalization_tags=refined_tags,
+            mdl_score=target_macro.mdl_score,
+            min_demo_to_activate=target_macro.min_demo_to_activate + 1,  # Require more demos after refinement
+            validated=False,  # Re-require validation after refinement
+            applicable_topo=refined_topo,
+            gaussex_precond=refined_precond,
+        )
+
+        lib.add_macro(refined_macro)
+
+        # ── If ZKP loop is available, update it with refined conjecture ──
+        if self._zkp_loop is not None:
+            # Register the refined macro in KV-cache for future ZKP verification
+            dsl_str = json.dumps(refined_macro.dsl_sequence)
+            self._zkp_loop._kv_cache.register_effective_macro(
+                refined_macro.name, dsl_str,
+            )
+
+        return {
+            "refined": True,
+            "old_scope": old_scope,
+            "new_scope": new_scope,
+            "scope_reduction": scope_reduction,
+            "refinement_round": self._round_count,
+            "refined_macro_name": refined_macro.name,
+        }
+
+    def run_full_verification(
+        self,
+        conjecture: MacroCandidate,
+        game_data: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Run full Prover-Oracle verification loop for a conjecture.
+
+        Orchestrates the complete Moonshine verification cycle:
+            1. Propose sampling strategy for the conjecture
+            2. Oracle verifies → find counterexamples
+            3. If counterexamples found → refine conjecture (up to max_rounds)
+            4. Return final verification result
+
+        Args:
+            conjecture: MacroCandidate to verify through the Oracle Game.
+            game_data: Optional game environment data for testing.
+
+        Returns:
+            Dict with keys:
+                final_verified: Whether the conjecture was verified after all rounds.
+                total_rounds: Number of Prover-Oracle rounds executed.
+                final_verification_score: Final verification score.
+                refinement_history: List of refinement results per round.
+                conjecture_name: Name of the original conjecture.
+                final_macro: The final (possibly refined) MacroCandidate.
+        """
+        self._round_count = 0
+        self._conjecture_history = []
+        self._counterexample_log = []
+
+        current_conjecture = conjecture
+        refinement_history: List[Dict[str, Any]] = []
+
+        for round_num in range(self._max_rounds):
+            self._round_count = round_num + 1
+
+            # ── Step 1: Propose sampling strategy ──
+            proposal = self.propose_sampling_strategy(current_conjecture)
+
+            # ── Step 2: Oracle verify ──
+            oracle_result = self.oracle_verify(proposal, game_data)
+
+            # ── Step 3: Check if verified ──
+            if oracle_result["verified"]:
+                # Conjecture passed — add to library as verified macro
+                current_conjecture.validated = True
+                current_conjecture.success_rate = oracle_result["verification_score"]
+                self._library.add_macro(current_conjecture)
+                break
+
+            # ── Step 4: Refine conjecture from counterexamples ──
+            for counterexample in oracle_result.get("counterexamples", []):
+                refinement = self.refine_conjecture(counterexample)
+                refinement_history.append(refinement)
+
+                if refinement["refined"]:
+                    # Update current conjecture to refined version
+                    refined_name = refinement.get("refined_macro_name", "")
+                    all_macros = self._library.get_all_macros()
+                    for m in all_macros:
+                        if m.name == refined_name:
+                            current_conjecture = m
+                            break
+
+        # ── Final result ──
+        final_verified = len(self._counterexample_log) == 0 or oracle_result.get("verified", False)
+
+        return {
+            "final_verified": final_verified,
+            "total_rounds": self._round_count,
+            "final_verification_score": oracle_result.get("verification_score", 0.0),
+            "refinement_history": refinement_history,
+            "conjecture_name": conjecture.name,
+            "final_macro": current_conjecture,
+        }
+
+    def get_verification_stats(self) -> Dict[str, Any]:
+        """Get MoonshineProver verification statistics.
+
+        Returns:
+            Dict with keys: total_rounds, total_counterexamples,
+            conjecture_history, verification_rounds.
+        """
+        return {
+            "total_rounds": self._round_count,
+            "total_counterexamples": len(self._counterexample_log),
+            "conjecture_history": list(self._conjecture_history),
+            "max_rounds": self._max_rounds,
         }

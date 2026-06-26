@@ -76,6 +76,9 @@ from .tomas_learner import (
     ThinkerPerformerPipeline,
     InteractiveZKPLoop,
     PersistentKVCache,
+    # v3.9.0 — Sleep-Step Algorithm 1 + Abductive Lift + Ω_topo Trigger + MoonshineProver
+    MoonshineProver,
+    check_breakthrough_and_trigger,
 )
 
 # ── MetaSnapNet可选集成 ──
@@ -167,6 +170,9 @@ __all__ = [
     "ThinkerPerformerPipeline",
     "InteractiveZKPLoop",
     "PersistentKVCache",
+    # v3.9.0 — Sleep-Step Algorithm 1 + Abductive Lift + Ω_topo Trigger + MoonshineProver
+    "MoonshineProver",
+    "check_breakthrough_and_trigger",
     # MetaSnapNet κ-Snap Beam Scoring (SPP集成)
     "TopoFeatureExtractor",
     "ProgramNodeFeatureExtractor",

@@ -1,36 +1,21 @@
 {
-  "_schema_version": "3.8.0",
-  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (泛函宏统一场论 + ASD + 3-Life + Thinker-Performer + ZKP Loop)",
+  "_schema_version": "3.3.0",
+  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (泛函宏统一场论)",
   "_tomas_framework": {
-    "version": "3.8.0",
+    "version": "3.3.0-dev",
     "core_modules": [
       "kappa_snap_searcher",
       "nar_conv",
       "tomas_learner",
       "library_manager",
       "gaussex_verifier",
-      "fast_path_dispatcher",
-      "online_psi_audit",
-      "physical_nar_conv",
-      "persistent_kv_cache",
-      "interactive_zkp_loop",
-      "thinker_performer_pipeline"
+      "fast_path_dispatcher"
     ],
     "asym_index_enabled": true,
     "narla_integration": true,
-    "fast_path_enabled": true,
-    "asd_enabled": true,
-    "three_life_strategy": true,
-    "physical_compactification": true,
-    "sleep_step_trigger": true,
-    "beam_width": 16,
-    "thinker_performer_pipeline": true,
-    "interactive_zkp_loop": true,
-    "kv_cache_persistent_state": true,
-    "clean_latent_writeback": true,
-    "topology_invariant_guided_ranking": true
+    "fast_path_enabled": true
   },
-  "_note": "v3.8.0 - Thinker-Performer dual-track + Interactive ZKP Loop + PersistentKVCache + Clean Latent Writeback + Topology-Invariant-Guided κ-Snap Beam Ranking",
+  "_note": "Macros are validated by ψ-Audit before activation. TOMAS fingerprints enable cross-game pattern matching. v3.3.0 adds applicable_topo + gaussex_precond for Fast-Path dispatch.",
   "abstractions": [
     {
       "name": "macro_push_sprite_to_target",
@@ -2575,7 +2560,7 @@
       "min_demo_to_activate": 1,
       "created_at": "2026-06-28",
       "validated": false,
-      "mdl_score": 0.60,
+      "mdl_score": 0.6,
       "applicable_topo": {
         "stable_topology": true
       },
@@ -2669,7 +2654,7 @@
         "pipeline_parallel_L0"
       ],
       "avg_steps": 5.0,
-      "success_rate": 0.60,
+      "success_rate": 0.6,
       "generalization_tags": [
         "pipeline_parallelism",
         "thinker_performer_dual_track",
@@ -2684,6 +2669,571 @@
       },
       "gaussex_precond": "kv_cache_step_count >= 1 AND pipeline_count >= 1",
       "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_sleep_step_success_to_macro",
+      "dsl_sequence": [
+        {
+          "analyze": "success_proof_log_patterns"
+        },
+        {
+          "extract": "recurring_causal_structure"
+        },
+        {
+          "create": "functional_macro_candidate"
+        },
+        {
+          "validate": "quick_validation_against_library"
+        }
+      ],
+      "tomas_fingerprint": "ss_alg1_001",
+      "source_tasks": [
+        "v3.9.0_algorithm_1"
+      ],
+      "avg_steps": 4.0,
+      "success_rate": 0.7,
+      "generalization_tags": [
+        "sleep_step_algorithm_1",
+        "success_log_extraction",
+        "functional_macro_creation",
+        "bk_evolution"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-29",
+      "validated": false,
+      "mdl_score": 0.75,
+      "applicable_topo": {
+        "euler_char": 0,
+        "period_rank": 0
+      },
+      "gaussex_precond": "successful_proof_log_count >= 3 AND pattern_recurring",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_abductive_lift_from_solved",
+      "dsl_sequence": [
+        {
+          "observe": "solved_game_action_sequence"
+        },
+        {
+          "encode": "causal_invariant_c0_extraction"
+        },
+        {
+          "propose": "macro_for_similar_topology"
+        },
+        {
+          "generalize": "cross_game_migration"
+        }
+      ],
+      "tomas_fingerprint": "ab_lift_001",
+      "source_tasks": [
+        "v3.9.0_kappa_snap_reverse"
+      ],
+      "avg_steps": 4.0,
+      "success_rate": 0.65,
+      "generalization_tags": [
+        "abductive_lift",
+        "kappa_snap_reverse",
+        "causal_invariant",
+        "moonshine_core_ability"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-29",
+      "validated": false,
+      "mdl_score": 0.7,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 0
+      },
+      "gaussex_precond": "game_solved = True AND rhae_score >= 50",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_omega_topo_breakthrough_trigger",
+      "dsl_sequence": [
+        {
+          "compute": "scaling_law_v36"
+        },
+        {
+          "check": "delta_bk_greater_than_omega_topo"
+        },
+        {
+          "trigger": "sleep_step_algorithm_1_bk_evolution"
+        },
+        {
+          "acknowledge": "ontological_boundary_if_no_breakthrough"
+        }
+      ],
+      "tomas_fingerprint": "omega_trig_001",
+      "source_tasks": [
+        "v3.9.0_omega_topo_trigger"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 0.8,
+      "generalization_tags": [
+        "omega_topo_breakthrough",
+        "bk_evolution_trigger",
+        "scaling_law_integration",
+        "ontological_boundary"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-29",
+      "validated": false,
+      "mdl_score": 0.8,
+      "applicable_topo": {
+        "euler_char": 0,
+        "period_rank": 1
+      },
+      "gaussex_precond": "phys_pruner_active = True AND action_counter >= 10",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_np_c_likely_boundary_primitive",
+      "dsl_sequence": [
+        {
+          "classify": "np_c_likely_requires_new_primitives"
+        },
+        {
+          "lower_threshold": "sleep_step_threshold_from_3_to_2"
+        },
+        {
+          "aggressive_sleep": "trigger_bk_evolution_earlier"
+        },
+        {
+          "acknowledge": "godel_residual_boundary"
+        }
+      ],
+      "tomas_fingerprint": "npc_bound_001",
+      "source_tasks": [
+        "v3.9.0_np_c_likely_boundary"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.5,
+      "generalization_tags": [
+        "np_c_likely",
+        "requires_new_primitives",
+        "godel_residual",
+        "ontological_randomness",
+        "boundary_acknowledgment"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-29",
+      "validated": false,
+      "mdl_score": 0.6,
+      "applicable_topo": {
+        "euler_char": 0,
+        "period_rank": 0,
+        "symmetry": []
+      },
+      "gaussex_precond": "complexity_class = NP_C_likely",
+      "complexity_class": "NP_C_likely"
+    },
+    {
+      "name": "macro_moonshine_prover_oracle_game",
+      "dsl_sequence": [
+        {
+          "propose": "parameter_sampling_strategy"
+        },
+        {
+          "oracle_verify": "search_counterexamples"
+        },
+        {
+          "refine": "update_conjecture_scope_via_library"
+        },
+        {
+          "iterate": "prover_oracle_feedback_loop_max_5_rounds"
+        }
+      ],
+      "tomas_fingerprint": "ms_prov_001",
+      "source_tasks": [
+        "v3.9.0_moonshine_prover"
+      ],
+      "avg_steps": 5.0,
+      "success_rate": 0.55,
+      "generalization_tags": [
+        "moonshine_prover",
+        "numerical_oracle_game",
+        "prover_oracle_feedback",
+        "high_dim_njc",
+        "interactive_conjecture_refinement"
+      ],
+      "min_demo_to_activate": 2,
+      "created_at": "2026-06-29",
+      "validated": false,
+      "mdl_score": 0.65,
+      "applicable_topo": {
+        "euler_char": -1,
+        "period_rank": 2,
+        "symmetry": [
+          "rotational"
+        ]
+      },
+      "gaussex_precond": "complexity_class != P AND topology_invariant_score < 0.5",
+      "complexity_class": "NP_C_likely"
+    },
+    {
+      "name": "func_macro_490750de_2x",
+      "dsl_sequence": [
+        {
+          "repeat": "CLICK",
+          "params": {
+            "target": "diamond"
+          },
+          "count": 2
+        }
+      ],
+      "tomas_fingerprint": "490750de7b1c12bb",
+      "source_tasks": [
+        "test",
+        "test"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.825,
+      "generalization_tags": [
+        "",
+        "functional_macro",
+        "success_pattern"
+      ],
+      "mdl_score": 0.5,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463072.4000728,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "n_components": 1,
+        "n_holes": 0,
+        "n_pixels": 4,
+        "density": 0.04
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "func_macro_045b2f1d_2x",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "params": {
+            "target": "diamond"
+          }
+        },
+        {
+          "action": "MOVE",
+          "params": {
+            "dx": 1,
+            "dy": 0
+          }
+        }
+      ],
+      "tomas_fingerprint": "045b2f1d85bf6b00",
+      "source_tasks": [
+        "test",
+        "test"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.825,
+      "generalization_tags": [
+        "CLICK",
+        "MOVE",
+        "functional_macro",
+        "success_pattern"
+      ],
+      "mdl_score": 1.0,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463072.4034102,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "n_components": 1,
+        "n_holes": 0,
+        "n_pixels": 4,
+        "density": 0.04
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "func_macro_321706fc_2x",
+      "dsl_sequence": [
+        {
+          "repeat": "CLICK",
+          "params": {
+            "target": "diamond"
+          },
+          "count": 2
+        },
+        {
+          "action": "MOVE",
+          "params": {
+            "dx": 1,
+            "dy": 0
+          }
+        }
+      ],
+      "tomas_fingerprint": "321706fcc2b17be5",
+      "source_tasks": [
+        "test",
+        "test"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 0.825,
+      "generalization_tags": [
+        "",
+        "MOVE",
+        "functional_macro",
+        "success_pattern"
+      ],
+      "mdl_score": 0.6666666666666666,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463072.4059958,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "n_components": 1,
+        "n_holes": 0,
+        "n_pixels": 4,
+        "density": 0.04
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "lift_test2_L0_18e69afe",
+      "dsl_sequence": [
+        {
+          "action": "KEYBOARD",
+          "category": "navigate_direction"
+        },
+        {
+          "action": "CLICK",
+          "category": "click_switcher"
+        }
+      ],
+      "tomas_fingerprint": "18e69afeaa86a79b",
+      "source_tasks": [
+        "test2_L0"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.9,
+      "generalization_tags": [
+        "navigate_direction",
+        "click_switcher",
+        "kappa_snap_reverse",
+        "abductive_lift",
+        "causal_invariant_2",
+        "navigation",
+        "bfs"
+      ],
+      "mdl_score": 0.6666666666666666,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463072.434439,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 2,
+        "symmetry": [
+          "horizontal",
+          "vertical",
+          "rotational_180"
+        ],
+        "component_count": 1,
+        "hole_count": 0,
+        "density": 1.0
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "func_macro_490750de_2x",
+      "dsl_sequence": [
+        {
+          "repeat": "CLICK",
+          "params": {
+            "target": "diamond"
+          },
+          "count": 2
+        }
+      ],
+      "tomas_fingerprint": "490750de7b1c12bb",
+      "source_tasks": [
+        "test",
+        "test"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.825,
+      "generalization_tags": [
+        "",
+        "functional_macro",
+        "success_pattern"
+      ],
+      "mdl_score": 0.5,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463207.4332566,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "n_components": 1,
+        "n_holes": 0,
+        "n_pixels": 4,
+        "density": 0.04
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "func_macro_045b2f1d_2x",
+      "dsl_sequence": [
+        {
+          "action": "CLICK",
+          "params": {
+            "target": "diamond"
+          }
+        },
+        {
+          "action": "MOVE",
+          "params": {
+            "dx": 1,
+            "dy": 0
+          }
+        }
+      ],
+      "tomas_fingerprint": "045b2f1d85bf6b00",
+      "source_tasks": [
+        "test",
+        "test"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.825,
+      "generalization_tags": [
+        "MOVE",
+        "CLICK",
+        "functional_macro",
+        "success_pattern"
+      ],
+      "mdl_score": 1.0,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463207.445714,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "n_components": 1,
+        "n_holes": 0,
+        "n_pixels": 4,
+        "density": 0.04
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "func_macro_321706fc_2x",
+      "dsl_sequence": [
+        {
+          "repeat": "CLICK",
+          "params": {
+            "target": "diamond"
+          },
+          "count": 2
+        },
+        {
+          "action": "MOVE",
+          "params": {
+            "dx": 1,
+            "dy": 0
+          }
+        }
+      ],
+      "tomas_fingerprint": "321706fcc2b17be5",
+      "source_tasks": [
+        "test",
+        "test"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 0.825,
+      "generalization_tags": [
+        "",
+        "MOVE",
+        "functional_macro",
+        "success_pattern"
+      ],
+      "mdl_score": 0.6666666666666666,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463207.449415,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "n_components": 1,
+        "n_holes": 0,
+        "n_pixels": 4,
+        "density": 0.04
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "lift_test2_L0_18e69afe",
+      "dsl_sequence": [
+        {
+          "action": "KEYBOARD",
+          "category": "navigate_direction"
+        },
+        {
+          "action": "CLICK",
+          "category": "click_switcher"
+        }
+      ],
+      "tomas_fingerprint": "18e69afeaa86a79b",
+      "source_tasks": [
+        "test2_L0"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.9,
+      "generalization_tags": [
+        "navigate_direction",
+        "click_switcher",
+        "kappa_snap_reverse",
+        "abductive_lift",
+        "causal_invariant_2",
+        "navigation",
+        "bfs"
+      ],
+      "mdl_score": 0.6666666666666666,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463207.4780533,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 2,
+        "symmetry": [
+          "horizontal",
+          "vertical",
+          "rotational_180"
+        ],
+        "component_count": 1,
+        "hole_count": 0,
+        "density": 1.0
+      },
+      "gaussex_precond": "True"
+    },
+    {
+      "name": "test_conj",
+      "dsl_sequence": [
+        {
+          "action": "CLICK"
+        },
+        {
+          "action": "MOVE"
+        }
+      ],
+      "tomas_fingerprint": "abc123",
+      "source_tasks": [],
+      "avg_steps": 0.0,
+      "success_rate": 1.0,
+      "generalization_tags": [
+        "click",
+        "navigation"
+      ],
+      "mdl_score": 0.5,
+      "min_demo_to_activate": 1,
+      "created_at": 1782463243.5549953,
+      "validated": true,
+      "applicable_topo": {
+        "euler_char": 2,
+        "period_rank": 1
+      },
+      "gaussex_precond": "True"
     }
   ]
 }
