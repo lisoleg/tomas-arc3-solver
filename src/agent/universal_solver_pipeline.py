@@ -1006,7 +1006,7 @@ class UniversalSolverPipeline:
         Returns:
             List of (GameAction, None) tuples, or None.
         """
-        from arcengine import GameAction
+        from arcengine import GameAction, ActionInput
 
         # Find map sprites
         map_sprites = _get_sprites_by_tag(self.game, "0005uvnhiglpvh")
@@ -1843,6 +1843,7 @@ class UniversalSolverPipeline:
         Returns:
             List of (action_id, data) tuples, or None.
         """
+        from arcengine import ActionInput
         initial_hash = _game_state_hash(self.game)
         initial_score = self._score_game_state(self.game)
 

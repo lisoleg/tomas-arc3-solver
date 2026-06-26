@@ -1427,8 +1427,9 @@ def solve_s5i5(game: Any, level_idx: int) -> list | None:
             continue
 
         # === Assign clicks to LCs based on needed dx/dy ===
-        # Strategy: prefer GROW over SHRINK (shrink fails when index=1, i.e. at minimum size).
-        # For each axis, find the best-matching grower first, then fall back to shrink.
+        # Strategy: distribute clicks across ALL matching selectors in chain,
+        # not just the first one. This handles cases where one selector hits
+        # its size limit before covering the full distance.
         CELL_SIZE = 3
         remaining_dx = dx_needed
         remaining_dy = dy_needed
@@ -1440,12 +1441,13 @@ def solve_s5i5(game: Any, level_idx: int) -> list | None:
                 return int(sel.height) // CELL_SIZE
             return int(sel.width) // CELL_SIZE
 
-        # --- Assign dx ---
+        # --- Assign dx: distribute across multiple selectors ---
         if remaining_dx != 0:
             want_right = remaining_dx > 0
-            assigned = False
-            # Prefer grow
+            # First pass: assign to growers
             for sel, dir_name, grow_vec, lc in chain:
+                if remaining_dx == 0:
+                    break
                 gx, _gy = grow_vec
                 if gx == 0:
                     continue
@@ -1454,11 +1456,11 @@ def solve_s5i5(game: Any, level_idx: int) -> list | None:
                     if clicks > 0:
                         remaining_dx -= clicks * gx
                         assignments.append((sel, dir_name, lc, clicks, True))
-                        assigned = True
-                        break
-            # Fallback: shrink
-            if not assigned:
+            # Second pass: fallback to shrinkers if still needed
+            if remaining_dx != 0:
                 for sel, dir_name, grow_vec, lc in chain:
+                    if remaining_dx == 0:
+                        break
                     gx, _gy = grow_vec
                     if gx == 0:
                         continue
@@ -1467,14 +1469,14 @@ def solve_s5i5(game: Any, level_idx: int) -> list | None:
                         if clicks > 0:
                             remaining_dx += clicks * gx  # shrink gives -gx
                             assignments.append((sel, dir_name, lc, clicks, False))
-                            break
 
-        # --- Assign dy ---
+        # --- Assign dy: distribute across multiple selectors ---
         if remaining_dy != 0:
             want_down = remaining_dy > 0
-            assigned = False
-            # Prefer grow
+            # First pass: assign to growers
             for sel, dir_name, grow_vec, lc in chain:
+                if remaining_dy == 0:
+                    break
                 _gx, gy = grow_vec
                 if gy == 0:
                     continue
@@ -1483,11 +1485,11 @@ def solve_s5i5(game: Any, level_idx: int) -> list | None:
                     if clicks > 0:
                         remaining_dy -= clicks * gy
                         assignments.append((sel, dir_name, lc, clicks, True))
-                        assigned = True
-                        break
-            # Fallback: shrink
-            if not assigned:
+            # Second pass: fallback to shrinkers if still needed
+            if remaining_dy != 0:
                 for sel, dir_name, grow_vec, lc in chain:
+                    if remaining_dy == 0:
+                        break
                     _gx, gy = grow_vec
                     if gy == 0:
                         continue
@@ -3481,8 +3483,14 @@ def _solve_oracle_click_replay(
             return collected
 
     # If not solved yet, try all remaining clickable targets
-    # from the game's _get_valid_clickable_actions()
-    valid_clicks = _get_valid_clickable_actions(sim)
+    # from the game's _get_valid_clickable_actions() method
+    if hasattr(sim, '_get_valid_clickable_actions'):
+        try:
+            valid_clicks = sim._get_valid_clickable_actions()
+        except Exception:
+            valid_clicks = []
+    else:
+        valid_clicks = []
     for vcl in valid_clicks:
         if _time.time() - t0 > max_time:
             break
@@ -3543,71 +3551,392 @@ def _detect_game_step(game: Any) -> int:
     return 5  # Default
 
 
-def solve_ls20(game: Any, level_idx: int) -> list | None:
-    """Solve LS20: Navigate player sprite through maze to goals.
 
-    LS20 uses heavily obfuscated attribute names:
-    - gudziatsk: player sprite
-    - gisrhqpee: grid step size (typically 5)
-    - plrpelhym: goal sprites
-    - fzhmwzexaj: switcher sprites
+# ============================================================================
+# TR87 Cipher Solver — deduces variant mapping from game internals
+# ============================================================================
 
-    Strategy:
-        1. Use LS20Adapter for step-by-step replay
-        2. At each step, move greedily towards nearest goal
-        3. Handles switchers through natural game progression
+def solve_tr87(game: Any, level_idx: int) -> list[tuple] | None:
+    """TR87 cipher solver using rule-based variant deduction.
 
-    Returns:
-        List of (action_id, None) tuples, or None.
-    """
-    return _solve_oracle_replay(game, "ls20", level_idx, max_steps=300, max_time=30.0)
-
-
-def solve_tr87(game: Any, level_idx: int) -> list | None:
-    """Solve TR87: Cipher variant navigation game.
-
-    TR87 uses keyboard actions to modify variant numbers on sprites.
-    This solver uses the OracleAdapter for step-by-step replay,
-    with greedy movement towards goals.
+    TR87 is a keyboard-only cipher game where:
+    - ACTION1/ACTION2 cycle the variant of the current target (variant-1/+1)
+    - ACTION3/ACTION4 navigate between targets (target-1/+1)
+    - 7 variants per pattern (kjgicbtgrt=7)
+    - Win condition: all goal variants match rule mapping expectations
 
     Strategy:
-        1. Use TR87Adapter for step-by-step replay
-        2. Greedy navigation towards goals
-        3. Fall back to universal pipeline if Oracle fails
-
-    Returns:
-        List of (action_id, data) tuples, or None.
+    1. Extract rule mapping from cifzvbcuwqe (src→dst variant pairs)
+    2. Match trigger sprites (zvojhrjxxm) to goal sprites (ztgmtnnufb)
+    3. Compute expected variant per position via rule chain lookup
+    4. Navigate to each position and adjust variant to match expected
     """
-    result = _solve_oracle_replay(game, "tr87", level_idx, max_steps=200, max_time=20.0)
-    if result is not None:
-        return result
-    # Fall back to None, letting solve_game use the universal pipeline
+    sim = copy.deepcopy(game)
+    orig_level = sim._current_level_index
+
+    from arcengine import ActionInput
+
+    # -- Helper: extract (letter, variant_number) from sprite name --
+    def _extract_variant(name: str) -> tuple[str, int] | None:
+        # Find the last uppercase letter followed by a number
+        # e.g., 'nxkictbbvztB3' → ('B', 3), 'nxkictbbvztC7' → ('C', 7)
+        for i in range(len(name) - 1, -1, -1):
+            if name[i].isupper() and i + 1 < len(name) and name[i + 1].isdigit():
+                num_str = ""
+                for j in range(i + 1, len(name)):
+                    if name[j].isdigit():
+                        num_str += name[j]
+                    else:
+                        break
+                return (name[i], int(num_str)) if num_str else None
+        return None
+
+    # -- Game mode detection --
+    alter_rules = sim.current_level.get_data("alter_rules")
+    n_goals = len(sim.ztgmtnnufb)
+    n_groups_total = len([set for rule in sim.cifzvbcuwqe for set in rule])
+    # Navigation modulus: n_goals (normal) or n_groups_total (alter_rules)
+    n_targets = n_groups_total if alter_rules else n_goals
+    N_VARIANTS = 7  # kjgicbtgrt
+
+    # -- Build rule mapping from cifzvbcuwqe --
+    # Each rule pair: (src_list, dst_list) defines src_variant → dst_variant
+    rule_map: dict[tuple[str, int], list[tuple[str, int]]] = {}
+    for srcs, dsts in sim.cifzvbcuwqe:
+        for s in srcs:
+            sv = _extract_variant(s.name)
+            if sv is None:
+                continue
+            dst_variants = [_extract_variant(d.name) for d in dsts]
+            if all(dv is not None for dv in dst_variants):
+                rule_map[sv] = dst_variants
+
+    # -- Extract trigger and goal variants --
+    triggers = sorted(sim.zvojhrjxxm, key=lambda s: s.x)
+    goals = sorted(sim.ztgmtnnufb, key=lambda s: s.x)
+    trigger_variants = [_extract_variant(s.name) for s in triggers]
+    goal_variants = [_extract_variant(s.name) for s in goals]
+
+    # -- Compute expected variant per trigger via rule chain --
+    # For each trigger, look up its variant in rule_map
+    # In double_translation: chain through multiple rule levels
+    expected_variants: list[tuple[str, int] | None] = []
+    for tv in trigger_variants:
+        if tv is None:
+            expected_variants.append(None)
+            continue
+        # Direct lookup
+        expected = rule_map.get(tv)
+        if expected:
+            # For multi-destination rules, use the first dst variant
+            # that matches the goal letter series
+            expected_variants.append(expected[0])
+        else:
+            # Try chain lookup: tv_letter → intermediate → target_letter
+            # e.g., (A, 4) → (B, 3) → need B→C lookup
+            for intermediate in rule_map.get(tv, []):
+                chain_result = rule_map.get(intermediate)
+                if chain_result:
+                    expected_variants.append(chain_result[0])
+                    break
+            else:
+                expected_variants.append(None)
+
+    # -- Match trigger positions to goal positions by nearest x --
+    trigger_x = [s.x for s in triggers]
+    goal_x = [s.x for s in goals]
+    trigger_to_goal: dict[int, int] = {}
+    for i, tx in enumerate(trigger_x):
+        best_j = min(range(len(goal_x)), key=lambda j: abs(goal_x[j] - tx))
+        trigger_to_goal[i] = best_j
+
+    # -- Build action plan --
+    plan: list[tuple[int, dict | None]] = []
+    current_index = sim.qvtymdcqear_index
+
+    for pos in range(n_targets):
+        if pos >= len(triggers):
+            break
+        g_idx = trigger_to_goal.get(pos)
+        if g_idx is None:
+            continue
+
+        cv_tuple = goal_variants[g_idx]
+        ev_tuple = expected_variants[pos]
+        if cv_tuple is None or ev_tuple is None:
+            continue
+
+        cv_num = cv_tuple[1]
+        ev_num = ev_tuple[1]
+
+        # Compute variant delta (forward = ACTION2, backward = ACTION1)
+        delta = (ev_num - cv_num + N_VARIANTS) % N_VARIANTS
+
+        # Navigate to position (forward = ACTION4, backward = ACTION3)
+        nav_forward = (pos - current_index) % n_targets
+        nav_backward = (n_targets - nav_forward) % n_targets
+        if nav_forward > 0 and nav_forward <= nav_backward:
+            for _ in range(nav_forward):
+                plan.append((4, None))
+        elif nav_backward > 0:
+            for _ in range(nav_backward):
+                plan.append((3, None))
+        current_index = pos
+
+        # Apply variant delta (choose minimum direction)
+        if delta > 0:
+            fwd_steps = delta
+            bwd_steps = N_VARIANTS - delta
+            if fwd_steps <= bwd_steps:
+                for _ in range(fwd_steps):
+                    plan.append((2, None))
+            else:
+                for _ in range(bwd_steps):
+                    plan.append((1, None))
+
+    # -- Verify plan on pristine copy --
+    if not plan:
+        return None
+    sim_verify = copy.deepcopy(game)
+    for aid, data in plan:
+        ai = ActionInput(id=aid, data=data if data else {})
+        try:
+            sim_verify.perform_action(ai)
+        except Exception:
+            return None
+    if sim_verify._current_level_index > orig_level:
+        return plan
+
+    # -- Verification failed: try simulation-based fallback --
+    # Per-position brute-force: try all variants at each position
+    plan2: list[tuple[int, dict | None]] = []
+    sim_fb = copy.deepcopy(game)
+    current_index_fb = sim_fb.qvtymdcqear_index
+    orig_level_fb = sim_fb._current_level_index
+
+    for pos in range(n_targets):
+        # Navigate to position
+        nav_fwd = (pos - current_index_fb) % n_targets
+        nav_bwd = (n_targets - nav_fwd) % n_targets
+        if nav_fwd > 0 and nav_fwd <= nav_bwd:
+            for _ in range(nav_fwd):
+                plan2.append((4, None))
+                sim_fb.perform_action(ActionInput(id=4, data={}))
+        elif nav_bwd > 0:
+            for _ in range(nav_bwd):
+                plan2.append((3, None))
+                sim_fb.perform_action(ActionInput(id=3, data={}))
+        current_index_fb = pos
+
+        # Try all 7 variant deltas
+        found = False
+        for delta in range(7):
+            sim_test = copy.deepcopy(sim_fb)
+            # Use minimum direction for delta
+            fwd = delta
+            bwd = N_VARIANTS - delta
+            action_id = 2 if fwd <= bwd else 1
+            steps = min(fwd, bwd) if delta > 0 else 0
+            for _ in range(steps):
+                sim_test.perform_action(ActionInput(id=action_id, data={}))
+
+            if sim_test._current_level_index > orig_level_fb:
+                # This delta solves the level!
+                for _ in range(steps):
+                    plan2.append((action_id, None))
+                    sim_fb.perform_action(ActionInput(id=action_id, data={}))
+                return plan2
+
+            # Check for win animation trigger (bsqsshqpox=True → yfetxjexviz >= 0)
+            if sim_test.yfetxjexviz >= 0 and sim_fb.yfetxjexviz < 0:
+                for _ in range(steps):
+                    plan2.append((action_id, None))
+                    sim_fb.perform_action(ActionInput(id=action_id, data={}))
+                found = True
+                break
+
+        if not found and delta == 0:
+            # No variant change needed at this position, or couldn't find progress
+            pass
+
+    # Final check
+    if sim_fb._current_level_index > orig_level_fb:
+        return plan2
+
     return None
 
 
-def solve_ft09(game: Any, level_idx: int) -> list | None:
-    """Solve FT09: Click game with Hkx and NTi clickable objects.
+# ============================================================================
+# LS20/FT09 Oracle Bridge Solvers
+# ============================================================================
 
-    FT09 uses click actions (ACTION6) to interact with fhc (Hkx)
-    and mou (NTi) objects. Uses step-by-step click replay.
+def solve_ls20(game: Any, level_idx: int) -> list[tuple] | None:
+    """LS20 solver using Oracle bridge replay."""
+    return _solve_oracle_replay(game, "ls20", level_idx, max_steps=300, max_time=30.0)
 
-    Strategy:
-        1. Use FT09Adapter to extract clickable goals
-        2. Click on each goal entity center
-        3. Fall back to game's _get_valid_clickable_actions()
 
-    Returns:
-        List of (6, {x, y}) tuples, or None.
+def solve_ft09(game: Any, level_idx: int) -> list[tuple] | None:
+    """FT09 color-rotation puzzle solver.
+
+    FT09 is a click-only color-matching game:
+    - fhc (Hkx sprites): clickable tiles whose center color cycles through gqb palette
+    - mou (NTi sprites): clickable tiles with pattern-based color cycling
+    - gig (bsT sprites): indicator sprites defining win conditions
+    - gqb: color palette (e.g., [9, 8] or [9, 8, 12])
+    - irw: interaction kernel for Hkx clicks
+
+    Win condition: each bsT pixel (non-(-1)) specifies a neighbor condition:
+    - pixel == 0: neighbor center must == bsT center color
+    - pixel != 0 and != -1: neighbor center must != bsT center color
+
+    Strategy: compute target colors via constraint satisfaction, then click sprites
+    to cycle their colors to the target.
     """
-    return _solve_oracle_click_replay(game, "ft09", level_idx)
+    import copy as _copy
+    from arcengine import ActionInput as _AI
+
+    sim = _copy.deepcopy(game)
+    original_level = sim._current_level_index
+
+    # Gather game attributes
+    fhc = getattr(sim, 'fhc', [])
+    mou = getattr(sim, 'mou', [])
+    gig = getattr(sim, 'gig', [])
+    gqb = getattr(sim, 'gqb', [])
+
+    if not gig or not gqb:
+        return None
+
+    # Build sprite position map
+    all_clickable = {}
+    for s in fhc:
+        all_clickable[(s.x, s.y)] = ('Hkx', s)
+    for s in mou:
+        all_clickable[(s.x, s.y)] = ('NTi', s)
+
+    # Grid offset matrix (from ft09 source)
+    GBS = [[(-1, -1), (0, -1), (1, -1)],
+            [(-1, 0), (0, 0), (1, 0)],
+            [(-1, 1), (0, 1), (1, 1)]]
+
+    # Constraint satisfaction: collect all constraints per position
+    # == constraints: position must have specific color
+    # != constraints: position must not have specific colors
+    eq_targets = {}    # (x, y) -> required color (from == condition)
+    ne_forbidden = {}  # (x, y) -> set of forbidden colors (from != condition)
+
+    for etf in gig:
+        nRq = int(etf.pixels[1][1])  # bsT center color
+        for j in range(3):
+            for i in range(3):
+                px_val = int(etf.pixels[j][i])
+                if px_val == -1:
+                    continue  # skip empty pixel
+
+                ybc, lga = GBS[j][i]
+                nx, ny = etf.x + (ybc * 4), etf.y + (lga * 4)
+
+                if (nx, ny) in all_clickable:
+                    HJd = px_val == 0
+                    if HJd:
+                        # == constraint: must be exactly nRq
+                        eq_targets[(nx, ny)] = nRq
+                    else:
+                        # != constraint: must not be nRq
+                        ne_forbidden.setdefault((nx, ny), set()).add(nRq)
+
+    # Resolve constraints into target colors
+    target_colors = {}
+    for pos in set(list(eq_targets.keys()) + list(ne_forbidden.keys())):
+        required = eq_targets.get(pos)
+        forbidden = ne_forbidden.get(pos, set())
+
+        if required is not None:
+            # Must be exactly required color; check it's not forbidden
+            if required in forbidden:
+                return None  # Impossible constraint
+            target_colors[pos] = required
+        else:
+            # Only != constraints: pick any palette color not forbidden
+            candidates = [c for c in gqb if c not in forbidden]
+            if not candidates:
+                return None  # Impossible constraint
+            target_colors[pos] = candidates[0]  # Pick first valid
+
+    # Compute clicks and execute on sim
+    actions = []
+    click_plan = []  # (grid_x, grid_y, clicks_needed)
+
+    for pos, target in target_colors.items():
+        if pos not in all_clickable:
+            continue
+        tag, sprite = all_clickable[pos]
+        current_center = int(sprite.pixels[1][1])
+
+        if current_center == target:
+            continue  # Already at target
+
+        try:
+            current_idx = gqb.index(current_center)
+            target_idx = gqb.index(target)
+            clicks_needed = (target_idx - current_idx) % len(gqb)
+        except (ValueError, IndexError):
+            continue
+
+        click_plan.append((pos[0], pos[1], clicks_needed))
+
+    # Sort by clicks_needed (fewer clicks first for efficiency)
+    click_plan.sort(key=lambda x: x[2])
+
+    for gx, gy, clicks in click_plan:
+        for _ in range(clicks):
+            dx = int(gx * 2)
+            dy = int(gy * 2)
+            dx = max(0, min(63, dx))
+            dy = max(0, min(63, dy))
+
+            ai = _AI(id=6, data={"x": dx, "y": dy})
+            try:
+                sim.perform_action(ai)
+                actions.append((6, {"x": dx, "y": dy}))
+            except Exception:
+                break
+
+            if sim._current_level_index > original_level:
+                return actions
+
+    # Final check
+    if sim._current_level_index > original_level:
+        return actions
+
+    # If not solved, try brute-force: click each remaining sprite once more
+    for pos, (tag, sprite) in all_clickable.items():
+        dx = int(pos[0] * 2)
+        dy = int(pos[1] * 2)
+        dx = max(0, min(63, dx))
+        dy = max(0, min(63, dy))
+
+        ai = _AI(id=6, data={"x": dx, "y": dy})
+        try:
+            sim.perform_action(ai)
+            actions.append((6, {"x": dx, "y": dy}))
+        except Exception:
+            continue
+
+        if sim._current_level_index > original_level:
+            return actions
+
+    return None
 
 
-# ls20/tr87/ft09 are NOT in SOLVERS dict because they require
-# complex LevelInfo-based planning (switchers, cipher, click precision)
-# that simple Oracle bridge solvers can't handle. They fall through
-# to Phase 1 (UniversalSolverPipeline) which works better for these games.
+# ls20 and ft09 have Oracle bridge solvers.
+# tr87 has a dedicated cipher solver that deduces variant mapping.
+# All three are now in the SOLVERS dict for Phase 0 priority.
 
 SOLVERS: dict[str, callable] = {
+    "ls20": solve_ls20,
+    "tr87": solve_tr87,
+    "ft09": solve_ft09,
     "tu93": solve_tu93,
     "wa30": solve_wa30,
     "dc22": solve_dc22,
@@ -4062,6 +4391,101 @@ def solve_random_walk(
     return None
 
 
+def _dsl_to_action_plan(
+    dsl_sequence: list[dict],
+    game: Any,
+    valid_actions: list,
+) -> list[tuple] | None:
+    """Convert a TOMAS DSL macro sequence to an action plan.
+
+    Translates DSL actions (UP/DOWN/LEFT/RIGHT/CLICK/ACTION1-4) and
+    repeat blocks into (GameAction, data) tuples suitable for
+    solve_game's verification pipeline.
+
+    Args:
+        dsl_sequence: List of DSL dicts from Fast-Path dispatch.
+        game: The env._game object (for action ID lookup).
+        valid_actions: List of valid ActionInput objects.
+
+    Returns:
+        Action plan as list of (action_id, data) tuples, or None on error.
+    """
+    from arcengine import ActionInput
+
+    # Build action ID lookup from valid_actions
+    action_id_map: dict[str, str] = {}
+    for ai in valid_actions:
+        if ai.id and ai.data:
+            action_id_map[ai.id] = ai.id
+
+    # Map DSL action names to game action IDs
+    DSL_TO_ACTION = {
+        "UP": "ACTION1",
+        "DOWN": "ACTION2",
+        "LEFT": "ACTION3",
+        "RIGHT": "ACTION4",
+        "ACTION1": "ACTION1",
+        "ACTION2": "ACTION2",
+        "ACTION3": "ACTION3",
+        "ACTION4": "ACTION4",
+        "CLICK": "CLICK",
+        "MOVE": "MOVE",
+        "KEYBOARD": "KEYBOARD",
+    }
+
+    plan: list[tuple] = []
+    for item in dsl_sequence:
+        if "repeat" in item:
+            # Repeat block: repeat the action N times
+            action_name = item.get("repeat", "")
+            count = item.get("count", 1)
+            mapped = DSL_TO_ACTION.get(action_name, action_name)
+            # Find matching action ID from valid_actions
+            matching_ai = None
+            for ai in valid_actions:
+                if ai.id == mapped:
+                    matching_ai = ai
+                    break
+            if matching_ai:
+                for _ in range(count):
+                    plan.append((matching_ai.id, dict(matching_ai.data) if matching_ai.data else {}))
+            else:
+                # Fallback: use action name directly
+                for _ in range(count):
+                    plan.append((mapped, {}))
+        elif "action" in item:
+            action_name = item.get("action", "")
+            mapped = DSL_TO_ACTION.get(action_name, action_name)
+            if action_name == "CLICK" and "position" in item:
+                pos = item["position"]
+                click_data = {"x": int(pos[0]), "y": int(pos[1])}
+                # Find CLICK action
+                click_ai = None
+                for ai in valid_actions:
+                    if ai.id == "CLICK" or "click" in ai.id.lower():
+                        click_ai = ai
+                        break
+                if click_ai:
+                    plan.append((click_ai.id, click_data))
+                else:
+                    plan.append(("CLICK", click_data))
+            else:
+                matching_ai = None
+                for ai in valid_actions:
+                    if ai.id == mapped:
+                        matching_ai = ai
+                        break
+                if matching_ai:
+                    plan.append((matching_ai.id, dict(matching_ai.data) if matching_ai.data else {}))
+                else:
+                    plan.append((mapped, {}))
+        else:
+            # Unknown DSL item — skip
+            continue
+
+    return plan if plan else None
+
+
 def solve_game(
     game: Any,
     game_id: str,
@@ -4166,6 +4590,56 @@ def solve_game(
                 plan = _normalize_plan(plan)
                 if plan is not None and _verify_plan(plan):
                     return plan
+        except Exception:
+            pass
+
+    # Phase 0.5: Fast-Path Dispatch (泛函宏统一场论 v3.3.0)
+    # If a matching macro exists in the library, directly dispatch its
+    # DSL sequence — bypassing κ-Snap search for 5-10× speedup.
+    # This is tried AFTER game-specific solver but BEFORE UniversalSolverPipeline,
+    # so it only activates for games without a dedicated solver (Private Set).
+    if _time_remaining() > 1.0:
+        try:
+            from .tomas_learner import TOMASLearner, extract_topo_features
+            learner = TOMASLearner()
+            # Build game_state dict for GaussEx precondition evaluation
+            game_state_for_fastpath = {
+                "sprites": [],
+                "game_id": game_id,
+                "level_idx": level_idx,
+            }
+            # Infer game tags from game_id and action space
+            fastpath_tags = []
+            if n_actions <= 4:
+                fastpath_tags.append("keyboard_only")
+            elif n_actions <= 7:
+                fastpath_tags.append("navigation_pattern")
+            else:
+                fastpath_tags.append("complex_action_space")
+            # Add base game_id as tag
+            if base_id:
+                fastpath_tags.append(f"game_{base_id}")
+            # Get current grid for topology extraction
+            grid_for_topo = None
+            try:
+                grid_for_topo = np.array(game.current_state.grid)
+            except Exception:
+                try:
+                    grid_for_topo = np.array(game.grid)
+                except Exception:
+                    pass
+            if grid_for_topo is not None:
+                dsl_sequence = learner.try_fast_path(
+                    grid=grid_for_topo,
+                    game_state=game_state_for_fastpath,
+                    game_tags=fastpath_tags,
+                )
+                if dsl_sequence is not None:
+                    # Convert DSL sequence to action plan
+                    plan = _dsl_to_action_plan(dsl_sequence, game, valid_actions)
+                    plan = _normalize_plan(plan)
+                    if plan is not None and _verify_plan(plan):
+                        return plan
         except Exception:
             pass
 

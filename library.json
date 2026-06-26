@@ -1,19 +1,21 @@
 {
-  "_schema_version": "3.2.0",
-  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver",
+  "_schema_version": "3.3.0",
+  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (泛函宏统一场论)",
   "_tomas_framework": {
-    "version": "3.2.0-dev",
+    "version": "3.3.0-dev",
     "core_modules": [
       "kappa_snap_searcher",
       "nar_conv",
       "tomas_learner",
       "library_manager",
-      "gaussex_verifier"
+      "gaussex_verifier",
+      "fast_path_dispatcher"
     ],
     "asym_index_enabled": true,
-    "narla_integration": true
+    "narla_integration": true,
+    "fast_path_enabled": true
   },
-  "_note": "Macros are validated by ψ-Audit before activation. TOMAS fingerprints enable cross-game pattern matching.",
+  "_note": "Macros are validated by ψ-Audit before activation. TOMAS fingerprints enable cross-game pattern matching. v3.3.0 adds applicable_topo + gaussex_precond for Fast-Path dispatch.",
   "abstractions": [
     {
       "name": "macro_push_sprite_to_target",
@@ -50,7 +52,16 @@
       "min_demo_to_activate": 1,
       "created_at": 1719072000.0,
       "validated": true,
-      "mdl_score": 0.5
+      "mdl_score": 0.5,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 0,
+        "symmetry": [],
+        "component_count": 2,
+        "hole_count": 0,
+        "density": 0.15
+      },
+      "gaussex_precond": "sprite_count('movable') == 1 AND sprite_count('goal') >= 1"
     },
     {
       "name": "macro_click_all_toggles",
@@ -92,7 +103,16 @@
       "min_demo_to_activate": 1,
       "created_at": 1719072000.0,
       "validated": true,
-      "mdl_score": 0.67
+      "mdl_score": 0.67,
+      "applicable_topo": {
+        "euler_char": 3,
+        "period_rank": 0,
+        "symmetry": ["horizontal"],
+        "component_count": 4,
+        "hole_count": 0,
+        "density": 0.12
+      },
+      "gaussex_precond": "has_sprite_type('fhc') AND has_sprite_type('gig')"
     },
     {
       "name": "macro_navigate_keyboard",
@@ -129,7 +149,16 @@
       "min_demo_to_activate": 1,
       "created_at": 1719072000.0,
       "validated": true,
-      "mdl_score": 0.33
+      "mdl_score": 0.33,
+      "applicable_topo": {
+        "euler_char": 1,
+        "period_rank": 1,
+        "symmetry": [],
+        "component_count": 2,
+        "hole_count": 0,
+        "density": 0.08
+      },
+      "gaussex_precond": "sprite_count('movable') == 1 AND NOT has_sprite_type('wall')"
     }
   ]
 }
