@@ -308,16 +308,265 @@ class LS20Adapter(OracleAdapter):
 
     @property
     def switchers(self) -> list[GameEntity]:
-        """Get switcher entities from LS20's switcher attributes.
+        """Get all switcher/state-changer entities from LS20.
+
+        Detects all 3 types of state changers:
+        - rhsxkxzdjz: rotation changers (cklxociuu cycling)
+        - soyhouuebz: color changers (hiaauhahz cycling)
+        - ttfwljgohq: shape changers (fwckfzsyc cycling)
+
+        Also checks game-level attributes for backward compatibility.
 
         Returns:
-            List of switcher GameEntity objects.
+            List of all switcher GameEntity objects (deduplicated by position).
         """
         result: list[GameEntity] = []
+        # Check game-level attributes
         for attr in ['fzhmwzexaj', 'switchers']:
             sprites = self._get_sprite_list(attr)
             if sprites:
                 result.extend([self._to_entity(s) for s in sprites])
+        # Check level sprite tags — all 3 state changer types
+        changer_tags = ['rhsxkxzdjz', 'soyhouuebz', 'ttfwljgohq']
+        try:
+            current_level = self.game.current_level
+            if hasattr(current_level, 'get_sprites_by_tag'):
+                for tag in changer_tags:
+                    tag_sprites = current_level.get_sprites_by_tag(tag)
+                    if tag_sprites:
+                        result.extend([self._to_entity(s) for s in tag_sprites])
+        except (AttributeError, Exception):
+            pass
+        # Deduplicate by position
+        seen: set[tuple[int, int]] = set()
+        unique: list[GameEntity] = []
+        for e in result:
+            pos = (int(e.x), int(e.y))
+            if pos not in seen:
+                seen.add(pos)
+                unique.append(e)
+        return unique
+
+    @property
+    def state_changers(self) -> dict[str, list[GameEntity]]:
+        """Get categorized state changer entities for LS20.
+
+        Returns a dict with 3 keys mapping to the corresponding
+        sprite type. Each changer is walked over by the player to
+        trigger automatic state cycling (no ACTION6 needed).
+
+        Returns:
+            Dict with keys 'rotation', 'color', 'shape', each containing
+            a list of GameEntity objects for that changer type.
+        """
+        result: dict[str, list[GameEntity]] = {
+            'rotation': [],
+            'color': [],
+            'shape': [],
+        }
+        tag_map: dict[str, str] = {
+            'rhsxkxzdjz': 'rotation',
+            'soyhouuebz': 'color',
+            'ttfwljgohq': 'shape',
+        }
+        try:
+            current_level = self.game.current_level
+            if hasattr(current_level, 'get_sprites_by_tag'):
+                for tag, category in tag_map.items():
+                    tag_sprites = current_level.get_sprites_by_tag(tag)
+                    if tag_sprites:
+                        # Deduplicate by position within each category
+                        seen: set[tuple[int, int]] = set()
+                        for s in tag_sprites:
+                            pos = (int(s.x), int(s.y))
+                            if pos not in seen:
+                                seen.add(pos)
+                                entity = self._to_entity(s)
+                                # Store the tag in entity.tags for identification
+                                if tag not in entity.tags:
+                                    entity.tags.append(tag)
+                                result[category].append(entity)
+        except (AttributeError, Exception):
+            pass
+        return result
+
+    @property
+    def player_state(self) -> dict[str, int]:
+        """Get the player's current state indices (rotation/color/shape).
+
+        These indices cycle through their respective value lists when
+        the player walks over the corresponding state changer sprite.
+        The cycling is automatic (no ACTION needed).
+
+        Returns:
+            Dict with keys 'rotation', 'color', 'shape' and their current
+            index values. Rotation: 0-3 (0°/90°/180°/270°),
+            Color: 0-3 (mapping to color values), Shape: 0-2.
+        """
+        return {
+            'rotation': getattr(self.game, 'cklxociuu', 0),
+            'color': getattr(self.game, 'hiaauhahz', 0),
+            'shape': getattr(self.game, 'fwckfzsyc', 0),
+        }
+
+    @property
+    def goal_requirements(self) -> list[dict[str, int]]:
+        """Get state requirements for each goal sprite.
+
+        Each goal requires the player to have specific rotation, color,
+        and shape values to pass through and be collected. When the
+        player's state matches all requirements, the goal sprite allows
+        passage and is collected.
+
+        Returns:
+            List of dicts, one per goal, with keys 'rotation', 'color',
+            'shape' containing the required index values.
+        """
+        ehwheiwsk = getattr(self.game, 'ehwheiwsk', [])  # rotation requirements
+        yjdexjsoa = getattr(self.game, 'yjdexjsoa', [])  # color requirements
+        ldxlnycps = getattr(self.game, 'ldxlnycps', [])  # shape requirements
+
+        n_goals = max(len(ehwheiwsk), len(yjdexjsoa), len(ldxlnycps))
+        requirements: list[dict[str, int]] = []
+        for i in range(n_goals):
+            requirements.append({
+                'rotation': ehwheiwsk[i] if i < len(ehwheiwsk) else 0,
+                'color': yjdexjsoa[i] if i < len(yjdexjsoa) else 0,
+                'shape': ldxlnycps[i] if i < len(ldxlnycps) else 0,
+            })
+        return requirements
+
+    @property
+    def coins(self) -> list[GameEntity]:
+        """Get coin/step-reset entities from LS20.
+
+        Coins (npxgalaybz tag) reset the step counter when collected,
+        giving the player more steps within the level budget.
+
+        Returns:
+            List of coin GameEntity objects.
+        """
+        result: list[GameEntity] = []
+        try:
+            current_level = self.game.current_level
+            if hasattr(current_level, 'get_sprites_by_tag'):
+                coin_sprites = current_level.get_sprites_by_tag('npxgalaybz')
+                if coin_sprites:
+                    seen: set[tuple[int, int]] = set()
+                    for s in coin_sprites:
+                        pos = (int(s.x), int(s.y))
+                        if pos not in seen:
+                            seen.add(pos)
+                            result.append(self._to_entity(s))
+        except (AttributeError, Exception):
+            pass
+        return result
+
+    @property
+    def step_decrement(self) -> int:
+        """Get the step decrement value for the current level.
+
+        Each action consumes `step_decrement` units from the step counter.
+        Default is 2 (when StepsDecrement is not set in level data).
+
+        Returns:
+            Step decrement value (default 2).
+        """
+        try:
+            hgkhqetaxy = self.game.current_level.get_data("StepsDecrement")
+            return 2 if hgkhqetaxy is None else hgkhqetaxy
+        except (AttributeError, Exception):
+            return 2
+
+    @property
+    def steps_remaining(self) -> int:
+        """Get the number of remaining actions the player can take.
+
+        Calculates: (current_steps in step counter) // step_decrement
+        This gives the number of ACTIONS (not step units) remaining.
+
+        Returns:
+            Number of remaining actions, or 0 if step counter unavailable.
+        """
+        try:
+            step_counter_ui = getattr(self.game, '_step_counter_ui', None)
+            if step_counter_ui is not None:
+                current_steps = getattr(step_counter_ui, 'current_steps', 0)
+                decrement = self.step_decrement
+                return max(0, current_steps // decrement)
+            return 0
+        except (AttributeError, Exception):
+            return 0
+
+    @property
+    def step_budget(self) -> int:
+        """Get the step budget for the current level.
+
+        LS20 allows osgviligwp steps per level attempt (default 42).
+        Coins reset this counter.
+
+        Returns:
+            Maximum steps per level attempt (default 42 if not found).
+        """
+        return getattr(self.game, 'osgviligwp', 42)
+
+    @property
+    def state_dimension_sizes(self) -> dict[str, int]:
+        """Get the cycling dimension sizes for each state variable.
+
+        Rotation cycles through 4 values (cklxociuu), color through
+        len(tnkekoeuk) values, shape through len(ijessuuig) values.
+
+        Returns:
+            Dict with keys 'rotation', 'color', 'shape' containing
+            the number of distinct values each state cycles through.
+        """
+        # Rotation: always 4 (0°/90°/180°/270°)
+        rot_size = 4
+        # Color: len(tnkekoeuk) — color palette length
+        color_palette = getattr(self.game, 'tnkekoeuk', None)
+        if color_palette is not None:
+            try:
+                color_size = len(color_palette)
+            except (TypeError, Exception):
+                color_size = 4
+        else:
+            color_size = 4
+        # Shape: len(ijessuuig) — shape pattern count
+        shape_patterns = getattr(self.game, 'ijessuuig', None)
+        if shape_patterns is not None:
+            try:
+                shape_size = len(shape_patterns)
+            except (TypeError, Exception):
+                shape_size = 3
+        else:
+            shape_size = 3
+        return {
+            'rotation': rot_size,
+            'color': color_size,
+            'shape': shape_size,
+        }
+
+    @property
+    def doors(self) -> list[GameEntity]:
+        """Get door entities from LS20 that block path until switchers are visited.
+
+        Doors are tagged 'hoswmpiqkw' on current_level sprites.
+        These sprites block movement until the player visits a switcher
+        (rhsxkxzdjz sprites).
+
+        Returns:
+            List of door GameEntity objects.
+        """
+        result: list[GameEntity] = []
+        try:
+            current_level = self.game.current_level
+            if hasattr(current_level, 'get_sprites_by_tag'):
+                door_sprites = current_level.get_sprites_by_tag('hoswmpiqkw')
+                if door_sprites:
+                    result.extend([self._to_entity(s) for s in door_sprites])
+        except (AttributeError, Exception):
+            pass
         return result
 
 

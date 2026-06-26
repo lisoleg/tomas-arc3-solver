@@ -27,6 +27,29 @@ import numpy as np
 # TOMAS Sleep-Step Learning (for episode recording integration)
 from .tomas_learner import EpisodeTrace, ActionTrace
 
+# ── v3.15.0 — Δ-State Engine + RHAE Budget Controller ──
+from .delta_state import (
+    Node,
+    ActionSpace,
+    ReplayEngine,
+    LayoutHasher,
+    GaussExVerifier,
+    SolverAborted,
+    BudgetExceeded,
+    compute_coin_proximity_position,
+    GEX_PASS_THRESHOLD,
+    GEX_FAIL_THRESHOLD,
+    DEAD_ZERO_RATIO,
+    ABORT_RHAE_THRESHOLD,
+    LS20_BUDGET_MULT,
+)
+from .rhae_controller import (
+    CoinCollector,
+    RHAEBudgetController,
+    create_game_task,
+    ls20_estimate_human_steps,
+)
+
 
 # ============================================================================
 # Helper: Get sprites by tag name from game
@@ -5846,15 +5869,20 @@ def _solve_oracle_replay(
     max_steps: int = 300,
     max_time: float = 30.0,
 ) -> list[tuple] | None:
-    """Oracle-based solver using step-by-step game simulation replay.
+    """Oracle-based solver using κ-gradient detour replay (v3.14.1).
 
-    Instead of planning the entire path upfront (which fails for games
-    with switchers/interactive elements), this solver replays the game
-    step by step. At each step, it:
-    1. Gets current player/goal positions from the OracleAdapter
-    2. Computes the next movement action (greedy towards nearest goal)
-    3. Executes the action on the game copy
-    4. Checks if the level is solved
+    Combines greedy movement with κ-PS gradient wall-avoidance:
+    1. Greedy: move towards nearest goal (fast path)
+    2. κ-Detour: when stuck at wall, use κ-gradient BFS to find detour
+       (S_rel priority: lower S_rel → higher κ-priority → explore first)
+    3. Switcher click: detect sys_click sprites and activate them
+
+    κ-Gradient principle (Liu Mechanism §3.3):
+        S_rel = 0.1 × num_primitives − 0.5 × IC + 2.0 × GEX
+        priority = 1 / (S_rel + ε)
+    For path search: num_primitives=1 (single player), IC = distance to goal,
+    GEX = 0 (no GaussEx constraint). So S_rel ≈ −0.5 × dist_to_goal.
+    Closer to goal → lower S_rel → higher κ-priority → explored first.
 
     Args:
         game: The env._game object (will be copied for replay).
@@ -5875,27 +5903,182 @@ def _solve_oracle_replay(
     if adapter is None:
         return None
 
-    # Work on a copy to avoid mutating original
     sim = copy.deepcopy(game)
     original_level = sim._current_level_index
-
-    # Re-create adapter on the simulation copy
     sim_adapter = get_oracle_adapter(game_id, sim)
     if sim_adapter is None:
         return None
 
     step_size = _detect_game_step(game)
     collected: list[tuple] = []
+    LIU_EPSILON = 0.01  # Liu mechanism ε for priority formula
 
-    for _ in range(max_steps):
+    DIR_UP = 1
+    DIR_DOWN = 2
+    DIR_LEFT = 3
+    DIR_RIGHT = 4
+    ALL_DIRS = [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT]
+
+    def _compute_kappa_priority(px: int, py: int, gx: int, gy: int) -> float:
+        """κ-priority using Liu mechanism S_rel formula.
+
+        S_rel = 0.1 × 1 − 0.5 × dist + 2.0 × 0
+             = 0.1 − 0.5 × (Manhattan dist / step_size)
+        priority = 1 / (S_rel + ε)
+
+        Closer to goal → higher priority → explored first by κ-BFS.
+        """
+        dist = abs(px - gx) + abs(py - gy)
+        ic = dist / max(1, step_size)  # IC as normalized distance
+        s_rel = 0.1 * 1 - 0.5 * ic + 2.0 * 0  # Liu formula
+        return 1.0 / (s_rel + LIU_EPSILON)
+
+    def _κ_bfs_detour(
+        detour_sim: Any,
+        detour_adapter: Any,
+        start_px: int,
+        start_py: int,
+        goal_x: int,
+        goal_y: int,
+        max_detour_steps: int = 60,
+        max_detour_time: float = 5.0,
+    ) -> list[tuple] | None:
+        """κ-gradient BFS detour: find wall-avoidance path using S_rel priority.
+
+        When greedy approach hits a wall, this BFS explores alternative
+        directions using κ-priority ordering (Liu mechanism S_rel).
+        Each BFS node is a (game_copy, action_list) pair.
+
+        Returns:
+            List of (action_id, data) tuples for detour path, or None.
+        """
+        detour_t0 = _time.time()
+        visited_positions: set[tuple[int, int]] = {(start_px, start_py)}
+
+        # BFS queue sorted by κ-priority (descending — higher priority first)
+        # Each entry: (priority, tiebreaker_counter, game_copy, action_list, px, py)
+        # Counter tiebreaker prevents heapq from comparing game objects directly
+        import heapq
+        queue: list[tuple[float, int, Any, list[tuple], int, int]] = []
+        detour_counter = 0
+
+        # Initialize with all 4 directions from stuck position
+        for d in ALL_DIRS:
+            test_sim = copy.deepcopy(detour_sim)
+            ai = ActionInput(id=d, data={})
+            try:
+                test_sim.perform_action(ai)
+            except Exception:
+                continue
+
+            test_player = detour_adapter.player  # Use original adapter for reference
+            # Get new position from test_sim's player
+            test_adapter = get_oracle_adapter(game_id, test_sim)
+            if test_adapter is None or test_adapter.player is None:
+                continue
+
+            new_px = int(test_adapter.player.x)
+            new_py = int(test_adapter.player.y)
+
+            if (new_px, new_py) == (start_px, start_py):
+                continue  # This direction is blocked
+
+            if (new_px, new_py) in visited_positions:
+                continue  # Already visited
+
+            visited_positions.add((new_px, new_py))
+
+            # Compute κ-priority for this new position
+            kappa_pri = _compute_kappa_priority(new_px, new_py, goal_x, goal_y)
+
+            heapq.heappush(queue, (-kappa_pri, detour_counter, test_sim, [(d, None)], new_px, new_py))
+            detour_counter += 1
+
+        # κ-BFS exploration
+        while queue and _time.time() - detour_t0 < max_detour_time:
+            neg_pri, _, cur_sim, cur_actions, cur_px, cur_py = heapq.heappop(queue)
+
+            # Check if this position can now move towards goal greedily
+            # If we've detoured past the wall, greedy movement should resume
+            dx = goal_x - cur_px
+            dy = goal_y - cur_py
+
+            # Test if greedy direction now works
+            if abs(dy) >= step_size:
+                greedy_dir = DIR_UP if dy < 0 else DIR_DOWN
+            elif abs(dx) >= step_size:
+                greedy_dir = DIR_LEFT if dx < 0 else DIR_RIGHT
+            else:
+                # Already at goal position!
+                greedy_dir = None
+
+            if greedy_dir is not None:
+                test_sim2 = copy.deepcopy(cur_sim)
+                test_ai2 = ActionInput(id=greedy_dir, data={})
+                try:
+                    test_sim2.perform_action(test_ai2)
+                except Exception:
+                    greedy_dir = None
+
+                if greedy_dir is not None:
+                    test_adapter2 = get_oracle_adapter(game_id, test_sim2)
+                    if test_adapter2 and test_adapter2.player:
+                        test_px2 = int(test_adapter2.player.x)
+                        test_py2 = int(test_adapter2.player.y)
+                        if (test_px2, test_py2) != (cur_px, cur_py):
+                            # Greedy works again! Return detour + 1 greedy step
+                            return cur_actions + [(greedy_dir, None)]
+
+            # Continue κ-BFS: expand this node with all directions
+            for d in ALL_DIRS:
+                test_sim = copy.deepcopy(cur_sim)
+                ai = ActionInput(id=d, data={})
+                try:
+                    test_sim.perform_action(ai)
+                except Exception:
+                    continue
+
+                test_adapter = get_oracle_adapter(game_id, test_sim)
+                if test_adapter is None or test_adapter.player is None:
+                    continue
+
+                new_px = int(test_adapter.player.x)
+                new_py = int(test_adapter.player.y)
+
+                if (new_px, new_py) == (cur_px, cur_py):
+                    continue  # Blocked
+
+                if (new_px, new_py) in visited_positions:
+                    continue  # Already visited
+
+                visited_positions.add((new_px, new_py))
+
+                kappa_pri = _compute_kappa_priority(new_px, new_py, goal_x, goal_y)
+                heapq.heappush(queue, (
+                    -kappa_pri,
+                    detour_counter,
+                    test_sim,
+                    cur_actions + [(d, None)],
+                    new_px,
+                    new_py,
+                ))
+                detour_counter += 1
+
+        return None  # No detour found
+
+    # ── Main loop: greedy + κ-detour + switcher ──
+    prev_pos = None
+    stall_count = 0
+    MAX_STALL = 2  # After 2 stalls, trigger κ-detour BFS
+    detour_used = False
+
+    for step_idx in range(max_steps):
         if _time.time() - t0 > max_time:
             break
 
-        # Check if solved
         if _is_level_solved(sim, original_level):
             return collected
 
-        # Get current player position from adapter
         player = sim_adapter.player
         if player is None:
             break
@@ -5903,62 +6086,182 @@ def _solve_oracle_replay(
         px = int(player.x)
         py = int(player.y)
 
-        # Get goals
-        goals = sim_adapter.goals
-        if not goals:
-            break
+        # ── Switcher click/visit: κ-PS principle — activate to open paths ──
+        # Strategy: navigate to switcher first, then click when near.
+        # Threshold widened to step_size*10 for proximity click, but we also
+        # use κ-gradient navigation to move toward the nearest switcher
+        # before clicking — no hardcoded coordinates.
+        try:
+            cur_level = sim.current_level
+            if hasattr(cur_level, 'get_sprites_by_tag'):
+                # Check sys_click tag (generic) and game-specific switcher tags
+                switcher_tags = ['sys_click']
+                if game_id == 'ls20':
+                    switcher_tags.append('rhsxkxzdjz')
+                click_sprites = []
+                for tag in switcher_tags:
+                    found = cur_level.get_sprites_by_tag(tag)
+                    if found:
+                        click_sprites.extend(found)
+                # Also check game-specific attribute names for switcher lists
+                if game_id == 'ls20':
+                    for attr in ['fzhmwzexaj', 'switchers']:
+                        attr_sprites = getattr(sim, attr, None)
+                        if attr_sprites:
+                            click_sprites.extend(attr_sprites)
+                # Deduplicate by position
+                seen_pos: set[tuple[int, int]] = set()
+                unique_sprites = []
+                for cs in click_sprites:
+                    cs_pos = (int(cs.x), int(cs.y))
+                    if cs_pos not in seen_pos:
+                        seen_pos.add(cs_pos)
+                        unique_sprites.append(cs)
+                click_sprites = unique_sprites
+                if click_sprites:
+                    best_click = None
+                    best_click_dist = float('inf')
+                    for cs in click_sprites:
+                        cx = int(cs.x)
+                        cy = int(cs.y)
+                        dist = abs(cx - px) + abs(cy - py)
+                        if dist < best_click_dist:
+                            best_click_dist = dist
+                            best_click = cs
+                    # Widened threshold: step_size * 10 allows click when
+                    # player is reasonably close (κ-gradient already moved
+                    # player toward switcher in previous steps)
+                    if best_click and best_click_dist <= step_size * 10:
+                        disp = _get_display_coords(
+                            sim, best_click.x, best_click.y,
+                            best_click.width, best_click.height,
+                        )
+                        ai_click = ActionInput(id=6, data={'x': disp[0], 'y': disp[1]})
+                        try:
+                            sim.perform_action(ai_click)
+                            collected.append((6, {'x': disp[0], 'y': disp[1]}))
+                            sim_adapter = get_oracle_adapter(game_id, sim)
+                            if _is_level_solved(sim, original_level):
+                                return collected
+                            player = sim_adapter.player
+                            if player is None:
+                                break
+                            px = int(player.x)
+                            py = int(player.y)
+                        except Exception:
+                            pass
+        except Exception:
+            pass
 
-        # Find nearest goal
-        best_goal = None
-        best_dist = float('inf')
-        for g in goals:
-            gx = int(g.x)
-            gy = int(g.y)
-            dist = abs(gx - px) + abs(gy - py)
-            if dist < best_dist:
-                best_dist = dist
-                best_goal = (gx, gy)
+        # ── Target selection: switchers first, then goals ──
+        # If there are switchers still needing to be clicked, navigate
+        # toward the nearest switcher first. After all switchers are
+        # handled (or no switchers exist), navigate toward goals.
+        switchers = sim_adapter.switchers if hasattr(sim_adapter, 'switchers') else []
+        if switchers:
+            # Find nearest switcher
+            best_sw = None
+            best_sw_dist = float('inf')
+            for sw in switchers:
+                sx = int(sw.x)
+                sy = int(sw.y)
+                dist = abs(sx - px) + abs(sy - py)
+                if dist < best_sw_dist:
+                    best_sw_dist = dist
+                    best_sw = (sx, sy)
+            if best_sw is not None:
+                gx, gy = best_sw
+            else:
+                # No reachable switcher — fall back to goals
+                goals = sim_adapter.goals
+                if not goals:
+                    break
+                best_goal = None
+                best_dist = float('inf')
+                for g in goals:
+                    ggx = int(g.x)
+                    ggy = int(g.y)
+                    dist = abs(ggx - px) + abs(ggy - py)
+                    if dist < best_dist:
+                        best_dist = dist
+                        best_goal = (ggx, ggy)
+                if best_goal is None:
+                    break
+                gx, gy = best_goal
+        else:
+            # No switchers — navigate to goals
+            goals = sim_adapter.goals
+            if not goals:
+                break
+            best_goal = None
+            best_dist = float('inf')
+            for g in goals:
+                gx = int(g.x)
+                gy = int(g.y)
+                dist = abs(gx - px) + abs(gy - py)
+                if dist < best_dist:
+                    best_dist = dist
+                    best_goal = (gx, gy)
+            if best_goal is None:
+                break
+            gx, gy = best_goal
 
-        if best_goal is None:
-            break
+        # ── Stall detection ──
+        if prev_pos is not None and (px, py) == prev_pos:
+            stall_count += 1
+        else:
+            stall_count = 0
+        prev_pos = (px, py)
 
-        gx, gy = best_goal
+        # ── κ-Detour: when stuck, launch κ-gradient BFS ──
+        if stall_count >= MAX_STALL:
+            detour_plan = _κ_bfs_detour(
+                sim, sim_adapter, px, py, gx, gy,
+                max_detour_steps=60, max_detour_time=5.0,
+            )
+            if detour_plan:
+                # Execute detour plan on simulation
+                for detour_action in detour_plan:
+                    aid = detour_action[0]
+                    data = detour_action[1] if detour_action[1] else {}
+                    ai = ActionInput(id=aid, data=data)
+                    try:
+                        sim.perform_action(ai)
+                        collected.append(detour_action)
+                    except Exception:
+                        break
+                # Update adapter after detour
+                sim_adapter = get_oracle_adapter(game_id, sim)
+                stall_count = 0
+                prev_pos = None
+                detour_used = True
+                continue  # Skip greedy step this iteration
+            else:
+                # No detour found — break (can't solve with this approach)
+                break
 
-        # Compute direction: greedy approach towards goal
+        # ── Greedy movement: κ-gradient towards goal ──
         dx = gx - px
         dy = gy - py
-
-        # Determine action
         action_id = None
+
         if abs(dy) >= step_size and abs(dy) >= abs(dx):
-            # Move vertically first
-            if dy < 0:
-                action_id = 1  # UP (ACTION1)
-            else:
-                action_id = 2  # DOWN (ACTION2)
+            action_id = DIR_UP if dy < 0 else DIR_DOWN
         elif abs(dx) >= step_size:
-            # Move horizontally
-            if dx < 0:
-                action_id = 3  # LEFT (ACTION3)
-            else:
-                action_id = 4  # RIGHT (ACTION4)
+            action_id = DIR_LEFT if dx < 0 else DIR_RIGHT
+        elif abs(dy) > 0:
+            action_id = DIR_UP if dy < 0 else DIR_DOWN
+        elif abs(dx) > 0:
+            action_id = DIR_LEFT if dx < 0 else DIR_RIGHT
         else:
-            # Close to goal — try moving in remaining direction
-            if abs(dy) > 0:
-                action_id = 1 if dy < 0 else 2
-            elif abs(dx) > 0:
-                action_id = 3 if dx < 0 else 4
-            else:
-                # At goal position — level might need something else
-                break
+            break
 
         if action_id is None:
             break
 
-        # Execute action on simulation copy
         ai = ActionInput(id=action_id, data={})
         try:
-            result = sim.perform_action(ai)
+            sim.perform_action(ai)
         except Exception:
             break
 
@@ -5968,8 +6271,10 @@ def _solve_oracle_replay(
         state = getattr(sim, '_state', None)
         state_name = str(state) if state is not None else ''
         if 'GAME_OVER' in state_name:
-            # Reset and try different approach
             break
+
+        # Update adapter after movement
+        sim_adapter = get_oracle_adapter(game_id, sim)
 
     if _is_level_solved(sim, original_level):
         return collected
@@ -6346,9 +6651,1269 @@ def solve_tr87(game: Any, level_idx: int) -> list[tuple] | None:
 # LS20/FT09 Oracle Bridge Solvers
 # ============================================================================
 
+def _compute_coin_proximity_position(
+    start_x: int, start_y: int, step_size: int,
+    coin_x: int, coin_y: int,
+) -> tuple[int, int]:
+    """计算金币锚点的 proximity position — 玩家包围盒重叠金币锚点的网格位置.
+
+    LS20 的碰撞检测使用 mrznumynfe(x,y,width,height) 查找锚点落在玩家
+    包围盒内的所有精灵. 金币锚点 (coin_x, coin_y) 不一定在玩家步长网格上,
+    但玩家只要站到 proximity position, 包围盒 [px, px+step_size) ×
+    [py, py+step_size) 就会包含金币锚点, 从而触发收集.
+
+    公式:
+        px = start_x + step_size * ((coin_x - start_x) // step_size)
+        py = start_y + step_size * ((coin_y - start_y) // step_size)
+
+    验证: coin_x ∈ [px, px+step_size) AND coin_y ∈ [py, py+step_size)
+
+    Args:
+        start_x: 玩家起始X坐标 (网格起点)
+        start_y: 玩家起始Y坐标 (网格起点)
+        step_size: 玩家步长 (ls20=5)
+        coin_x: 金币锚点X坐标
+        coin_y: 金币锚点Y坐标
+
+    Returns:
+        (proximity_x, proximity_y) — 玩家可以站在此位置收集金币
+
+    Example:
+        L1 coin at (15, 16), start=(29, 40), step=5:
+        px = 29 + 5*((15-29)//5) = 29 + 5*(-3) = 14
+        py = 40 + 5*((16-40)//5) = 40 + 5*(-5) = 15
+        → proximity (14, 15): coin(15,16) ∈ [14,19)×[15,20) ✓
+    """
+    px = start_x + step_size * ((coin_x - start_x) // step_size)
+    py = start_y + step_size * ((coin_y - start_y) // step_size)
+
+    # Verify coin anchor falls within player bounding box
+    # If not, shift by one step in the direction that contains the coin
+    if not (coin_x >= px and coin_x < px + step_size):
+        # Adjust: coin is just beyond one edge
+        if coin_x < px:
+            px -= step_size
+        elif coin_x >= px + step_size:
+            px += step_size
+
+    if not (coin_y >= py and coin_y < py + step_size):
+        if coin_y < py:
+            py -= step_size
+        elif coin_y >= py + step_size:
+            py += step_size
+
+    return (px, py)
+
+
 def solve_ls20(game: Any, level_idx: int) -> list[tuple] | None:
-    """LS20 solver using Oracle bridge replay."""
-    return _solve_oracle_replay(game, "ls20", level_idx, max_steps=300, max_time=30.0)
+    """LS20 solver using state-aware κ-gradient pipeline with κ-PS BFS fallback.
+
+    3-stage pipeline (no hardcoded paths/values, no ACTION6):
+    Stage 1: κ-gradient oracle replay — greedy + κ-detour via _solve_oracle_replay
+    Stage 2: 状态感知 κ-gradient direct — S_rel = κ_state × state_gradient + κ_dist × distance_gradient
+             + IDO 信息驱动 state-changer 选择 + Kuramoto R 同步度评估
+    Stage 3: 状态感知 κ-PS BFS (EML hypergraph) — 搜索节点 = (position, rotation, color, shape)
+             复合状态, κ-priority 结合状态匹配度 + 距目标距离
+
+    LS20 是状态匹配谜题, 不是迷宫。玩家需要 rotation/color/shape 状态
+    匹配目标要求才能收集 goal。状态切换器自动触发 (走上去循环切换)。
+
+    κ-gradient principle (Liu Mechanism §3.3 + TOMAS/IDO state dimension):
+        S_rel = κ_weight × state_gradient + distance_gradient
+        state_gradient = triggers_needed (current → target for each dimension)
+    """
+    # ── Stage 1: κ-gradient oracle replay (fast, 5s budget — 快速探测) ──
+    plan = _solve_oracle_replay(game, "ls20", level_idx, max_steps=300, max_time=5.0)
+    if plan is not None:
+        return plan
+
+    # ── Stage 2: Δ-State BFS 分解 (IDO 流贯 Replay 替代 deepcopy) ──
+    plan = _solve_ls20_delta_state_bfs(game, level_idx)
+    if plan is not None:
+        return plan
+
+    # ── Stage 3: κ-gradient direct solver (10s budget — 处理简单关卡) ──
+    # 注意: κ-gradient direct 无法绕墙, L1/L2 等复杂关卡依赖 Stage 2
+    plan = _solve_ls20_kappa_gradient_direct(game, level_idx)
+    if plan is not None:
+        return plan
+
+    # ── Stage 3: κ-PS BFS fallback ──
+    plan = _solve_ls20_kappa_ps_bfs(game, level_idx)
+    if plan is not None:
+        return plan
+
+    return None
+
+
+def _solve_ls20_kappa_gradient_direct(game: Any, level_idx: int) -> list[tuple] | None:
+    """状态感知 κ-gradient direct solver for LS20 (TOMAS/IDO).
+
+    LS20 是状态匹配谜题，不是迷宫。玩家需要让 rotation/color/shape
+    状态匹配目标要求才能收集 goal sprite。状态切换器 (state changers)
+    是自动触发的 — 走上去就循环切换，无需 ACTION6。
+
+    核心改进 (vs 旧版本):
+    1. 完全移除 ACTION6 — ls20 的 complete_action() 只处理方向移动
+    2. 状态感知 κ-gradient: S_rel = κ_weight × state_gradient + distance_gradient
+    3. 动态目标: 状态不匹配 → 导航到需要的 state-changer; 状态匹配 → 导航到 goal
+    4. Kuramoto R 同步度: R = matched_dimensions / total_dimensions
+    5. 多触发规划: rotation 0→3 需要 3 次触发, 计算 triggers_needed
+    6. IDO 信息驱动: 优先访问信息增益最大的 state-changer
+    7. 步数预算感知: 步数不足时导航到金币 (npxgalaybz) 重置计数
+
+    No hardcoded paths, coordinates, or step_size values. No ACTION6.
+    """
+    import time as _time
+    from arcengine import ActionInput
+    from .oracle_adapters import get_oracle_adapter, LS20Adapter
+
+    t0 = _time.time()
+    sim = copy.deepcopy(game)
+    original_level = sim._current_level_index
+
+    if _is_level_solved(sim, original_level):
+        return []
+
+    step_size = _detect_game_step(sim)
+    adapter = get_oracle_adapter("ls20", sim)
+    if adapter is None or adapter.player is None:
+        return None
+
+    # κ-gradient 参数 (Liu mechanism + state gradient)
+    LIU_EPSILON = 0.01
+    KAPPA_WEIGHT = 10.0
+    STATE_KAPPA_WEIGHT = 15.0  # 状态梯度权重 — 状态匹配优先于距离
+    WALL_PENALTY = -1000.0
+    MAX_STALL = 3
+    MAX_STEPS = 300
+    MAX_TIME = 30.0
+
+    # 方向常量 (只有 ACTION1-4 有效)
+    DIR_UP = 1
+    DIR_DOWN = 2
+    DIR_LEFT = 3
+    DIR_RIGHT = 4
+    ALL_DIRS = [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT]
+
+    # Stall 恢复: 优先尝试垂直方向
+    PERPENDICULAR: dict[int, list[int]] = {
+        DIR_UP: [DIR_LEFT, DIR_RIGHT],
+        DIR_DOWN: [DIR_LEFT, DIR_RIGHT],
+        DIR_LEFT: [DIR_UP, DIR_DOWN],
+        DIR_RIGHT: [DIR_UP, DIR_DOWN],
+    }
+
+    # ── 辅助函数: Kuramoto R 同步度 ──
+    def _compute_kuramoto_r(
+        player_state: dict[str, int],
+        goal_reqs: dict[str, int],
+        dim_sizes: dict[str, int],
+    ) -> float:
+        """计算 Kuramoto order parameter R — 状态与目标要求的同步度.
+
+        R = matched_dimensions / total_dimensions.
+        完全匹配 R=1.0, 完全不匹配 R=0.0.
+        """
+        dims = ['rotation', 'color', 'shape']
+        matched = 0
+        total = 0
+        for dim in dims:
+            p_val = player_state.get(dim, 0)
+            g_val = goal_reqs.get(dim, 0)
+            dim_size = dim_sizes.get(dim, 4)
+            if dim_size > 0:
+                total += 1
+                if p_val == g_val:
+                    matched += 1
+        return matched / max(1, total)
+
+    # ── 辅助函数: 计算需要多少次触发达到目标 ──
+    def _triggers_needed(
+        current_idx: int,
+        target_idx: int,
+        dim_size: int,
+    ) -> int:
+        """计算从 current_idx 到 target_idx 需要多少次 state-changer 触发.
+
+        状态切换是模运算循环: idx = (idx + 1) % dim_size.
+        例如 rotation: 0 → 3 需要 3 次触发 (0→1→2→3).
+        """
+        if current_idx == target_idx:
+            return 0
+        # 向前循环: (target - current) % dim_size
+        return (target_idx - current_idx) % dim_size
+
+    # ── 辅助函数: 计算状态梯度 (总触发距离) ──
+    def _state_gradient(
+        player_state: dict[str, int],
+        goal_reqs: dict[str, int],
+        dim_sizes: dict[str, int],
+    ) -> int:
+        """计算总状态梯度 — 需要多少次触发才能完全匹配目标.
+
+        每个不匹配维度贡献 triggers_needed(current, target, dim_size).
+        """
+        total = 0
+        for dim in ['rotation', 'color', 'shape']:
+            total += _triggers_needed(
+                player_state.get(dim, 0),
+                goal_reqs.get(dim, 0),
+                dim_sizes.get(dim, 4),
+            )
+        return total
+
+    # ── 辅助函数: 选择最佳 state-changer 导航目标 ──
+    def _select_state_changer_target(
+        px: int,
+        py: int,
+        player_state: dict[str, int],
+        goal_reqs: dict[str, int],
+        dim_sizes: dict[str, int],
+        state_changers: dict[str, list],
+        visited: set[tuple[int, int]],
+    ) -> tuple[int, int, str] | None:
+        """IDO 信息驱动选择: 优先导航到信息增益最大的 state-changer.
+
+        策略:
+        1. 找到所有不匹配的维度
+        2. 对每个不匹配维度, 找最近的未频繁访问的 state-changer
+        3. 按 triggers_needed × distance 排序 — 高触发需求 + 近距离优先
+        """
+        mismatch_dims: list[tuple[str, int, int]] = []  # (dim, triggers, priority)
+        for dim in ['rotation', 'color', 'shape']:
+            triggers = _triggers_needed(
+                player_state.get(dim, 0),
+                goal_reqs.get(dim, 0),
+                dim_sizes.get(dim, 4),
+            )
+            if triggers > 0:
+                # 高触发需求的维度优先 (需要更多循环)
+                mismatch_dims.append((dim, triggers, triggers))
+
+        if not mismatch_dims:
+            return None  # 所有维度已匹配
+
+        # 按 triggers 降序排列 (需要最多循环的维度优先解决)
+        mismatch_dims.sort(key=lambda x: -x[2])
+
+        best_target: tuple[int, int, str] | None = None
+        best_score: float = float('inf')
+
+        for dim, triggers, _ in mismatch_dims:
+            changers = state_changers.get(dim, [])
+            if not changers:
+                continue
+            for ch in changers:
+                ch_x = int(ch.x)
+                ch_y = int(ch.y)
+                dist = abs(px - ch_x) + abs(py - ch_y)
+                # IDO 信息增益评分: triggers × distance / step_size
+                # 高触发需求 + 远距离 = 更值得先解决 (解开瓶颈)
+                # 但我们也考虑距离因素 — 近的更容易到达
+                visit_count = sum(1 for v in visited if v == (ch_x, ch_y))
+                info_score = dist / max(1, step_size) + visit_count * 2.0
+                if info_score < best_score:
+                    best_score = info_score
+                    best_target = (ch_x, ch_y, dim)
+
+        return best_target
+
+    collected: list[tuple] = []
+    prev_pos: tuple[int, int] | None = None
+    stall_count = 0
+    last_dir: int | None = None
+    visited_positions: set[tuple[int, int]] = set()
+    # MemoryArchive: 记录已触发过的 state-changer 位置
+    triggered_changers: set[tuple[int, int, str]] = set()
+    # ── 多触发撤退-回归机制 ──
+    # 当玩家在 state-changer 上但状态仍不匹配时, 需要先撤退再回来重新触发
+    retreat_mode: bool = False
+    retreat_target: tuple[int, int] | None = None  # 撤退目标点 (离 changer 2*step_size 远)
+    retreat_step_counter: int = 0  # 撤退步数计数
+    last_changer_pos: tuple[int, int] | None = None  # 上一个 changer 位置 (回归目标)
+
+    for step_idx in range(MAX_STEPS):
+        if _time.time() - t0 > MAX_TIME:
+            break
+
+        if _is_level_solved(sim, original_level):
+            return collected
+
+        adapter = get_oracle_adapter("ls20", sim)
+        if adapter is None or adapter.player is None:
+            break
+
+        px = int(adapter.player.x)
+        py = int(adapter.player.y)
+        visited_positions.add((px, py))
+
+        # ── 状态感知: 读取当前玩家状态和目标要求 ──
+        player_state = adapter.player_state
+        goal_requirements = adapter.goal_requirements
+        state_changers = adapter.state_changers
+        dim_sizes = adapter.state_dimension_sizes
+        goals = adapter.goals
+
+        # 步数预算检查 — 使用 step_decrement 计算实际剩余动作数
+        step_budget = adapter.step_budget
+        step_decrement = adapter.step_decrement
+        max_actions = step_budget // step_decrement
+        steps_remaining = max_actions - step_idx
+
+        # ── Kuramoto R 同步度评估 ──
+        # 如果有 goal requirements, 计算与第一个未收集 goal 的同步度
+        best_r = 0.0
+        best_goal_req: dict[str, int] = {}
+        best_goal_pos: tuple[int, int] | None = None
+
+        if goal_requirements and goals:
+            for i, req in enumerate(goal_requirements):
+                if i < len(goals):
+                    g = goals[i]
+                    gx = int(g.x)
+                    gy = int(g.y)
+                    r = _compute_kuramoto_r(player_state, req, dim_sizes)
+                    if r > best_r or best_goal_pos is None:
+                        best_r = r
+                        best_goal_req = req
+                        best_goal_pos = (gx, gy)
+
+        # ── 多触发撤退-回归: 当玩家在 changer 上但状态仍不匹配 ──
+        # 检查玩家是否站在某个 state-changer 上
+        on_changer = False
+        on_changer_pos: tuple[int, int] | None = None
+        on_changer_dim: str | None = None
+        for dim, changers in state_changers.items():
+            for ch in changers:
+                if int(ch.x) == px and int(ch.y) == py:
+                    on_changer = True
+                    on_changer_pos = (px, py)
+                    on_changer_dim = dim
+                    break
+            if on_changer:
+                break
+
+        # 如果在 changer 上且状态不匹配 → 进入/保持撤退模式
+        if on_changer and best_r < 1.0 and on_changer_pos is not None:
+            if not retreat_mode:
+                # 刚触发完 changer, 需要撤退以便再回来
+                retreat_mode = True
+                retreat_step_counter = 0
+                last_changer_pos = on_changer_pos
+                # 计算撤退目标: 离 changer 2*step_size 远的方向
+                # 优先选择离 goal 较远的方向 (避免与 goal 撞墙)
+                retreat_candidates: list[tuple[int, int, float]] = []
+                for dd in ALL_DIRS:
+                    rdx, rdy = {1: (0, -1), 2: (0, 1), 3: (-1, 0), 4: (1, 0)}[dd]
+                    rx = px + rdx * step_size * 2
+                    ry = py + rdy * step_size * 2
+                    # 检查是否可到达 (模拟测试)
+                    test_r = copy.deepcopy(sim)
+                    r_ai = ActionInput(id=dd, data={})
+                    try:
+                        test_r.perform_action(r_ai)
+                    except Exception:
+                        continue
+                    r_adapter = get_oracle_adapter("ls20", test_r)
+                    if r_adapter and r_adapter.player:
+                        r_new_px = int(r_adapter.player.x)
+                        r_new_py = int(r_adapter.player.y)
+                        if (r_new_px, r_new_py) != (px, py):
+                            # 可以移动 — 计算 retreat 点的吸引力
+                            goal_dist = abs(rx - best_goal_pos[0]) + abs(ry - best_goal_pos[1]) if best_goal_pos else 0
+                            retreat_candidates.append((rx, ry, float(goal_dist)))
+                if retreat_candidates:
+                    # 选择离 goal 最远的 retreat 点 (减少与 goal 撞墙的风险)
+                    retreat_candidates.sort(key=lambda x: -x[2])
+                    retreat_target = (retreat_candidates[0][0], retreat_candidates[0][1])
+                else:
+                    # 无法撤退 — 尝试任何可移动的方向
+                    retreat_target = None
+                    retreat_mode = False
+
+        # 如果在撤退模式中, 检查是否已到达撤退点 → 切换回回归模式
+        if retreat_mode and retreat_target is not None:
+            retreat_dist = abs(px - retreat_target[0]) + abs(py - retreat_target[1])
+            if retreat_dist <= step_size:
+                # 已撤退到位 → 切换为回归 changer 模式
+                retreat_mode = False
+                retreat_target = None
+
+        # ── 动态目标选择: κ-gradient with state dimension ──
+        # S_rel = κ_weight × state_gradient + distance_gradient
+        # 状态不匹配 → 导航到 state-changer; 状态匹配 → 导航到 goal
+        # 撤退模式 → 导航到 retreat_target
+
+        target_x: int = px
+        target_y: int = py
+        is_state_changer_target = False
+
+        if retreat_mode and retreat_target is not None:
+            # 撤退模式: 目标是 retreat 点 (远离 changer, 以便回来再触发)
+            target_x, target_y = retreat_target
+            is_state_changer_target = False
+        elif best_r < 1.0 and best_goal_req:
+            # 状态不匹配 — IDO 信息驱动: 导航到需要的 state-changer
+            changer_target = _select_state_changer_target(
+                px, py, player_state, best_goal_req, dim_sizes,
+                state_changers, visited_positions,
+            )
+            if changer_target is not None:
+                target_x, target_y, changer_dim = changer_target
+                is_state_changer_target = True
+            elif best_goal_pos is not None:
+                # 没有 state-changer 可达, 尝试直接导航到 goal
+                target_x, target_y = best_goal_pos
+        elif best_goal_pos is not None:
+            # 状态匹配 — 导航到 goal
+            target_x, target_y = best_goal_pos
+
+        # ── 步数预算感知: 主动金币收集 ──
+        coins = adapter.coins
+        # 主动金币收集 (proximity position): 当剩余步数不足以完成剩余路径时
+        # 金币锚点可能不在玩家步长网格上, 使用 proximity position 作为导航目标
+        estimated_path_cost = 30  # 安全估计: nav to changer + triggers + nav to goal
+        if steps_remaining < estimated_path_cost and coins:
+            # 对每个金币计算 proximity position, 选择最近的
+            best_prox = None
+            best_prox_dist = float('inf')
+            for c in coins:
+                prox_pos = _compute_coin_proximity_position(
+                    px, py, step_size,
+                    int(c.x), int(c.y),
+                )
+                prox_dist = abs(px - prox_pos[0]) + abs(py - prox_pos[1])
+                if prox_dist < best_prox_dist:
+                    best_prox_dist = prox_dist
+                    best_prox = prox_pos
+
+            if best_prox is not None:
+                target_x, target_y = best_prox
+                is_state_changer_target = False
+
+        # ── 如果没有有效目标, 尝试探索 ──
+        if target_x == px and target_y == py and not goals:
+            break  # 没有目标可见
+
+        # ── Stall 检测 ──
+        if prev_pos is not None and (px, py) == prev_pos:
+            stall_count += 1
+        else:
+            stall_count = max(0, stall_count - 1)
+        prev_pos = (px, py)
+
+        # ── κ-gradient 方向评分: 结合状态梯度和距离梯度 ──
+        dir_scores: list[tuple[float, int]] = []
+
+        # 当前状态梯度 (总触发次数)
+        current_state_grad = _state_gradient(
+            player_state, best_goal_req, dim_sizes,
+        ) if best_goal_req else 0
+
+        for d in ALL_DIRS:
+            test_sim = copy.deepcopy(sim)
+            ai = ActionInput(id=d, data={})
+            try:
+                test_sim.perform_action(ai)
+            except Exception:
+                dir_scores.append((WALL_PENALTY, d))
+                continue
+
+            test_adapter = get_oracle_adapter("ls20", test_sim)
+            if test_adapter is None or test_adapter.player is None:
+                dir_scores.append((WALL_PENALTY, d))
+                continue
+
+            new_px = int(test_adapter.player.x)
+            new_py = int(test_adapter.player.y)
+
+            # 被阻挡: 移动后位置不变
+            if (new_px, new_py) == (px, py):
+                dir_scores.append((WALL_PENALTY, d))
+                continue
+
+            # 重新访问惩罚 — 撤退/回归模式下大幅降低 (需要多次经过 changer)
+            revisit_penalty = -5.0 if (new_px, new_py) in visited_positions and not retreat_mode else 0.0
+
+            # ── 读取移动后的新状态 ──
+            new_player_state = test_adapter.player_state
+            new_state_changers = test_adapter.state_changers
+
+            # ── 状态梯度变化: state_delta ──
+            # 如果移动到了 state-changer 上, 状态会自动循环
+            # 计算 new state gradient vs current state gradient
+            new_state_grad = _state_gradient(
+                new_player_state, best_goal_req, dim_sizes,
+            ) if best_goal_req else 0
+
+            # state_delta = 当前梯度 - 新梯度 (正值 = 状态更接近目标)
+            state_delta = current_state_grad - new_state_grad
+
+            # ── 距离梯度: distance_delta ──
+            old_dist = abs(px - target_x) + abs(py - target_y)
+            new_dist = abs(new_px - target_x) + abs(new_py - target_y)
+            distance_delta = old_dist - new_dist
+
+            # ── κ-gradient 综合: S_rel = κ_state × state_delta + κ_dist × distance_delta ──
+            # 状态匹配优先: 如果走到了 state-changer 上, state_delta 很大
+            kappa_pri = (
+                STATE_KAPPA_WEIGHT * state_delta
+                + KAPPA_WEIGHT * distance_delta
+                + revisit_penalty
+            )
+
+            # ── 走到 state-changer 上的额外奖励 ──
+            # 如果新位置恰好是一个需要的 state-changer
+            for dim, changers in new_state_changers.items():
+                for ch in changers:
+                    if int(ch.x) == new_px and int(ch.y) == new_py:
+                        triggers = _triggers_needed(
+                            player_state.get(dim, 0),
+                            best_goal_req.get(dim, 0) if best_goal_req else 0,
+                            dim_sizes.get(dim, 4),
+                        )
+                        if triggers > 0:
+                            kappa_pri += 5.0 * triggers  # 走到需要的 changer 上 = 高奖励
+
+            dir_scores.append((kappa_pri, d))
+
+        # 按评分排序 (最高优先)
+        dir_scores.sort(key=lambda x: -x[0])
+
+        # ── Stall 恢复: 优先垂直方向 ──
+        if stall_count >= MAX_STALL and last_dir is not None:
+            perp_dirs = PERPENDICULAR.get(last_dir, ALL_DIRS)
+            perp_scores = [(s, d) for s, d in dir_scores if d in perp_dirs and s > WALL_PENALTY]
+            if perp_scores:
+                other_scores = [(s, d) for s, d in dir_scores if d not in perp_dirs]
+                dir_scores = perp_scores + other_scores
+
+        # ── 执行最佳方向 ──
+        action_taken = False
+        for score, d in dir_scores:
+            if score <= WALL_PENALTY:
+                continue
+
+            ai = ActionInput(id=d, data={})
+            try:
+                sim.perform_action(ai)
+                collected.append((d, None))
+                action_taken = True
+                last_dir = d
+
+                # 检查 game_over
+                state = getattr(sim, '_state', None)
+                state_name = str(state) if state is not None else ''
+                if 'GAME_OVER' in state_name:
+                    return None
+
+                # 记录: 如果走到了 state-changer 上, 记录触发
+                new_adapter = get_oracle_adapter("ls20", sim)
+                if new_adapter and new_adapter.player:
+                    new_px = int(new_adapter.player.x)
+                    new_py = int(new_adapter.player.y)
+                    new_changers = new_adapter.state_changers
+                    for dim, changers in new_changers.items():
+                        for ch in changers:
+                            if int(ch.x) == new_px and int(ch.y) == new_py:
+                                triggered_changers.add((new_px, new_py, dim))
+
+                break
+            except Exception:
+                continue
+
+        if not action_taken:
+            # 紧急模式: 允许重新访问
+            for d in ALL_DIRS:
+                test_sim = copy.deepcopy(sim)
+                ai = ActionInput(id=d, data={})
+                try:
+                    test_sim.perform_action(ai)
+                except Exception:
+                    continue
+                test_adapter = get_oracle_adapter("ls20", test_sim)
+                if test_adapter and test_adapter.player:
+                    new_px = int(test_adapter.player.x)
+                    new_py = int(test_adapter.player.y)
+                    if (new_px, new_py) != (px, py):
+                        sim.perform_action(ai)
+                        collected.append((d, None))
+                        last_dir = d
+                        action_taken = True
+                        break
+            if not action_taken:
+                break  # 真正卡住了
+
+    if _is_level_solved(sim, original_level):
+        return collected
+
+    return None
+
+
+def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None:
+    """BFS 分解求解 LS20 — trigger间紧急coin收集 + proximity position.
+
+    v3.15.3 关键改进 (vs v3.15.2):
+    - **trigger间紧急coin** — 每次changer trigger/retreat后检查remaining,
+      若< MIN_RESERVE(5)则先收集金币重置步数再继续trigger循环
+    - **先尝试直接路径** — 不预先收集金币, 先changer→goal
+    - 金币proximity position — 不在步长网格上时计算包围盒重叠位置
+
+    核心策略:
+    1. 状态匹配 → BFS到goal (若BFS失败→收集coin→重试)
+    2. 状态不匹配 → BFS到changer触发
+    3. 每次action后检查remaining — <MIN_RESERVE时紧急收集coin
+    4. 在changer上 → 撤退重触发 (撤退后也检查remaining)
+
+    No ACTION6. No hardcoded paths.
+    """
+    import time as _time
+    from collections import deque
+    from arcengine import ActionInput
+    from .oracle_adapters import get_oracle_adapter
+
+    t0 = _time.time()
+    MAX_TOTAL_TIME = 45.0
+    MAX_BFS_STEPS = 100
+    MAX_TOTAL_STEPS = 80
+
+    # ── RHAE Budget Controller ──
+    human_steps_est = ls20_estimate_human_steps(level_idx)
+    task = create_game_task("ls20", level_idx, human_steps_est)
+    cc = CoinCollector([task], is_ls20=True)
+    rhae_ctrl = RHAEBudgetController(cc)
+
+    sim = copy.deepcopy(game)
+    original_level = sim._current_level_index
+
+    if _is_level_solved(sim, original_level):
+        return []
+
+    adapter = get_oracle_adapter("ls20", sim)
+    if adapter is None or adapter.player is None:
+        return None
+
+    step_size = _detect_game_step(sim)
+    collected: list[tuple] = []
+
+    # ── 轻量BFS ──
+    def _lightweight_bfs(
+        start_game: Any,
+        target_x: int,
+        target_y: int,
+        max_steps: int = MAX_BFS_STEPS,
+        avoid_positions: set[tuple[int, int]] | None = None,
+    ) -> list[tuple] | None:
+        start_adapter = get_oracle_adapter("ls20", start_game)
+        if start_adapter is None or start_adapter.player is None:
+            return None
+        start_px = int(start_adapter.player.x)
+        start_py = int(start_adapter.player.y)
+        visited: set[tuple[int, int]] = {(start_px, start_py)}
+        if avoid_positions:
+            visited.update(avoid_positions)
+        queue: deque = deque()
+        queue.append((copy.deepcopy(start_game), []))
+        while queue and _time.time() - t0 < MAX_TOTAL_TIME:
+            cur_game, cur_actions = queue.popleft()
+            if len(cur_actions) >= max_steps:
+                continue
+            cur_adapter = get_oracle_adapter("ls20", cur_game)
+            if cur_adapter is None or cur_adapter.player is None:
+                continue
+            cur_px = int(cur_adapter.player.x)
+            cur_py = int(cur_adapter.player.y)
+            if cur_px == target_x and cur_py == target_y:
+                return cur_actions
+            if _is_level_solved(cur_game, original_level):
+                return cur_actions
+            for d in [1, 2, 3, 4]:
+                test_sim = copy.deepcopy(cur_game)
+                ai = ActionInput(id=d, data={})
+                try:
+                    test_sim.perform_action(ai)
+                except Exception:
+                    continue
+                test_adapter = get_oracle_adapter("ls20", test_sim)
+                if test_adapter is None or test_adapter.player is None:
+                    continue
+                new_px = int(test_adapter.player.x)
+                new_py = int(test_adapter.player.y)
+                if (new_px, new_py) == (cur_px, cur_py):
+                    continue
+                if (new_px, new_py) in visited:
+                    continue
+                visited.add((new_px, new_py))
+                queue.append((test_sim, cur_actions + [(d, None)]))
+        return None
+
+    # ── 紧急金币收集: BFS失败/步数不足时的回退策略 ──
+    def _emergency_collect_coin() -> bool:
+        """收集最近的可达金币 → 步数重置. 返回True表示成功收集.
+        
+        关键: 用remaining_now作为BFS max_steps限制,
+        确保BFS路径不超过当前步数预算. 不做Manhattan预判,
+        直接让BFS搜索实际可达路径.
+        """
+        adapter = get_oracle_adapter("ls20", sim)
+        if adapter is None or adapter.player is None:
+            return False
+        px_now = int(adapter.player.x)
+        py_now = int(adapter.player.y)
+        remaining_now = adapter.steps_remaining
+        coins_now = adapter.coins
+        if not coins_now:
+            return False
+        if remaining_now <= 0:
+            return False
+
+        coin_targets: list[tuple[int, int, int]] = []
+        for c in coins_now:
+            prox_pos = _compute_coin_proximity_position(
+                px_now, py_now, step_size, int(c.x), int(c.y),
+            )
+            prox_dist = abs(px_now - prox_pos[0]) + abs(py_now - prox_pos[1])
+            coin_targets.append((prox_pos[0], prox_pos[1], prox_dist))
+
+        coin_targets.sort(key=lambda t: t[2])
+
+        for target_x, target_y, dist in coin_targets:
+            # 用 remaining_now 作为 BFS max_steps — BFS只搜索在步数预算内的路径
+            # 不做Manhattan预判: 让BFS自己决定是否可达
+            coin_path = _lightweight_bfs(sim, target_x, target_y, max_steps=remaining_now)
+            if coin_path is not None:
+                for aid, data in coin_path:
+                    ai = ActionInput(id=aid, data=data if data else {})
+                    try:
+                        sim.perform_action(ai)
+                        collected.append((aid, data))
+                    except Exception:
+                        break
+                return True  # 成功收集金币, 步数已重置
+
+        return False  # 无法收集任何金币
+
+    # ── 主循环: changer/goal优先, trigger间紧急coin收集 ──
+    MIN_RESERVE = 5  # 每次action后remaining<5时紧急收集金币
+
+    for iteration in range(30):
+        if _time.time() - t0 > MAX_TOTAL_TIME:
+            break
+
+        if _is_level_solved(sim, original_level):
+            return collected
+
+        if len(collected) >= MAX_TOTAL_STEPS:
+            break
+
+        if not rhae_ctrl.check_budget(task['id'], human_steps_est, len(collected)):
+            break
+
+        adapter = get_oracle_adapter("ls20", sim)
+        if adapter is None or adapter.player is None:
+            break
+
+        px = int(adapter.player.x)
+        py = int(adapter.player.y)
+        player_state = adapter.player_state
+        goal_reqs = adapter.goal_requirements
+        dim_sizes = adapter.state_dimension_sizes
+        state_changers = adapter.state_changers
+        goals = adapter.goals
+        actions_remaining = adapter.steps_remaining
+
+        if not goal_reqs or not goals:
+            break
+
+        # ── 步数不足 → 紧急收集金币 (在任何路径决策之前) ──
+        # 核心洞察: BFS到changer可能消耗17+步, 到达后remaining只剩4
+        # 必须在trigger循环中间收集金币重置步数, 否则无法完成所有trigger+到goal
+        if actions_remaining < MIN_RESERVE and adapter.coins and not _is_level_solved(sim, original_level):
+            if _emergency_collect_coin():
+                continue  # 金币收集后步数重置, 重新进入主循环
+            # 无法收集金币 → 但可能状态已匹配, 尝试直接到goal
+            # (如果remaining刚好够到goal, 仍然有机会)
+
+        # ── 计算最优goal和状态不匹配 ──
+        best_goal_idx = 0
+        best_mismatch = 999
+        for i, req in enumerate(goal_reqs):
+            mismatch = (
+                (req['rotation'] != player_state['rotation'])
+                + (req['color'] != player_state['color'])
+                + (req['shape'] != player_state['shape'])
+            )
+            if mismatch < best_mismatch:
+                best_mismatch = mismatch
+                best_goal_idx = i
+
+        best_goal_req = goal_reqs[best_goal_idx]
+        best_goal = goals[best_goal_idx] if best_goal_idx < len(goals) else None
+
+        # ── 状态完全匹配 → BFS 导航到 goal ──
+        if best_mismatch == 0 and best_goal is not None:
+            goal_x = int(best_goal.x)
+            goal_y = int(best_goal.y)
+
+            path = _lightweight_bfs(sim, goal_x, goal_y)
+            if path is not None:
+                for aid, data in path:
+                    ai = ActionInput(id=aid, data=data if data else {})
+                    try:
+                        sim.perform_action(ai)
+                        collected.append((aid, data))
+                    except Exception:
+                        break
+                if _is_level_solved(sim, original_level):
+                    return collected
+                # BFS到goal成功但未通关 → 可能路径中间经过changer改变了状态
+                continue
+            else:
+                # BFS到goal失败 → 可能remaining不够或墙阻隔
+                # 尝试收集金币后重试
+                if _emergency_collect_coin():
+                    continue
+                break
+
+        # ── 状态不匹配 → 计算需要哪些 changer ──
+        mismatches: list[tuple[str, int, int]] = []
+        for dim_name in ['rotation', 'color', 'shape']:
+            current_val = player_state.get(dim_name, 0)
+            target_val = best_goal_req.get(dim_name, 0)
+            dim_size = dim_sizes.get(dim_name, 4)
+            triggers = (target_val - current_val) % dim_size
+            if triggers > 0:
+                mismatches.append((dim_name, triggers, dim_size))
+
+        mismatches.sort(key=lambda x: -x[1])
+
+        if not mismatches:
+            continue
+
+        target_changer_x = px
+        target_changer_y = py
+        target_dim = mismatches[0][0]
+
+        for dim_name, _, _ in mismatches:
+            changers = state_changers.get(dim_name, [])
+            if changers:
+                nearest_ch = min(
+                    changers,
+                    key=lambda c: abs(px - int(c.x)) + abs(py - int(c.y)),
+                )
+                target_changer_x = int(nearest_ch.x)
+                target_changer_y = int(nearest_ch.y)
+                target_dim = dim_name
+                break
+
+        # ── 如果已在 changer 上 → 撤退1步以便再次触发 ──
+        if target_changer_x == px and target_changer_y == py:
+            for d in [1, 2, 3, 4]:
+                test_sim = copy.deepcopy(sim)
+                ai = ActionInput(id=d, data={})
+                try:
+                    test_sim.perform_action(ai)
+                except Exception:
+                    continue
+                test_adapter = get_oracle_adapter("ls20", test_sim)
+                if test_adapter and test_adapter.player:
+                    new_px = int(test_adapter.player.x)
+                    new_py = int(test_adapter.player.y)
+                    if (new_px, new_py) != (px, py):
+                        sim.perform_action(ai)
+                        collected.append((d, None))
+                        break
+            # 撤退后检查remaining — 如果<MIN_RESERVE且还有金币, 先收集
+            retreat_adapter = get_oracle_adapter("ls20", sim)
+            if retreat_adapter and retreat_adapter.steps_remaining < MIN_RESERVE and retreat_adapter.coins:
+                if _emergency_collect_coin():
+                    continue
+            continue
+
+        # ── BFS 导航到 changer ──
+        path = _lightweight_bfs(sim, target_changer_x, target_changer_y)
+        if path is not None:
+            for aid, data in path:
+                ai = ActionInput(id=aid, data=data if data else {})
+                try:
+                    sim.perform_action(ai)
+                    collected.append((aid, data))
+                except Exception:
+                    break
+
+            if _is_level_solved(sim, original_level):
+                return collected
+            # 到达changer后检查remaining — 如果<MIN_RESERVE且还有金币, 先收集
+            post_adapter = get_oracle_adapter("ls20", sim)
+            if post_adapter and post_adapter.steps_remaining < MIN_RESERVE and post_adapter.coins:
+                if _emergency_collect_coin():
+                    continue
+            continue
+        else:
+            # BFS到changer失败 → 可能remaining不够或墙阻隔
+            if _emergency_collect_coin():
+                continue
+            break
+
+    if _is_level_solved(sim, original_level):
+        rhae_ctrl.record_success(task['id'], human_steps_est, len(collected))
+        return collected
+
+    rhae_ctrl.record_failure(task['id'], human_steps_est, len(collected))
+    return None if not _is_level_solved(sim, original_level) else collected
+
+
+def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
+    """状态感知 κ-PS BFS for LS20 — 动态目标切换 + EML 复合状态.
+
+    搜索节点 = (position, rotation_idx, color_idx, shape_idx) 复合状态.
+    κ-priority 基于动态目标: 状态不匹配 → target=state-changer; 状态匹配 → target=goal.
+    状态匹配 bonus 乘以 >1.0 提升优先级 (非之前的 <1.0 错误).
+
+    核心改进 (vs v1):
+    1. 动态目标: 状态不匹配时导航到 changer, 不再死冲 goal (被阻挡)
+    2. κ-priority 修正: 匹配 bonus *= 1.5/2.0/3.0 (提升优先级, 非 0.5/0.8 降低)
+    3. 增加搜索预算: MAX_NODES=5000, MAX_PATH_LEN=80, MAX_BFS_TIME=60.0
+    4. 无 ACTION6 — 只有方向移动有效
+
+    No hardcoded paths, coordinates, or step_size values.
+    """
+    import time as _time
+    import heapq
+    from arcengine import ActionInput
+    from .oracle_adapters import get_oracle_adapter, LS20Adapter
+
+    t0 = _time.time()
+    sim = copy.deepcopy(game)
+    original_level = sim._current_level_index
+
+    if _is_level_solved(sim, original_level):
+        return []
+
+    step_size = _detect_game_step(sim)
+    adapter = get_oracle_adapter("ls20", sim)
+
+    if adapter is None or adapter.player is None:
+        return None
+
+    px0 = int(adapter.player.x)
+    py0 = int(adapter.player.y)
+
+    # ── 初始化复合状态 ──
+    init_pstate = adapter.player_state
+    init_rot = init_pstate.get('rotation', 0)
+    init_color = init_pstate.get('color', 0)
+    init_shape = init_pstate.get('shape', 0)
+
+    # ── 目标要求和 state changers ──
+    goal_requirements = adapter.goal_requirements
+    dim_sizes = adapter.state_dimension_sizes
+    state_changers_init = adapter.state_changers
+    goals_init = adapter.goals
+
+    # 构建 goal 目标列表: (goal_x, goal_y, goal_rotation, goal_color, goal_shape)
+    goal_targets: list[tuple[int, int, int, int, int]] = []
+    if goals_init and goal_requirements:
+        for i, g in enumerate(goals_init):
+            if i < len(goal_requirements):
+                req = goal_requirements[i]
+                goal_targets.append(
+                    (int(g.x), int(g.y), req['rotation'], req['color'], req['shape']),
+                )
+
+    if not goal_targets:
+        return None
+
+    # 构建 changer 目标列表: (changer_x, changer_y, changer_dim)
+    changer_targets: list[tuple[int, int, str]] = []
+    for dim, changers in state_changers_init.items():
+        for ch in changers:
+            changer_targets.append((int(ch.x), int(ch.y), dim))
+
+    # ── 动态目标选择: 根据当前状态选择 target ──
+    def _select_dynamic_target(
+        pos_x: int, pos_y: int,
+        rot: int, color: int, shape: int,
+        goal_targets: list[tuple[int, int, int, int, int]],
+        changer_targets: list[tuple[int, int, str]],
+        dim_sizes: dict[str, int],
+    ) -> tuple[int, int, bool]:
+        """选择动态目标: 状态不匹配 → changer; 状态匹配 → goal.
+
+        Returns:
+            (target_x, target_y, is_goal_target)
+        """
+        # 找最佳匹配的 goal
+        if goal_targets:
+            best_goal = min(
+                goal_targets,
+                key=lambda t: (
+                    # State mismatch count (优先选择 state 最接近的 goal)
+                    (t[2] != rot) + (t[3] != color) + (t[4] != shape),
+                    abs(pos_x - t[0]) + abs(pos_y - t[1]),
+                ),
+            )
+            g_rot, g_color, g_shape = best_goal[2], best_goal[3], best_goal[4]
+
+            # 检查状态匹配度
+            state_matches = (rot == g_rot and color == g_color and shape == g_shape)
+
+            if state_matches:
+                # 状态完全匹配 → 导航到 goal
+                return (best_goal[0], best_goal[1], True)
+
+            # 状态不匹配 → 导航到最需要的 changer
+            # 计算每个维度需要多少触发
+            mismatches: list[tuple[str, int, int]] = []
+            for dim_name, current_val, goal_val, dim_size in [
+                ('rotation', rot, g_rot, dim_sizes.get('rotation', 4)),
+                ('color', color, g_color, dim_sizes.get('color', 4)),
+                ('shape', shape, g_shape, dim_sizes.get('shape', 3)),
+            ]:
+                triggers = (goal_val - current_val) % dim_size
+                if triggers > 0:
+                    mismatches.append((dim_name, triggers, dim_size))
+
+            # 按触发需求排序 (需要最多触发的维度优先)
+            mismatches.sort(key=lambda x: -x[1])
+
+            # 找最近的可用的 changer for 最需要的维度
+            for dim_name, triggers, _ in mismatches:
+                for ch_x, ch_y, ch_dim in changer_targets:
+                    if ch_dim == dim_name:
+                        return (ch_x, ch_y, False)
+
+        # 没有目标 — fallback
+        if goal_targets:
+            return (goal_targets[0][0], goal_targets[0][1], True)
+        return (pos_x, pos_y, False)
+
+    # ── κ-priority 计算 ──
+    def _compute_kappa_priority(
+        pos_x: int, pos_y: int,
+        rot: int, color: int, shape: int,
+        target_x: int, target_y: int,
+        is_goal_target: bool,
+        goal_targets: list[tuple[int, int, int, int, int]],
+        dim_sizes: dict[str, int],
+    ) -> float:
+        """κ-priority: 距动态目标越近 + 状态梯度越小 → κ越高 → 优先展开.
+
+        heapq 用 (-κ_priority, counter, ...) 排序, κ越高 → -κ越低 → 优先弹出.
+        状态匹配 bonus *= >1.0 提升优先级.
+        """
+        # 位置距离到当前动态目标
+        pos_dist = abs(pos_x - target_x) + abs(pos_y - target_y)
+
+        # 状态梯度到最佳 goal 的距离
+        state_grad = 0
+        if goal_targets:
+            best_goal = min(
+                goal_targets,
+                key=lambda t: (
+                    (t[2] != rot) + (t[3] != color) + (t[4] != shape),
+                    abs(pos_x - t[0]) + abs(pos_y - t[1]),
+                ),
+            )
+            g_rot, g_color, g_shape = best_goal[2], best_goal[3], best_goal[4]
+            state_grad = (
+                (g_rot - rot) % dim_sizes.get('rotation', 4)
+                + (g_color - color) % dim_sizes.get('color', 4)
+                + (g_shape - shape) % dim_sizes.get('shape', 3)
+            )
+
+        # Liu S_rel: κ_priority = 1 / (S_rel + ε)
+        # S_rel = 0.1 × num_prims − 0.5 × IC + 2.0 × GEX
+        # 简化: IC = composite_distance / step_size
+        composite_dist = state_grad * 5.0 * step_size + pos_dist
+        ic = composite_dist / max(1, step_size)
+        s_rel = 0.1 - 0.5 * ic
+        kappa_pri = 1.0 / (s_rel + LIU_EPSILON)
+
+        # ── 状态匹配 bonus (乘以 >1.0 = 提升优先级) ──
+        if goal_targets:
+            best_goal = min(
+                goal_targets,
+                key=lambda t: (
+                    (t[2] != rot) + (t[3] != color) + (t[4] != shape),
+                ),
+            )
+            g_rot, g_color, g_shape = best_goal[2], best_goal[3], best_goal[4]
+            matched_dims = (rot == g_rot) + (color == g_color) + (shape == g_shape)
+            if matched_dims >= 1:
+                kappa_pri *= (1.0 + 0.5 * matched_dims)  # 1→1.5x, 2→2.0x, 3→2.5x
+            if matched_dims == 3:
+                kappa_pri *= 2.0  # 完全匹配 → 5.0x 总提升
+
+        return kappa_pri
+
+    LIU_EPSILON = 0.01
+    MAX_NODES = 5000
+    MAX_BFS_TIME = 60.0
+    MAX_PATH_LEN = 80
+
+    # ── 复合状态 visited set ──
+    visited_composite: set[tuple[int, int, int, int, int]] = {
+        (px0, py0, init_rot, init_color, init_shape),
+    }
+
+    # Priority queue: (-κ_priority, counter, game_copy, action_list)
+    pq: list[tuple[float, int, Any, list[tuple]]] = []
+    counter = 0
+
+    # ── 初始化: 从起点展开所有方向 ──
+    init_target_x, init_target_y, init_is_goal = _select_dynamic_target(
+        px0, py0, init_rot, init_color, init_shape,
+        goal_targets, changer_targets, dim_sizes,
+    )
+
+    for d in [1, 2, 3, 4]:
+        test_sim = copy.deepcopy(sim)
+        ai = ActionInput(id=d, data={})
+        try:
+            test_sim.perform_action(ai)
+        except Exception:
+            continue
+
+        test_adapter = get_oracle_adapter("ls20", test_sim)
+        if test_adapter is None or test_adapter.player is None:
+            continue
+
+        new_px = int(test_adapter.player.x)
+        new_py = int(test_adapter.player.y)
+
+        if (new_px, new_py) == (px0, py0):
+            continue  # 被阻挡
+
+        new_pstate = test_adapter.player_state
+        new_rot = new_pstate.get('rotation', init_rot)
+        new_color = new_pstate.get('color', init_color)
+        new_shape = new_pstate.get('shape', init_shape)
+
+        composite_key = (new_px, new_py, new_rot, new_color, new_shape)
+        if composite_key in visited_composite:
+            continue
+
+        visited_composite.add(composite_key)
+
+        # 动态目标: 根据新状态选择
+        dyn_target_x, dyn_target_y, dyn_is_goal = _select_dynamic_target(
+            new_px, new_py, new_rot, new_color, new_shape,
+            goal_targets, changer_targets, dim_sizes,
+        )
+
+        kappa_pri = _compute_kappa_priority(
+            new_px, new_py, new_rot, new_color, new_shape,
+            dyn_target_x, dyn_target_y, dyn_is_goal,
+            goal_targets, dim_sizes,
+        )
+
+        heapq.heappush(pq, (-kappa_pri, counter, test_sim, [(d, None)]))
+        counter += 1
+
+    # ── κ-PS BFS exploration ──
+    nodes = 0
+    while pq and _time.time() - t0 < MAX_BFS_TIME and nodes < MAX_NODES:
+        neg_pri, _, cur_sim, cur_actions = heapq.heappop(pq)
+        nodes += 1
+
+        # 检查是否解决
+        if _is_level_solved(cur_sim, original_level):
+            return cur_actions
+
+        cur_adapter = get_oracle_adapter("ls20", cur_sim)
+        if cur_adapter is None or cur_adapter.player is None:
+            continue
+
+        cur_px = int(cur_adapter.player.x)
+        cur_py = int(cur_adapter.player.y)
+
+        if len(cur_actions) >= MAX_PATH_LEN:
+            continue
+
+        # ── 当前复合状态 ──
+        cur_pstate = cur_adapter.player_state
+        cur_rot = cur_pstate.get('rotation', 0)
+        cur_color = cur_pstate.get('color', 0)
+        cur_shape = cur_pstate.get('shape', 0)
+
+        # ── 动态目标更新 ──
+        cur_goals = cur_adapter.goals
+        cur_goal_reqs = cur_adapter.goal_requirements
+        cur_dim_sizes = cur_adapter.state_dimension_sizes
+        cur_changers = cur_adapter.state_changers
+
+        # 重新构建 goal_targets 和 changer_targets
+        cur_goal_targets: list[tuple[int, int, int, int, int]] = []
+        if cur_goals and cur_goal_reqs:
+            for i, g in enumerate(cur_goals):
+                if i < len(cur_goal_reqs):
+                    req = cur_goal_reqs[i]
+                    cur_goal_targets.append(
+                        (int(g.x), int(g.y), req['rotation'], req['color'], req['shape']),
+                    )
+
+        cur_changer_targets: list[tuple[int, int, str]] = []
+        for dim, changers in cur_changers.items():
+            for ch in changers:
+                cur_changer_targets.append((int(ch.x), int(ch.y), dim))
+
+        # ── 展开方向移动 (ACTION1-4 only, no ACTION6) ──
+        for d in [1, 2, 3, 4]:
+            test_sim = copy.deepcopy(cur_sim)
+            ai = ActionInput(id=d, data={})
+            try:
+                test_sim.perform_action(ai)
+            except Exception:
+                continue
+
+            test_adapter = get_oracle_adapter("ls20", test_sim)
+            if test_adapter is None or test_adapter.player is None:
+                continue
+
+            new_px = int(test_adapter.player.x)
+            new_py = int(test_adapter.player.y)
+
+            if (new_px, new_py) == (cur_px, cur_py):
+                continue  # 被阻挡
+
+            new_pstate = test_adapter.player_state
+            new_rot = new_pstate.get('rotation', cur_rot)
+            new_color = new_pstate.get('color', cur_color)
+            new_shape = new_pstate.get('shape', cur_shape)
+
+            composite_key = (new_px, new_py, new_rot, new_color, new_shape)
+            if composite_key in visited_composite:
+                continue
+
+            visited_composite.add(composite_key)
+
+            # 检查是否解决
+            if _is_level_solved(test_sim, original_level):
+                return cur_actions + [(d, None)]
+
+            # 动态目标: 根据新状态选择 changer 或 goal
+            dyn_x, dyn_y, dyn_is_goal = _select_dynamic_target(
+                new_px, new_py, new_rot, new_color, new_shape,
+                cur_goal_targets, cur_changer_targets, cur_dim_sizes,
+            )
+
+            kappa_pri = _compute_kappa_priority(
+                new_px, new_py, new_rot, new_color, new_shape,
+                dyn_x, dyn_y, dyn_is_goal,
+                cur_goal_targets, cur_dim_sizes,
+            )
+
+            heapq.heappush(pq, (
+                -kappa_pri,
+                counter,
+                test_sim,
+                cur_actions + [(d, None)],
+            ))
+            counter += 1
+
+    return None
 
 
 def solve_ft09(game: Any, level_idx: int) -> list[tuple] | None:

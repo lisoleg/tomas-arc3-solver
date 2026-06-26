@@ -1,0 +1,137 @@
+classDiagram
+    direction TB
+
+    %% ── 异常类 ──
+    class SolverAborted {
+        +str reason
+        +float rhae_at_abort
+    }
+    class BudgetExceeded {
+        +str task_id
+        +float budget_used
+        +float budget_limit
+    }
+    SolverAborted <|-- BudgetExceeded
+
+    %% ── Δ-State 核心 ──
+    class Node {
+        +int node_id
+        +Optional~int~ parent_id
+        +Optional~int~ action
+        +dict meta
+        +float score
+        +__init__(node_id, parent_id, action, meta, score)
+    }
+
+    class ActionSpace {
+        +str mode
+        +list~int~ game_actions
+        +list~str~ grid_primitives
+        +dict~int,str~ ACTION_NAMES
+        +__init__(mode, game_id)
+        +get_actions() list~int~ | list~str~
+        +action_to_name(action_id) str
+        +from_game_id(game_id) ActionSpace$
+    }
+
+    class ReplayEngine {
+        +Any root_game
+        +dict~int,Node~ nodes
+        +dict~int,Any~ cache
+        +int MAX_REPLAY_CACHE
+        +__init__(root_game)
+        +register_node(parent_id, action, meta, score) Node
+        +replay(node_id) Any
+        +materialize(node_id) Any
+        +clear_cache() void
+        +evict_cache() void
+    }
+
+    class LayoutHasher {
+        +hash_with_shape(grid) str
+        +hash_positions(positions) str
+        +hash_state(adapter) str
+    }
+
+    class GaussExVerifier {
+        +float GEX_PASS_THRESHOLD
+        +__init__(threshold)
+        +verify(adapter, goal_reqs) tuple~bool,float~
+        +compute_residual(adapter, goal_reqs) float
+        +saturation_ratio(adapter, goal_reqs) float
+    }
+
+    %% ── RHAE 预算控制 ──
+    class CoinCollector {
+        +dict~str,TaskBudget~ tasks
+        +float total_rhae
+        +int total_tasks
+        +float LS20_BUDGET_MULT
+        +__init__(total_rhae, total_tasks)
+        +get_budget(task_id) TaskBudget
+        +record_result(task_id, success, steps_used) void
+        +get_global_rhae() float
+        +should_abort(task_id) bool
+        +summary() dict
+        +export_results() list~dict~
+    }
+
+    class TaskBudget {
+        +str task_id
+        +float rhae_allocated
+        +float rhae_used
+        +int steps_budget
+        +int steps_used
+        +bool completed
+        +bool success
+    }
+
+    class RHAEBudgetController {
+        +float ABORT_RHAE_THRESHOLD
+        +float MIN_RHAE_TO_KEEP
+        +CoinCollector collector
+        +__init__(total_rhae, total_tasks)
+        +check_budget(task_id) bool
+        +record_success(task_id, steps_used) void
+        +record_failure(task_id, steps_used) void
+        +print_report() void
+        +get_remaining_rhae() float
+    }
+
+    %% ── 适配器扩展 ──
+    class LS20Adapter {
+        <<existing>>
+        +GameEntity player
+        +list~GameEntity~ walls
+        +list~GameEntity~ goals
+        +list~GameEntity~ coins
+        +int step_decrement
+        +int steps_remaining
+        +coin_proximity_positions() dict~GameEntity,tuple~
+    }
+
+    %% ── TOMASARC3Solver ──
+    class TOMASARC3Solver {
+        +ReplayEngine replay_engine
+        +ActionSpace action_space
+        +RHAEBudgetController budget_ctrl
+        +LayoutHasher hasher
+        +GaussExVerifier gex_verifier
+        +solve_delta_bfs(game, targets, budget) list~tuple~
+        +structural_bfs(game, budget) list~tuple~
+        +parametric_bfs(game, budget) list~tuple~
+        +kappa_priority_refine(game, plan, budget) list~tuple~
+    }
+
+    %% ── 关系 ──
+    ReplayEngine "1" --> "0..*" Node : manages
+    ReplayEngine --> ActionSpace : uses
+    TOMASARC3Solver --> ReplayEngine : owns
+    TOMASARC3Solver --> ActionSpace : owns
+    TOMASARC3Solver --> RHAEBudgetController : owns
+    TOMASARC3Solver --> LayoutHasher : uses
+    TOMASARC3Solver --> GaussExVerifier : uses
+    RHAEBudgetController --> CoinCollector : owns
+    CoinCollector "1" --> "0..*" TaskBudget : manages
+    Node --> ReplayEngine : replay chain
+    TOMASARC3Solver --> LS20Adapter : queries

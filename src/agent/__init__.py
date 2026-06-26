@@ -113,6 +113,39 @@ from .game_solvers import (
     _compute_gex_residual,
 )
 
+# ── v3.15.0 — Δ-State Engine + RHAE Budget Controller ──
+from .delta_state import (
+    SolverAborted,
+    BudgetExceeded,
+    Node,
+    ActionSpace,
+    ReplayEngine,
+    LayoutHasher,
+    GaussExVerifier,
+    compute_coin_proximity_position,
+    structural_bfs,
+    parametric_bfs,
+    kappa_priority_refine,
+    MAX_RHAE_PER_TASK,
+    GEX_PASS_THRESHOLD,
+    GEX_FAIL_THRESHOLD,
+    LS20_BUDGET_MULT,
+    DEFAULT_MAX_DEPTH,
+    MAX_REPLAY_CACHE,
+    STRUCT_BFS_BUDGET,
+    PARAM_BFS_BUDGET,
+    MIN_RHAE_TO_KEEP,
+    ABORT_RHAE_THRESHOLD,
+    DEAD_ZERO_RATIO,
+)
+
+from .rhae_controller import (
+    CoinCollector,
+    RHAEBudgetController,
+    create_game_task,
+    ls20_estimate_human_steps,
+)
+
 # ── MetaSnapNet可选集成 ──
 try:
     from .meta_snap_net import (
@@ -234,6 +267,34 @@ __all__ = [
     "solve_kappa_priority_search",
     "_estimate_ic_game_state",
     "_compute_gex_residual",
+    # v3.15.0 — Δ-State Engine (IDO 流贯)
+    "SolverAborted",
+    "BudgetExceeded",
+    "Node",
+    "ActionSpace",
+    "ReplayEngine",
+    "LayoutHasher",
+    "GaussExVerifier",
+    "compute_coin_proximity_position",
+    "structural_bfs",
+    "parametric_bfs",
+    "kappa_priority_refine",
+    "MAX_RHAE_PER_TASK",
+    "GEX_PASS_THRESHOLD",
+    "GEX_FAIL_THRESHOLD",
+    "LS20_BUDGET_MULT",
+    "DEFAULT_MAX_DEPTH",
+    "MAX_REPLAY_CACHE",
+    "STRUCT_BFS_BUDGET",
+    "PARAM_BFS_BUDGET",
+    "MIN_RHAE_TO_KEEP",
+    "ABORT_RHAE_THRESHOLD",
+    "DEAD_ZERO_RATIO",
+    # v3.15.0 — RHAE Budget Controller
+    "CoinCollector",
+    "RHAEBudgetController",
+    "create_game_task",
+    "ls20_estimate_human_steps",
     # MetaSnapNet κ-Snap Beam Scoring (SPP集成)
     "TopoFeatureExtractor",
     "ProgramNodeFeatureExtractor",

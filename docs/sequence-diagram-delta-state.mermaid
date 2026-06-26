@@ -1,0 +1,69 @@
+sequenceDiagram
+    participant SG as solve_game
+    participant RHAE as RHAEBudgetController
+    participant SOLVER as TOMASARC3Solver
+    participant RE as ReplayEngine
+    participant AS as ActionSpace
+    participant LH as LayoutHasher
+    participant GEX as GaussExVerifier
+    participant ADP as LS20Adapter
+
+    %% ── solve_game 入口 ──
+    SG->>RHAE: check_budget(game_id)
+    RHAE-->>SG: True/False (RHAE是否足够)
+
+    alt RHAE不足
+        SG-->>SG: raise SolverAborted(reason="RHAE budget exhausted")
+    end
+
+    %% ── Stage 1: StructBFS (零拷贝方向探索) ──
+    SG->>SOLVER: structural_bfs(game, STRUCT_BFS_BUDGET=40)
+    SOLVER->>RE: register_node(root=None, action=None, meta=initial_meta)
+    RE-->>SOLVER: root_node (node_id=0)
+
+    loop BFS探索 (预算内)
+        SOLVER->>RE: replay(parent_node_id) → 物化游戏状态
+        RE-->>SOLVER: game_snapshot
+        SOLVER->>ADP: query player/goals from snapshot
+        ADP-->>SOLVER: player_pos, goals, coin_proximity_positions
+
+        SOLVER->>AS: get_actions() → [UP, DOWN, LEFT, RIGHT]
+        loop 每个方向动作
+            SOLVER->>RE: register_node(parent_id, action, meta, score)
+            RE-->>SOLVER: new_node
+            SOLVER->>LH: hash_state(adapter) → 去重
+            LH-->>SOLVER: layout_hash
+            SOLVER->>GEX: verify(adapter, goal_reqs) → 阈值校验
+            GEX-->>SOLVER: (pass, residual)
+        end
+
+        SOLVER->>RHAE: check_budget(game_id) → 续探?
+        RHAE-->>SOLVER: True/False
+    end
+
+    SOLVER-->>SG: struct_plan (方向组合序列)
+
+    %% ── Stage 2: ParamBFS (布局哈希去重 + GaussEx) ──
+    SG->>SOLVER: parametric_bfs(game, PARAM_BFS_BUDGET=100)
+    SOLVER->>RE: clear_cache() → 清空Stage1缓存
+
+    loop Parametric探索
+        SOLVER->>RE: replay(node_id) → 物化状态
+        SOLVER->>LH: hash_with_shape(grid) → MD5去重
+        LH-->>SOLVER: hash_str
+        SOLVER->>GEX: compute_residual(adapter, goal_reqs) → 1/6阈值
+        GEX-->>SOLVER: residual_float
+    end
+
+    SOLVER-->>SG: param_plan (优化动作序列)
+
+    %% ── Stage 3: κ-Priority Refine (Liu-Score排序选优) ──
+    SG->>SOLVER: kappa_priority_refine(game, param_plan, budget)
+    SOLVER->>RE: replay(best_node_id) → 最终状态
+    SOLVER->>GEX: saturation_ratio(adapter, goal_reqs) → 5/6校验
+    GEX-->>SOLVER: ratio
+    SOLVER-->>SG: final_plan
+
+    %% ── RHAE记录 ──
+    SG->>RHAE: record_success(game_id, steps_used)
+    RHAE-->>SG: acknowledged
