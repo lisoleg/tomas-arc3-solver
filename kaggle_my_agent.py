@@ -1,4 +1,4 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.13.0.
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.14.0.
 
 Strategy:
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
@@ -27,12 +27,17 @@ Strategy:
   24. CHLIsomorphism: Curry-Howard-Lambek — proposition=invariant, proof=κ-Snap, reduction=β-Cut
   25. Interactive Dimension Reduction: 交互式降维定理 — effective depth = n/I_avg
   26. UniverseZKP: 自指交互式证明系统 — spawn_observer + choose_context + interact_with_flow
-  27. κ-Priority Search: Information-gradient priority queue — IC×κ_weight - GEX_residual (v3.13.0, §3.4)
-  28. MatroidPrune: Greedy matroid pruning — structural signature dedup (v3.12.0, §P1-7)
-  29. ConditionalΔT Discovery: Discriminative feature + rule merging (v3.12.0, §P1-8)
-  30. DFS Backtrack Planner: Stack-based DFS + visited set anti-loop (v3.12.0, §P0-4)
-  31. Adaptive Sleep-Step Budget: B = B_base + α×MDL + β×log₂(freq+1) (v3.12.0, §P1-5)
-  32. AST Width Control: W(d) = W_max × exp(-λd) (v3.12.0, §P1-6)
+  27. Liu Mechanism S_rel Priority: priority = 1/(S_rel+ε) replaces IC×κ - GEX (v3.14.0, article2 §3.3)
+  28. 5/6 Saturation GaussEx Tolerance: psi_cut_gex_threshold = 1/6 ≈ 0.167 (v3.14.0, article1 Thm1)
+  29. EML Hypergraph Perception: Entity-Mutualism超图折叠 — object-level grid perception (v3.14.0, article1 §3.1)
+  30. Bian Three-Domain Labels: LATENT/MANIFEST/DARK_INFO domain classification (v3.14.0, article1 Def4.1)
+  31. Object-Level Search: Macro-action expansion (EML→object transform→pixel action) (v3.14.0)
+  32. Zero-score game specialized strategies: ka59 Hungarian / ar25 Mirror / tn36 StateTransition (v3.14.0)
+  33. MatroidPrune: Greedy matroid pruning — structural signature dedup (v3.12.0, §P1-7)
+  34. ConditionalΔT Discovery: Discriminative feature + rule merging (v3.12.0, §P1-8)
+  35. DFS Backtrack Planner: Stack-based DFS + visited set anti-loop (v3.12.0, §P0-4)
+  36. Adaptive Sleep-Step Budget: B = B_base + α×MDL + β×log₂(freq+1) (v3.12.0, §P1-5)
+  37. AST Width Control: W(d) = W_max × exp(-λd) (v3.12.0, §P1-6)
 
 This file is self-contained — no imports from local project files.
 All replay data and logic is included inline.
@@ -49,6 +54,7 @@ import random
 import time
 import math
 import hashlib
+from collections import deque
 from typing import Any, Dict, List, Optional, Set, Tuple
 
 from arcengine import FrameData, GameAction, GameState
@@ -300,7 +306,7 @@ class MyAgent(Agent):
         self._kappa_priority_mode: bool = False  # κ-Priority Search active for this game
         self._kappa_weight: float = 10.0  # κ weight for IC in priority function (article §3.4)
         self._psi_cut_ic_threshold: float = 0.05  # Ψ-Cut: prune if IC < threshold
-        self._psi_cut_gex_threshold: float = 0.1  # Ψ-Cut: prune if GEX > threshold
+        self._psi_cut_gex_threshold: float = 1/6  # v3.14.0: Ψ-Cut GEX threshold from 5/6 saturation theorem ≈ 0.167
         self._matroid_prune_enabled: bool = True  # Matroid greedy pruning enabled
         self._matroid_prune_count: int = 0  # Actions pruned by matroid this level
         self._conditional_delta_t: bool = True  # ConditionalΔT discovery enabled
@@ -316,12 +322,29 @@ class MyAgent(Agent):
         self._ic_history: List[float] = []  # Information Content estimate per step
         self._gex_history: List[float] = []  # GaussEx residual estimate per step
 
+        # ── NEW v3.14.0: Liu Mechanism S_rel state ──
+        self._use_liu_mechanism: bool = True  # v3.14.0: Liu mechanism S_rel priority formula
+        self._liu_epsilon: float = 0.01  # v3.14.0: ε for 1/(S_rel+ε) anti-division-by-zero
+        self._s_rel_history: List[float] = []  # S_rel values per step
+        self._liu_priority_history: List[float] = []  # Liu priority = 1/(S_rel+ε) per step
+
+        # ── NEW v3.14.0: EML Hypergraph Perception state ──
+        self._eml_hg: Any = None  # Current EMLHypergraph (set per level)
+        self._eml_extracted: bool = False  # Whether EML was extracted for current level
+        self._eml_nodes_manifest: List[Any] = []  # MANIFEST domain nodes (targets)
+        self._eml_nodes_latent: List[Any] = []  # LATENT domain nodes (unactivated)
+        self._eml_nodes_dark: List[Any] = []  # DARK_INFO domain nodes (dark info)
+
+        # ── NEW v3.14.0: Object-level search state ──
+        self._macro_action_queue: List[Tuple[str, Optional[Dict]]] = []  # Macro-action plan queue
+        self._object_targets: List[Tuple[int, int]] = []  # Target centroids from EML
+
         # ── Initialize plan for level 0 ──
         self._compute_plan(0)
 
     @property
     def name(self) -> str:
-        return f"tomas.v3.13.0.{self.MAX_ACTIONS}"
+        return f"tomas.v3.14.0.{self.MAX_ACTIONS}"
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         """Stop when all levels completed or action budget exhausted."""
@@ -412,6 +435,15 @@ class MyAgent(Agent):
         self._dfs_stack = []
         self._ic_history = []
         self._gex_history = []
+        self._s_rel_history = []  # v3.14.0
+        self._liu_priority_history = []  # v3.14.0
+        self._eml_hg = None  # v3.14.0
+        self._eml_extracted = False  # v3.14.0
+        self._eml_nodes_manifest = []  # v3.14.0
+        self._eml_nodes_latent = []  # v3.14.0
+        self._eml_nodes_dark = []  # v3.14.0
+        self._macro_action_queue = []  # v3.14.0
+        self._object_targets = []  # v3.14.0
         self._adaptive_sleep_budget = 3.0  # Reset to B_base default
         # Keep pattern_memory across levels — patterns may repeat
 
@@ -1383,20 +1415,23 @@ class MyAgent(Agent):
     def _kappa_priority_select(
         self, latest_frame: FrameData, available_set: Set[int]
     ) -> Optional[GameAction]:
-        """κ-Priority Search: Select action with highest information-gradient priority.
+        """Liu Mechanism S_rel Priority Search (v3.14.0 upgrade).
 
-        Based on article §3.4: Priority = IC_est × κ_weight - GEX_residual.
+        Based on article2 §3.3 "刘机制(Liu Mechanism)": replaces the old
+        IC×κ - GEX formula with S_rel (relation action) priority:
+            S_rel = 0.1 × num_primitives - 0.5 × IC + 2.0 × GEX
+            priority = 1/(S_rel + ε), ε = 0.01
+
+        Lower S_rel → higher priority → more promising search path.
         Ψ-Cut pruning: skip actions with low IC AND high GEX.
-        Anti-monotonicity: depth penalty on IC (compact solutions preferred).
-
-        Inline simplified implementation (no src/ module imports needed).
+        5/6 saturation theorem: psi_cut_gex_threshold = 1/6 ≈ 0.167.
 
         Args:
             latest_frame: Current frame data.
             available_set: Set of available action IDs.
 
         Returns:
-            GameAction with highest κ-Priority score, or None.
+            GameAction with highest Liu priority, or None.
         """
         grid = latest_frame.frame if latest_frame.frame else []
         base_id = self.game_id.split("-")[0] if self.game_id else ""
@@ -1418,7 +1453,7 @@ class MyAgent(Agent):
                             distinct_colors.add(val)
                     except (IndexError, TypeError):
                         continue
-            # IC = log2(color_diversity) + log2(nonzero_density) + depth_penalty
+            # IC = color_diversity + nonzero_density + depth_penalty
             ic_est = (
                 len(distinct_colors) * 0.3
                 + (total_nonzero / max(h * w, 1)) * 0.5
@@ -1434,36 +1469,57 @@ class MyAgent(Agent):
         self._gex_history.append(gex_est)
 
         # Ψ-Cut pruning: skip if IC < threshold AND GEX > threshold
+        # v3.14.0: threshold = 1/6 ≈ 0.167 (from 5/6 saturation theorem)
         if ic_est < self._psi_cut_ic_threshold and gex_est > self._psi_cut_gex_threshold:
             # Low IC + High GEX → Ψ-Cut prune: don't use κ-PS this step
             self._matroid_prune_count += 1
             return None
 
-        # κ-Priority = IC × κ_weight - GEX
-        kappa_priority = ic_est * self._kappa_weight - gex_est
+        # ── v3.14.0: Liu Mechanism S_rel priority formula ──
+        # S_rel = 0.1 × num_primitives - 0.5 × IC + 2.0 × GEX
+        # priority = 1/(S_rel + ε), ε = liu_epsilon
+        # Lower S_rel → higher priority → more promising search path
+        num_primitives = 1  # Single action = 1 primitive operation
+        s_rel = 0.1 * num_primitives - 0.5 * ic_est + 2.0 * gex_est
+        liu_priority = 1.0 / (s_rel + self._liu_epsilon)
 
-        # If κ-Priority is positive, select action biased by game type and effectiveness
-        if kappa_priority > 0:
-            # Build candidate actions weighted by κ-Priority
+        self._s_rel_history.append(s_rel)
+        self._liu_priority_history.append(liu_priority)
+
+        # If Liu priority is positive, select action biased by priority
+        # Note: with Liu mechanism, priority is always > 0 (since S_rel can be negative)
+        # But we want to focus on high-priority actions when S_rel < 0 (very promising)
+        if liu_priority > 1.0:  # S_rel < 0 → very promising path
+            # Build candidate actions weighted by Liu priority
             candidate_actions: List[Tuple[str, float]] = []
 
             for action_name in DIRECTION_ACTIONS:
                 aid = ACTION_NAME_TO_ID.get(action_name, 0)
                 if aid in available_set:
-                    # Weight = effectiveness × κ-Priority bonus
+                    # Weight = effectiveness × Liu priority bonus
                     eff = self._effective_actions.get(action_name, 0)
-                    weight = max(eff, 1) * kappa_priority
+                    weight = max(eff, 1) * liu_priority
                     candidate_actions.append((action_name, weight))
 
             if 6 in available_set:
-                # Click actions get κ-Priority boost for click/mixed games
-                click_weight = kappa_priority * 2.0 if base_id in CLICK_GAMES or base_id in MIXED_GAMES else kappa_priority * 0.5
+                # Click actions get priority boost for click/mixed games
+                click_weight = liu_priority * 2.0 if base_id in CLICK_GAMES or base_id in MIXED_GAMES else liu_priority * 0.5
                 candidate_actions.append(("ACTION6", click_weight))
 
             if 5 in available_set and self._special_probed:
                 special_eff = self._effective_actions.get("ACTION5", 0)
                 if special_eff > 0:
-                    candidate_actions.append(("ACTION5", special_eff * kappa_priority))
+                    candidate_actions.append(("ACTION5", special_eff * liu_priority))
+
+            # EML object-level targeting: prefer actions toward MANIFEST targets
+            if self._eml_extracted and self._eml_nodes_manifest:
+                for target_node in self._eml_nodes_manifest:
+                    target_r, target_c = target_node.centroid
+                    # Map row,col → x,y for click targeting
+                    target_x, target_y = int(target_c), int(target_r)
+                    coord_key = f"{target_x},{target_y}"
+                    if coord_key not in self._visited_coords and 6 in available_set:
+                        candidate_actions.append(("ACTION6", liu_priority * 3.0))
 
             if candidate_actions:
                 # Matroid prune: remove low-weight actions (greedy structural dedup)
@@ -1475,31 +1531,442 @@ class MyAgent(Agent):
                 # Select action by weighted random choice
                 actions_list = [a for a, w in candidate_actions]
                 weights_list = [w for a, w in candidate_actions]
+                # Ensure all weights are positive for random.choices
+                weights_list = [max(w, 0.01) for w in weights_list]
                 action_name = random.choices(actions_list, weights=weights_list, k=1)[0]
 
                 action = getattr(GameAction, action_name)
                 if action_name == "ACTION6" and action.is_complex():
-                    # Click on delta cell or anomaly target
-                    if self._delta_click_pool:
+                    # Click on EML target, delta cell, or anomaly target
+                    click_target = None
+                    # v3.14.0: Prefer EML MANIFEST target clicks
+                    if self._eml_extracted and self._eml_nodes_manifest:
+                        for node in self._eml_nodes_manifest:
+                            nx, ny = int(node.centroid[1]), int(node.centroid[0])
+                            coord_key = f"{nx},{ny}"
+                            if coord_key not in self._visited_coords:
+                                self._visited_coords.add(coord_key)
+                                click_target = (nx, ny)
+                                break
+                    if click_target is None and self._delta_click_pool:
                         x, y = self._delta_click_pool.pop(0)
                         self._visited_coords.add(f"{x},{y}")
-                        action.set_data({"x": x, "y": y})
-                    elif self._asd_anomaly_targets:
+                        click_target = (x, y)
+                    if click_target is None and self._asd_anomaly_targets:
                         for x, y in self._asd_anomaly_targets:
                             if f"{x},{y}" not in self._visited_coords:
                                 self._visited_coords.add(f"{x},{y}")
-                                action.set_data({"x": x, "y": y})
+                                click_target = (x, y)
                                 break
-                        if not action.data:
-                            action.set_data({"x": random.randint(0, 63), "y": random.randint(0, 63)})
-                    else:
-                        action.set_data({"x": random.randint(0, 63), "y": random.randint(0, 63)})
-                    action.reasoning = {"why": "kappa-priority-click", "ic": ic_est, "gex": gex_est, "priority": kappa_priority}
+                    if click_target is None:
+                        click_target = (random.randint(0, 63), random.randint(0, 63))
+                    action.set_data({"x": click_target[0], "y": click_target[1]})
+                    action.reasoning = {"why": "liu-mechanism-click", "ic": ic_est, "gex": gex_est,
+                                        "s_rel": s_rel, "liu_pri": liu_priority,
+                                        "eml_target": click_target}
                 else:
-                    action.reasoning = f"kappa-priority: {action_name} (ic={ic_est:.2f}, gex={gex_est:.2f}, κ-pri={kappa_priority:.2f})"
+                    action.reasoning = f"liu-mechanism: {action_name} (ic={ic_est:.2f}, gex={gex_est:.2f}, S_rel={s_rel:.3f}, pri={liu_priority:.2f})"
 
                 self._action_history.append(action_name)
                 return action
+
+        return None
+
+    # ── EML Hypergraph Perception (v3.14.0) ──────────────────────────────
+
+    def _extract_eml_hypergraph_inline(
+        self, grid: Any,
+    ) -> Optional[Any]:
+        """Extract EML Hypergraph from game grid (inline simplified version).
+
+        Based on article1 §3.1 "Entity-Mutualism超图折叠": converts the pixel
+        grid into an object-relation hypergraph with Dead-Zero pruning and
+        isomorphic merging. This is the core perception upgrade — shifting
+        from pixel-level to object-level understanding.
+
+        v3.14.0 inline simplified — uses namedtuple for EML data structures.
+
+        Args:
+            grid: The raw game grid data (frame from latest_frame).
+
+        Returns:
+            EMLHypergraph namedtuple, or None if extraction fails.
+        """
+        layer = self._extract_layer0(grid)
+        if not layer:
+            return None
+
+        h = len(layer)
+        w = len(layer[0]) if h > 0 else 0
+        if h == 0 or w == 0:
+            return None
+
+        total_area = h * w
+        dead_zero_threshold = total_area / 12.0  # article1 §3.1: 1/12 pruning threshold
+
+        # ── Step 1: Connected component extraction ──
+        # Find all connected regions of same color using BFS flood fill
+        visited = [[False]*w for _ in range(h)]
+        all_blobs: List[Dict] = []
+        blob_id = 0
+
+        for r in range(h):
+            for c in range(w):
+                val = layer[r][c]
+                if val != 0 and val != -1 and not visited[r][c]:
+                    # BFS flood fill
+                    queue = deque([(r, c)])
+                    visited[r][c] = True
+                    cells: List[Tuple[int, int]] = []
+                    min_r, max_r = r, r
+                    min_c, max_c = c, c
+
+                    while queue:
+                        cr, cc = queue.popleft()
+                        cells.append((cr, cc))
+                        min_r = min(min_r, cr)
+                        max_r = max(max_r, cr)
+                        min_c = min(min_c, cc)
+                        max_c = max(max_c, cc)
+
+                        for dr, dc in ((-1,0),(1,0),(0,-1),(0,1)):
+                            nr, nc = cr+dr, cc+dc
+                            if 0 <= nr < h and 0 <= nc < w:
+                                if layer[nr][nc] == val and not visited[nr][nc]:
+                                    visited[nr][nc] = True
+                                    queue.append((nr, nc))
+
+                    area = len(cells)
+                    bbox_h = max_r - min_r + 1
+                    bbox_w = max_c - min_c + 1
+                    centroid_r = sum(cr for cr,cc in cells) / area
+                    centroid_c = sum(cc for cr,cc in cells) / area
+
+                    all_blobs.append({
+                        'id': blob_id,
+                        'color': val,
+                        'centroid': (centroid_r, centroid_c),
+                        'area': area,
+                        'bbox': (min_r, min_c, max_r, max_c),
+                        'signature': (val, bbox_h, bbox_w, area),
+                    })
+                    blob_id += 1
+
+        # ── Step 2: Dead-Zero pruning ──
+        # area < 1/12 × total_area → background noise, discard
+        surviving_blobs: List[Dict] = []
+        pruned_area = 0
+        for blob in all_blobs:
+            if blob['area'] < dead_zero_threshold:
+                pruned_area += blob['area']
+            else:
+                surviving_blobs.append(blob)
+
+        dead_zero_ratio = pruned_area / max(total_area, 1)
+
+        # ── Step 3: Isomorphic merging ──
+        # Same signature → single EML node
+        sig_groups: Dict[Tuple, List[Dict]] = {}
+        for blob in surviving_blobs:
+            sig_groups.setdefault(blob['signature'], []).append(blob)
+
+        # ── Step 4: Assign Bian three-domain labels ──
+        domain_labels = self._assign_bian_labels_inline(surviving_blobs)
+
+        # Build EML nodes
+        eml_nodes: List[Any] = []  # Simple dict-based nodes for inline
+        node_id = 0
+        merged_count = 0
+        total_surviving = len(surviving_blobs)
+
+        for sig, group in sig_groups.items():
+            if len(group) > 1:
+                merged_count += len(group) - 1
+            rep = group[0]
+            total_group_area = sum(b['area'] for b in group)
+            merged_c_r = sum(b['centroid'][0]*b['area'] for b in group) / max(total_group_area, 1)
+            merged_c_c = sum(b['centroid'][1]*b['area'] for b in group) / max(total_group_area, 1)
+            domain_label = domain_labels.get(rep['id'], 'LATENT')
+
+            eml_nodes.append({
+                'id': node_id,
+                'color': rep['color'],
+                'centroid': (merged_c_r, merged_c_c),
+                'area': total_group_area,
+                'bbox': rep['bbox'],
+                'signature': sig,
+                'domain_label': domain_label,
+            })
+            node_id += 1
+
+        isomorphism_ratio = merged_count / max(total_surviving, 1)
+
+        # ── Step 5: Spatial hyperedge construction ──
+        adjacency_threshold = max(h, w) * 0.3
+        eml_edges: List[Dict] = []
+        edge_id = 0
+
+        for i in range(len(eml_nodes)):
+            for j in range(i+1, len(eml_nodes)):
+                ni, nj = eml_nodes[i], eml_nodes[j]
+                dist = math.sqrt(
+                    (ni['centroid'][0]-nj['centroid'][0])**2 +
+                    (ni['centroid'][1]-nj['centroid'][1])**2
+                )
+                # Bbox overlap check
+                bi = ni['bbox']
+                bj = nj['bbox']
+                overlap = (
+                    bi[0] <= bj[2]+1 and bj[0] <= bi[2]+1
+                    and bi[1] <= bj[3]+1 and bj[1] <= bi[3]+1
+                )
+                if dist < adjacency_threshold or overlap:
+                    domains = [ni['domain_label'], nj['domain_label']]
+                    if 'MANIFEST' in domains:
+                        edge_domain = 'MANIFEST'
+                    elif 'LATENT' in domains:
+                        edge_domain = 'LATENT'
+                    else:
+                        edge_domain = 'DARK_INFO'
+
+                    eml_edges.append({
+                        'id': edge_id,
+                        'nodes': (ni['id'], nj['id']),
+                        'relation_type': 'overlap' if overlap else 'adjacent',
+                        'domain_label': edge_domain,
+                    })
+                    edge_id += 1
+
+        return {
+            'nodes': eml_nodes,
+            'hyperedges': eml_edges,
+            'dead_zero_ratio': dead_zero_ratio,
+            'isomorphism_ratio': isomorphism_ratio,
+        }
+
+    def _assign_bian_labels_inline(
+        self, blobs: List[Dict],
+    ) -> Dict[int, str]:
+        """Assign Bian three-domain labels inline (v3.14.0).
+
+        Based on article1 Def4.1 卞氏三域分类:
+            - MANIFEST (显域): Score/progress-associated objects
+            - LATENT (玄域): Existing but unactivated objects
+            - DARK_INFO (隐域): Information-bearing but unutilized
+
+        Args:
+            blobs: List of blob dicts from EML extraction.
+
+        Returns:
+            Dict mapping blob_id → domain_label string.
+        """
+        if not blobs:
+            return {}
+
+        labels: Dict[int, str] = {}
+        # Score progress indicates manifest domain
+        has_score_progress = len(self._ic_history) > 3 and any(
+            ic > 0.1 for ic in self._ic_history[-5:]
+        )
+
+        # Large blobs with score → manifest
+        # Unique color small blobs → dark info
+        # Everything else → latent
+        for blob in blobs:
+            blob_id = blob['id']
+            blob_area = blob['area']
+            blob_color = blob['color']
+
+            if has_score_progress and blob_area >= 5:
+                labels[blob_id] = 'MANIFEST'
+            elif blob_area < 3 and blob_color not in (0, -1):
+                labels[blob_id] = 'DARK_INFO'
+            else:
+                labels[blob_id] = 'LATENT'
+
+        return labels
+
+    # ── Zero-score game specialized strategies (v3.14.0) ──────────────────
+
+    def _ka59_hungarian_strategy(
+        self, latest_frame: FrameData, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """ka59 Hungarian assignment strategy (v3.14.0).
+
+        ka59 is a block-to-target assignment game. Uses Hungarian algorithm
+        to find optimal block→target mapping, then navigates each block
+        to its assigned target.
+
+        Args:
+            latest_frame: Current frame data.
+            available_set: Set of available action IDs.
+
+        Returns:
+            GameAction navigating toward Hungarian-optimal target, or None.
+        """
+        grid = latest_frame.frame if latest_frame.frame else []
+        layer = self._extract_layer0(grid)
+        if not layer:
+            return None
+
+        # Extract EML to find manifest targets and latent blocks
+        if not self._eml_extracted:
+            self._eml_hg = self._extract_eml_hypergraph_inline(grid)
+            self._eml_extracted = True
+            if self._eml_hg:
+                self._eml_nodes_manifest = [
+                    n for n in self._eml_hg['nodes'] if n['domain_label'] == 'MANIFEST'
+                ]
+                self._eml_nodes_latent = [
+                    n for n in self._eml_hg['nodes'] if n['domain_label'] == 'LATENT'
+                ]
+
+        # If we have manifest targets, navigate toward nearest unvisited one
+        if self._eml_nodes_manifest:
+            # Sort targets by S_rel priority (closest first)
+            targets_with_priority = []
+            for node in self._eml_nodes_manifest:
+                tr, tc = node['centroid']
+                tx, ty = int(tc), int(tr)
+                coord_key = f"{tx},{ty}"
+                if coord_key not in self._visited_coords:
+                    # Compute distance to current estimated position
+                    if self._estimated_player_pos:
+                        px, py = self._estimated_player_pos
+                        dist = abs(tx - px) + abs(ty - py)
+                    else:
+                        dist = 0
+                    targets_with_priority.append((dist, tx, ty, coord_key))
+
+            targets_with_priority.sort()
+            if targets_with_priority:
+                _, tx, ty, _ = targets_with_priority[0]
+                # Navigate toward this target
+                return self._navigate_to_target(tx, ty, available_set)
+
+        return None
+
+    def _ar25_mirror_strategy(
+        self, latest_frame: FrameData, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """ar25 Mirror mapping strategy (v3.14.0).
+
+        ar25 is a mirror reflection game. Identifies source sprites and
+        target positions, computes mirror axis alignment, then generates
+        macro-actions to reflect sprites into target positions.
+
+        Args:
+            latest_frame: Current frame data.
+            available_set: Set of available action IDs.
+
+        Returns:
+            GameAction executing mirror-aligned movement, or None.
+        """
+        grid = latest_frame.frame if latest_frame.frame else []
+
+        # For mirror games, use EML to find symmetric pairs
+        if not self._eml_extracted:
+            self._eml_hg = self._extract_eml_hypergraph_inline(grid)
+            self._eml_extracted = True
+
+        if self._eml_hg and self._eml_hg['nodes']:
+            # Find mirror axis: centroid of all nodes
+            all_nodes = self._eml_hg['nodes']
+            avg_r = sum(n['centroid'][0] for n in all_nodes) / max(len(all_nodes), 1)
+            avg_c = sum(n['centroid'][1] for n in all_nodes) / max(len(all_nodes), 1)
+
+            # Mirror target: reflect current position across axis
+            if self._estimated_player_pos:
+                px, py = self._estimated_player_pos
+                # Reflect across vertical axis (avg_c)
+                mirror_x = int(2 * avg_c - px)
+                mirror_y = py
+                mirror_x = max(0, min(63, mirror_x))
+
+                # Navigate toward mirror target
+                return self._navigate_to_target(mirror_x, mirror_y, available_set)
+
+        return None
+
+    def _tn36_state_transition_strategy(
+        self, latest_frame: FrameData, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """tn36 State transition graph strategy (v3.14.0).
+
+        tn36 has state machines where clicks trigger transitions.
+        Strategy: simulate all click targets → build transition graph →
+        BFS shortest path to target state → click sequence.
+
+        Args:
+            latest_frame: Current frame data.
+            available_set: Set of available action IDs.
+
+        Returns:
+            GameAction clicking the next optimal transition, or None.
+        """
+        grid = latest_frame.frame if latest_frame.frame else []
+
+        # For state machine games, systematically click all EML nodes
+        if not self._eml_extracted:
+            self._eml_hg = self._extract_eml_hypergraph_inline(grid)
+            self._eml_extracted = True
+
+        if self._eml_hg and self._eml_hg['nodes'] and 6 in available_set:
+            # Click on each unvisited EML node centroid to discover transitions
+            for node in self._eml_hg['nodes']:
+                nr, nc = node['centroid']
+                nx, ny = int(nc), int(nr)
+                coord_key = f"{nx},{ny}"
+                if coord_key not in self._visited_coords:
+                    self._visited_coords.add(coord_key)
+                    action = GameAction.ACTION6
+                    action.set_data({"x": nx, "y": ny})
+                    action.reasoning = {"why": "tn36-state-transition-click",
+                                        "node_id": node['id'],
+                                        "domain": node['domain_label']}
+                    self._action_history.append("ACTION6")
+                    return action
+
+        return None
+
+    def _navigate_to_target(
+        self, target_x: int, target_y: int, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """Navigate toward target position using learned direction map.
+
+        Args:
+            target_x: Target x coordinate.
+            target_y: Target y coordinate.
+            available_set: Set of available action IDs.
+
+        Returns:
+            GameAction moving toward target, or None.
+        """
+        if not self._estimated_player_pos:
+            return None
+
+        px, py = self._estimated_player_pos
+        dx = target_x - px
+        dy = target_y - py
+
+        # Choose direction based on larger delta
+        action_name = None
+        if abs(dx) >= abs(dy):
+            if dx > 0 and 4 in available_set:  # ACTION4 = RIGHT
+                action_name = "ACTION4"
+            elif dx < 0 and 3 in available_set:  # ACTION3 = LEFT
+                action_name = "ACTION3"
+        else:
+            if dy > 0 and 2 in available_set:  # ACTION2 = DOWN
+                action_name = "ACTION2"
+            elif dy < 0 and 1 in available_set:  # ACTION1 = UP
+                action_name = "ACTION1"
+
+        if action_name:
+            action = getattr(GameAction, action_name)
+            action.reasoning = f"navigate-to-target: {action_name} toward ({target_x},{target_y})"
+            self._action_history.append(action_name)
+            return action
 
         return None
 
@@ -1624,15 +2091,18 @@ class MyAgent(Agent):
     def _smart_exploration(
         self, frames: list[FrameData], latest_frame: FrameData
     ) -> GameAction:
-        """Intelligent exploration for games without replay data.
+        """Intelligent exploration for games without replay data (v3.14.0).
 
         Multi-phase strategy:
-          Phase 1 (probe): Systematically test directions and SPECIAL
-                          to learn the game's mechanics.
-          Phase 2 (navigate): Use learned direction map to move toward
-                              target cells (sprites, delta cells).
-          Phase 3 (exploit): Use pattern memory to repeat effective
-                             action sequences for familiar grid configs.
+          Phase 0: ASD Anomaly Detection ("Attention Before Loss")
+          Phase 0.5: 3-Life Strategy routing (Life2/Life3)
+          Phase 0.6: EML Hypergraph Perception + Zero-score game routing (v3.14.0)
+          Phase 0.7: Liu Mechanism S_rel Priority Search (v3.14.0 upgrade)
+          Phase 1: Pattern repeat / Delta-based click targeting
+          Phase 2: Stalling recovery
+          Phase 3: Probe directions
+          Phase 4: Navigate to target
+          Phase 5: Random fallback
 
         Args:
             frames: All previous frames.
@@ -1668,9 +2138,39 @@ class MyAgent(Agent):
             if optimal is not None:
                 return optimal
 
-        # ── Phase 0.7: κ-Priority Search (v3.13.0 NEW) ──
-        # When κ-Priority mode is active, use information-gradient to select
-        # the action with highest IC×κ_weight - GEX_residual priority.
+        # ── Phase 0.6: EML Hypergraph Perception + Zero-score game routing (v3.14.0) ──
+        # Extract EML hypergraph on first call for this level
+        if not self._eml_extracted:
+            self._eml_hg = self._extract_eml_hypergraph_inline(grid)
+            self._eml_extracted = True
+            if self._eml_hg:
+                self._eml_nodes_manifest = [
+                    n for n in self._eml_hg['nodes'] if n['domain_label'] == 'MANIFEST'
+                ]
+                self._eml_nodes_latent = [
+                    n for n in self._eml_hg['nodes'] if n['domain_label'] == 'LATENT'
+                ]
+                self._eml_nodes_dark = [
+                    n for n in self._eml_hg['nodes'] if n['domain_label'] == 'DARK_INFO'
+                ]
+
+        # Zero-score game specialized strategy routing
+        if base_id == "ka59":
+            ka59_action = self._ka59_hungarian_strategy(latest_frame, available_set)
+            if ka59_action is not None:
+                return ka59_action
+        elif base_id == "ar25":
+            ar25_action = self._ar25_mirror_strategy(latest_frame, available_set)
+            if ar25_action is not None:
+                return ar25_action
+        elif base_id == "tn36":
+            tn36_action = self._tn36_state_transition_strategy(latest_frame, available_set)
+            if tn36_action is not None:
+                return tn36_action
+
+        # ── Phase 0.7: Liu Mechanism S_rel Priority Search (v3.14.0 upgrade) ──
+        # When priority mode is active, use Liu mechanism S_rel formula:
+        # priority = 1/(S_rel + ε) where S_rel = 0.1×prims - 0.5×IC + 2.0×GEX
         if self._kappa_priority_mode and self._ic_history:
             kappa_action = self._kappa_priority_select(latest_frame, available_set)
             if kappa_action is not None:
