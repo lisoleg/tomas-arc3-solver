@@ -182,10 +182,10 @@ GAME_CONFIGS: dict[str, GameConfig] = {
         game_type="keyboard+click",
         player_tag="0006lxjtqggkmi",
         click_target_tag="sys_click",
-        available_actions=[],
-        action_mapping={},
+        available_actions=[1, 2, 3, 4, 5, 6, 7],
+        action_mapping={1: "UP", 2: "DOWN", 3: "LEFT", 4: "RIGHT", 5: "SELECT", 6: "CLICK", 7: "REFLECT"},
         grid_size=64,
-        notes="AR25: 0006lxjtqggkmi is both player and sys_click (3x3 sprite). Moved on ACTION2.",
+        notes="AR25: 0006lxjtqggkmi is both player and sys_click (3x3 sprite). Mirror/reflection game with ACTION5/6/7.",
     ),
     "cn04": GameConfig(
         game_type="click",

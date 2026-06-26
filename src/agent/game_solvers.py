@@ -834,12 +834,14 @@ def _solve_ka59_hungarian_strategy(
         step_size = 3
 
     # Get wall positions for path avoidance
-    walls = _get_sprites_by_tag(game, '0015rniapgwsvb')
-    walls2 = _get_sprites_by_tag(game, '0029ifoxxfvvvs')
-    all_walls = walls + walls2
+    # Only use the internal obstacle wall (0015qniapgwsvb)
+    # The boundary/background wall (0029ifoxxfvvvs, 51x51) is NOT a BFS obstacle
+    # — it covers most of the screen and would block all paths
+    walls = _get_sprites_by_tag(game, '0015qniapgwsvb')
+    # Skip 0029ifoxxfvvvs — it's the game boundary/background, not a path obstacle
 
     wall_cells: set[tuple[int, int]] = set()
-    for w in all_walls:
+    for w in walls:
         # Convert wall sprite to display coordinates (0-63) to match BFS grid
         w_disp = _sprite_display_center(game, w)
         ww = int(getattr(w, 'width', 1))
@@ -967,7 +969,7 @@ def solve_ka59(game: Any, level_idx: int) -> list | None:
         - Blocks: tag='0010xzmuziohuf', 5x5
         - Targets: tag='0022vrxelxosfy', 3x3 (also sys_click)
         - Goal targets: tag='0001uqqokjrptk'
-        - Walls: tag='0015rniapgwsvb' and '0029ifoxxfvvvs'
+        - Walls: tag='0015qniapgwsvb' and '0029ifoxxfvvvs'
         - ACTION6: switch active player
         - Win: all blocks adjacent to targets + all 0027jbgxilrocf adjacent to 0001uqqokjrptk
 
@@ -1900,11 +1902,20 @@ def _solve_tn36_state_transition_strategy(
     # ── Step 3: BFS for shortest path ──
     initial_hash = _tn36_internal_state_hash(game)
 
-    # Goal check: state that satisfies win condition
+    # Goal check: use _is_level_solved to verify win condition
+    # Also check "no outgoing transitions" as a fallback (some solved states
+    # may have no transitions because the game is complete)
     def goal_check(state_hash: str) -> bool:
-        # Check if any state in the transition graph corresponds to a solved state
-        # We can't directly check from hash alone, so we use the transition graph
-        # terminal condition: states with no outgoing transitions are likely goal states
+        # Primary: check if state is explicitly solved (has WIN state or level advance)
+        # We check via the transition graph — states with level advance transitions
+        for _, click_pos in transition_graph.get(state_hash, []):
+            # Simulate the click to check if it solves the level
+            g_check = copy.deepcopy(game)
+            ai_check = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
+            _perform_action_safe(g_check, ai_check)
+            if _is_level_solved(g_check, original_level):
+                return True
+        # Fallback: terminal state (no outgoing transitions) may be goal
         return state_hash not in transition_graph
 
     shortest_click_path = _find_shortest_path_in_transition_graph(
@@ -8974,7 +8985,9 @@ def solve_game(
             sim = copy.deepcopy(pristine_game)
             for aid, data in plan[:300]:
                 ai = ActionInput(id=aid, data=data if data else {})
-                sim.perform_action(ai)
+                # Use _perform_action_safe instead of sim.perform_action
+                # to handle animation/frame-limit exceptions gracefully
+                _perform_action_safe(sim, ai)
                 if _is_level_solved(sim, original_level):
                     return True
             return _is_level_solved(sim, original_level)
