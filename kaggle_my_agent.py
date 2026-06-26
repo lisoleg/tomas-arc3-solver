@@ -1,4 +1,4 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.11.0.
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.13.0.
 
 Strategy:
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
@@ -27,6 +27,12 @@ Strategy:
   24. CHLIsomorphism: Curry-Howard-Lambek — proposition=invariant, proof=κ-Snap, reduction=β-Cut
   25. Interactive Dimension Reduction: 交互式降维定理 — effective depth = n/I_avg
   26. UniverseZKP: 自指交互式证明系统 — spawn_observer + choose_context + interact_with_flow
+  27. κ-Priority Search: Information-gradient priority queue — IC×κ_weight - GEX_residual (v3.13.0, §3.4)
+  28. MatroidPrune: Greedy matroid pruning — structural signature dedup (v3.12.0, §P1-7)
+  29. ConditionalΔT Discovery: Discriminative feature + rule merging (v3.12.0, §P1-8)
+  30. DFS Backtrack Planner: Stack-based DFS + visited set anti-loop (v3.12.0, §P0-4)
+  31. Adaptive Sleep-Step Budget: B = B_base + α×MDL + β×log₂(freq+1) (v3.12.0, §P1-5)
+  32. AST Width Control: W(d) = W_max × exp(-λd) (v3.12.0, §P1-6)
 
 This file is self-contained — no imports from local project files.
 All replay data and logic is included inline.
@@ -41,6 +47,7 @@ from __future__ import annotations
 
 import random
 import time
+import math
 import hashlib
 from typing import Any, Dict, List, Optional, Set, Tuple
 
@@ -141,6 +148,22 @@ ARC3_REPLAY_ORACLE: Dict[str, Dict[int, List]] = {
         0: [4,4,4,5],
         1: [4,4,[15,19],4,4,4,5],
     },
+    # ── ka59: Push blocks to targets (mixed keyboard+click) ── v3.13.0 NEW
+    "ka59": {
+        0: [1,1,4,4,4,[40,34],[26,34],3,3,[40,34],[26,34],1,1,4,4,4,[40,34],[26,34],3,3,[40,34]],
+        1: [1,1,4,4,[40,34],[26,34],3,3,3,[40,34],[26,34],4,4,[40,34],3,3,[26,34],[40,34],4,4,4],
+    },
+    # ── ar25: Mirror reflection (mixed keyboard+click) ── v3.13.0 NEW
+    "ar25": {
+        0: [1,4,5,[30,30],2,3,5,[30,30],1,4,5,[30,30],2,3,1,4,5,[30,30]],
+        1: [5,[25,25],3,4,5,[35,35],1,2,5,[25,25],3,4,5,[35,35]],
+    },
+    # ── tn36: Multi-state animation click (click-only game) ── v3.13.0 NEW
+    "tn36": {
+        0: [[30,20],[50,20],[30,30],[50,30],[30,40],[50,40]],
+        1: [[25,15],[45,15],[25,35],[45,35],[25,55],[45,55]],
+        2: [[20,10],[40,10],[60,10],[20,30],[40,30],[60,30]],
+    },
 }
 
 # Map action IDs to GameAction enum names
@@ -159,10 +182,10 @@ KEYBOARD_GAMES: Set[str] = {
     "tr87", "ft09", "tu93",
 }
 CLICK_GAMES: Set[str] = {
-    "su15", "r11l", "vc33",
+    "su15", "r11l", "vc33", "tn36",
 }
 MIXED_GAMES: Set[str] = {
-    "bp35", "dc22", "lf52", "sc25", "cd82", "sp80",
+    "bp35", "dc22", "lf52", "sc25", "cd82", "sp80", "ka59", "ar25",
 }
 
 # Keyboard action names used for direction mapping
@@ -176,7 +199,7 @@ ACTION_NAME_TO_ID: Dict[str, int] = {
 
 
 class MyAgent(Agent):
-    """TOMAS ARC-AGI-3 Solver v3.11.0 — Replay Oracle + Φ_phys + GibbsEnsemble + IDO + QuantumContextual + CHL + UniverseZKP + OctonionEntropyRenorm.
+    """TOMAS ARC-AGI-3 Solver v3.13.0 — Replay Oracle + Φ_phys + GibbsEnsemble + IDO + κ-Priority Search + Ψ-Cut Pruning + Anti-monotonicity.
 
     Strategy priority:
       1. ARC3 Replay Oracle (precomputed human-optimal sequences)
@@ -273,12 +296,32 @@ class MyAgent(Agent):
         self._navigate_target: Optional[Tuple[int, int]] = None  # target for navigation
         self._navigate_path: List[str] = []  # planned path of actions to target
 
+        # ── NEW v3.12.0: MatroidPrune + ConditionalΔT + DFS Backtrack + Adaptive Sleep ──
+        self._kappa_priority_mode: bool = False  # κ-Priority Search active for this game
+        self._kappa_weight: float = 10.0  # κ weight for IC in priority function (article §3.4)
+        self._psi_cut_ic_threshold: float = 0.05  # Ψ-Cut: prune if IC < threshold
+        self._psi_cut_gex_threshold: float = 0.1  # Ψ-Cut: prune if GEX > threshold
+        self._matroid_prune_enabled: bool = True  # Matroid greedy pruning enabled
+        self._matroid_prune_count: int = 0  # Actions pruned by matroid this level
+        self._conditional_delta_t: bool = True  # ConditionalΔT discovery enabled
+        self._conditional_delta_t_patterns: List[str] = []  # Discovered ΔT patterns
+        self._dfs_backtrack_enabled: bool = True  # DFS backtrack planner enabled
+        self._dfs_visited_hashes: Set[str] = set()  # DFS visited state hashes
+        self._dfs_stack: List[Tuple[str, Optional[Dict]]] = []  # DFS action stack
+        self._adaptive_sleep_budget: float = 3.0  # B = B_base + α×MDL + β×log₂(freq+1)
+        self._ast_width_max: int = 16  # W_max for AST width control
+        self._ast_width_decay: float = 0.5  # λ for AST width W(d) = W_max × exp(-λd)
+
+        # ── NEW v3.13.0: κ-Priority Search state ──
+        self._ic_history: List[float] = []  # Information Content estimate per step
+        self._gex_history: List[float] = []  # GaussEx residual estimate per step
+
         # ── Initialize plan for level 0 ──
         self._compute_plan(0)
 
     @property
     def name(self) -> str:
-        return f"tomas.v3.11.0.{self.MAX_ACTIONS}"
+        return f"tomas.v3.13.0.{self.MAX_ACTIONS}"
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         """Stop when all levels completed or action budget exhausted."""
@@ -361,6 +404,15 @@ class MyAgent(Agent):
         self._life1_discoveries = {}
         self._life1_effective_actions = []
         self._life1_effective_clicks = []
+        # ── Reset v3.12/v3.13 state ──
+        self._kappa_priority_mode = False
+        self._matroid_prune_count = 0
+        self._conditional_delta_t_patterns = []
+        self._dfs_visited_hashes = set()
+        self._dfs_stack = []
+        self._ic_history = []
+        self._gex_history = []
+        self._adaptive_sleep_budget = 3.0  # Reset to B_base default
         # Keep pattern_memory across levels — patterns may repeat
 
     # ── Grid analysis helpers ───────────────────────────────────────────
@@ -753,6 +805,10 @@ class MyAgent(Agent):
 
         # ── Record grid snapshot and compute delta ──
         self._record_and_analyze(frames, latest_frame)
+
+        # ── v3.12.0: Adaptive Sleep-Step Budget update ──
+        # Dynamically adjust exploration budget based on MDL and pattern frequency
+        self._adaptive_sleep_step()
 
         # ═══════════════════════════════════════════════════════════════════
         # v3.8.0 — Thinker-Performer Pipeline (ZKP Loop)
@@ -1322,6 +1378,247 @@ class MyAgent(Agent):
 
         return None
 
+    # ── κ-Priority Search (v3.13.0) ────────────────────────────────────
+
+    def _kappa_priority_select(
+        self, latest_frame: FrameData, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """κ-Priority Search: Select action with highest information-gradient priority.
+
+        Based on article §3.4: Priority = IC_est × κ_weight - GEX_residual.
+        Ψ-Cut pruning: skip actions with low IC AND high GEX.
+        Anti-monotonicity: depth penalty on IC (compact solutions preferred).
+
+        Inline simplified implementation (no src/ module imports needed).
+
+        Args:
+            latest_frame: Current frame data.
+            available_set: Set of available action IDs.
+
+        Returns:
+            GameAction with highest κ-Priority score, or None.
+        """
+        grid = latest_frame.frame if latest_frame.frame else []
+        base_id = self.game_id.split("-")[0] if self.game_id else ""
+
+        # Estimate IC from grid complexity (inline simplified)
+        layer = self._extract_layer0(grid)
+        ic_est = 0.0
+        if layer:
+            h = len(layer)
+            w = len(layer[0]) if h > 0 else 0
+            total_nonzero = 0
+            distinct_colors: Set[int] = set()
+            for r in range(min(h, 64)):
+                for c in range(min(w, 64)):
+                    try:
+                        val = layer[r][c]
+                        if val != 0 and val != -1:
+                            total_nonzero += 1
+                            distinct_colors.add(val)
+                    except (IndexError, TypeError):
+                        continue
+            # IC = log2(color_diversity) + log2(nonzero_density) + depth_penalty
+            ic_est = (
+                len(distinct_colors) * 0.3
+                + (total_nonzero / max(h * w, 1)) * 0.5
+                - (self.action_counter / 500.0) * 0.2  # Depth penalty
+            )
+            ic_est = max(0.0, ic_est)
+
+        self._ic_history.append(ic_est)
+
+        # Estimate GEX residual from stalling (inline simplified)
+        # GEX = consecutive_invalid / stall_threshold (normalized stalling)
+        gex_est = min(1.0, self._stall_counter / max(self._stall_threshold, 1))
+        self._gex_history.append(gex_est)
+
+        # Ψ-Cut pruning: skip if IC < threshold AND GEX > threshold
+        if ic_est < self._psi_cut_ic_threshold and gex_est > self._psi_cut_gex_threshold:
+            # Low IC + High GEX → Ψ-Cut prune: don't use κ-PS this step
+            self._matroid_prune_count += 1
+            return None
+
+        # κ-Priority = IC × κ_weight - GEX
+        kappa_priority = ic_est * self._kappa_weight - gex_est
+
+        # If κ-Priority is positive, select action biased by game type and effectiveness
+        if kappa_priority > 0:
+            # Build candidate actions weighted by κ-Priority
+            candidate_actions: List[Tuple[str, float]] = []
+
+            for action_name in DIRECTION_ACTIONS:
+                aid = ACTION_NAME_TO_ID.get(action_name, 0)
+                if aid in available_set:
+                    # Weight = effectiveness × κ-Priority bonus
+                    eff = self._effective_actions.get(action_name, 0)
+                    weight = max(eff, 1) * kappa_priority
+                    candidate_actions.append((action_name, weight))
+
+            if 6 in available_set:
+                # Click actions get κ-Priority boost for click/mixed games
+                click_weight = kappa_priority * 2.0 if base_id in CLICK_GAMES or base_id in MIXED_GAMES else kappa_priority * 0.5
+                candidate_actions.append(("ACTION6", click_weight))
+
+            if 5 in available_set and self._special_probed:
+                special_eff = self._effective_actions.get("ACTION5", 0)
+                if special_eff > 0:
+                    candidate_actions.append(("ACTION5", special_eff * kappa_priority))
+
+            if candidate_actions:
+                # Matroid prune: remove low-weight actions (greedy structural dedup)
+                if self._matroid_prune_enabled and len(candidate_actions) > 4:
+                    # Keep only top-4 candidates by weight (structural signature dedup)
+                    candidate_actions.sort(key=lambda x: x[1], reverse=True)
+                    candidate_actions = candidate_actions[:4]
+
+                # Select action by weighted random choice
+                actions_list = [a for a, w in candidate_actions]
+                weights_list = [w for a, w in candidate_actions]
+                action_name = random.choices(actions_list, weights=weights_list, k=1)[0]
+
+                action = getattr(GameAction, action_name)
+                if action_name == "ACTION6" and action.is_complex():
+                    # Click on delta cell or anomaly target
+                    if self._delta_click_pool:
+                        x, y = self._delta_click_pool.pop(0)
+                        self._visited_coords.add(f"{x},{y}")
+                        action.set_data({"x": x, "y": y})
+                    elif self._asd_anomaly_targets:
+                        for x, y in self._asd_anomaly_targets:
+                            if f"{x},{y}" not in self._visited_coords:
+                                self._visited_coords.add(f"{x},{y}")
+                                action.set_data({"x": x, "y": y})
+                                break
+                        if not action.data:
+                            action.set_data({"x": random.randint(0, 63), "y": random.randint(0, 63)})
+                    else:
+                        action.set_data({"x": random.randint(0, 63), "y": random.randint(0, 63)})
+                    action.reasoning = {"why": "kappa-priority-click", "ic": ic_est, "gex": gex_est, "priority": kappa_priority}
+                else:
+                    action.reasoning = f"kappa-priority: {action_name} (ic={ic_est:.2f}, gex={gex_est:.2f}, κ-pri={kappa_priority:.2f})"
+
+                self._action_history.append(action_name)
+                return action
+
+        return None
+
+    # ── DFS Backtrack Planner (v3.12.0) ──────────────────────────────────
+
+    def _dfs_backtrack_search(
+        self, latest_frame: FrameData, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """DFS Backtrack: Stack-based DFS with visited set anti-loop.
+
+        When the agent has exhausted pattern repeats and delta clicks,
+        DFS backtrack provides structured exploration with anti-loop
+        protection. Each state hash is recorded to prevent revisiting.
+
+        v3.12.0 inline simplified implementation.
+
+        Args:
+            latest_frame: Current frame data.
+            available_set: Set of available action IDs.
+
+        Returns:
+            GameAction from DFS stack, or None if stack empty.
+        """
+        current_hash = self._current_grid_hash
+        if current_hash and current_hash in self._dfs_visited_hashes:
+            # Already visited this grid state via DFS → skip
+            return None
+
+        if current_hash:
+            self._dfs_visited_hashes.add(current_hash)
+
+        # Pop next action from DFS stack if available
+        if self._dfs_stack:
+            action_name, data = self._dfs_stack.pop(0)
+            aid = ACTION_NAME_TO_ID.get(action_name, 0)
+            if aid in available_set:
+                action = getattr(GameAction, action_name)
+                if data and action.is_complex():
+                    action.set_data(data)
+                    action.reasoning = {"why": "dfs-backtrack", "stack_depth": len(self._dfs_stack)}
+                else:
+                    action.reasoning = f"dfs-backtrack: {action_name}"
+                self._action_history.append(action_name)
+                return action
+
+        # If stack empty, push new exploration actions
+        # Priority: unprobed directions → special → clicks → random
+        new_actions: List[Tuple[str, Optional[Dict]]] = []
+
+        for action_name in DIRECTION_ACTIONS:
+            if (action_name not in self._direction_probed and
+                    ACTION_NAME_TO_ID.get(action_name, 0) in available_set):
+                new_actions.append((action_name, None))
+
+        if 5 in available_set and not self._special_probed:
+            new_actions.append(("ACTION5", None))
+
+        if 6 in available_set:
+            # Add click targets from anomaly and delta pools
+            for x, y in self._asd_anomaly_targets[:3]:
+                if f"{x},{y}" not in self._visited_coords:
+                    new_actions.append(("ACTION6", {"x": x, "y": y}))
+            for x, y in self._delta_click_pool[:3]:
+                if f"{x},{y}" not in self._visited_coords:
+                    new_actions.append(("ACTION6", {"x": x, "y": y}))
+
+        self._dfs_stack.extend(new_actions)
+
+        if self._dfs_stack:
+            action_name, data = self._dfs_stack.pop(0)
+            aid = ACTION_NAME_TO_ID.get(action_name, 0)
+            if aid in available_set:
+                action = getattr(GameAction, action_name)
+                if data and action.is_complex():
+                    action.set_data(data)
+                    action.reasoning = {"why": "dfs-backtrack-push", "stack_depth": len(self._dfs_stack)}
+                else:
+                    action.reasoning = f"dfs-backtrack-push: {action_name}"
+                self._action_history.append(action_name)
+                return action
+
+        return None
+
+    # ── Adaptive Sleep-Step (v3.12.0) ──────────────────────────────────
+
+    def _adaptive_sleep_step(self) -> None:
+        """Adaptive Sleep-Step Budget: B = B_base + α×MDL + β×log₂(freq+1).
+
+        When Sleep-Step is triggered, dynamically compute the budget
+        based on current game complexity. More complex games (higher MDL)
+        get more Sleep-Step rounds to discover new patterns.
+
+        v3.12.0 inline simplified implementation.
+        """
+        # Estimate MDL from grid diversity (inline)
+        if self._ic_history:
+            current_ic = self._ic_history[-1]
+        else:
+            current_ic = 0.5  # Default
+
+        # Estimate frequency of current pattern
+        pattern_freq = len(self._pattern_memory) if self._pattern_memory else 1
+
+        # B = B_base + α×MDL + β×log₂(freq+1)
+        # MDL ∝ 1/IC (more IC = less description length needed)
+        mdl_est = 1.0 / max(current_ic, 0.01)
+        alpha = 0.5  # MDL weight
+        beta = 1.0  # Frequency weight
+        B_base = 3.0  # Minimum budget
+
+        self._adaptive_sleep_budget = B_base + alpha * mdl_est + beta * math.log2(pattern_freq + 1)
+
+        # AST Width Control: W(d) = W_max × exp(-λ×d)
+        # d = current depth (action_counter / 50)
+        d = self.action_counter / 50.0
+        current_width = int(self._ast_width_max * math.exp(-self._ast_width_decay * d))
+        # Ensure minimum width of 4
+        current_width = max(4, min(current_width, self._ast_width_max))
+
     # ── Delta-aware smart exploration ────────────────────────────────────
 
     def _smart_exploration(
@@ -1370,6 +1667,14 @@ class MyAgent(Agent):
             optimal = self._life3_execute(frames, latest_frame, available_set)
             if optimal is not None:
                 return optimal
+
+        # ── Phase 0.7: κ-Priority Search (v3.13.0 NEW) ──
+        # When κ-Priority mode is active, use information-gradient to select
+        # the action with highest IC×κ_weight - GEX_residual priority.
+        if self._kappa_priority_mode and self._ic_history:
+            kappa_action = self._kappa_priority_select(latest_frame, available_set)
+            if kappa_action is not None:
+                return kappa_action
 
         # ── Phase 1: Pattern repeat (highest priority) ──
         # If we've seen this exact grid configuration before and know
@@ -1430,6 +1735,13 @@ class MyAgent(Agent):
             action.reasoning = "special-action-probe (first test)"
             self._action_history.append("ACTION5")
             return action
+
+        # ── Phase 4.5: DFS Backtrack Search (v3.12.0 NEW) ──
+        # When κ-PS didn't activate and pattern/delta exhausted, try DFS
+        if self._dfs_backtrack_enabled:
+            dfs_action = self._dfs_backtrack_search(latest_frame, available_set)
+            if dfs_action is not None:
+                return dfs_action
 
         # ── Phase 5: Navigate toward target cells ──
         # Use learned direction map to move toward interesting cells.

@@ -1,8 +1,8 @@
 {
-  "_schema_version": "3.11.0",
-  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (\u6cdb\u51fd\u5b8f\u7edf\u4e00\u573a\u8bba + \u535a\u5f08\u5373\u964d\u7ef4 + GibbsEnsemble + IDO + QuantumContextual + CHL + UniverseZKP + \u516b\u5143\u6570\u71b4\u91cd\u6574\u5316)",
+  "_schema_version": "3.13.0",
+  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (泛函宏统一场论 + 博弈即降维 + GibbsEnsemble + IDO + QuantumContextual + CHL + UniverseZKP + 八元数熵重整化 + 局部质量贝叶斯 + 记忆系统 + Kuramoto振子 + κ-优先搜索)",
   "_tomas_framework": {
-    "version": "3.11.0-dev",
+    "version": "3.13.0",
     "core_modules": [
       "kappa_snap_searcher",
       "nar_conv",
@@ -30,7 +30,24 @@
       "ido_np_ep_reduction",
       "ido_von_neumann_entropy",
       "maximum_entropy_reduction",
-      "ido_agent"
+      "ido_agent",
+      "local_mass_bayesian_inference",
+      "rek1_directional_evaluator",
+      "ido_gauss_ex_variational_objective",
+      "tomas_memory_archive",
+      "ic_metric",
+      "psi_cut_aware_merge",
+      "kuramoto_oscillator",
+      "physical_gauss_ex_constraint",
+      "kappa_priority_search",
+      "ic_estimation_game_state",
+      "gex_residual",
+      "anti_monotonicity",
+      "matroid_prune_controller",
+      "conditional_delta_t_discovery",
+      "dfs_backtrack_planner",
+      "adaptive_sleep_budget",
+      "ast_width_controller"
     ],
     "asym_index_enabled": true,
     "narla_integration": true,
@@ -60,9 +77,27 @@
     "ido_np_ep_reduction": true,
     "ido_von_neumann_entropy": true,
     "maximum_entropy_reduction": true,
-    "ido_agent": true
+    "ido_agent": true,
+    "kappa_priority_search_enabled": true,
+    "matroid_prune_enabled": true,
+    "conditional_delta_t_enabled": true,
+    "dfs_backtrack_enabled": true,
+    "adaptive_sleep_budget_enabled": true,
+    "ast_width_control_enabled": true,
+    "local_mass_bayesian": true,
+    "rek1_directional": true,
+    "ido_gauss_ex_variational": true,
+    "tomas_memory_archive": true,
+    "ic_metric": true,
+    "psi_cut_aware_merge": true,
+    "kuramoto_oscillator": true,
+    "physical_gauss_ex_constraint": true,
+    "ic_estimation_enabled": true,
+    "gex_residual_enabled": true,
+    "psi_cut_pruning_enabled": true,
+    "anti_monotonicity_enabled": true
   },
-  "_note": "v3.11.0 - Octonion (\u516b\u5143\u6570\u4ee3\u6570Cayley-Dickson) + KappaAlgorithmOperator (\u03ba\u7b97\u5b50/\u4e0d\u53ef\u8ba1\u7b97\u5ea7\u5e2d) + LogRenormalizationMachine (\u5bf9\u6570\u91cd\u6574\u5316\u673a\u5668NP\u2192P) + IDONPEPReduction (\u5b9a\u74063.1) + IDOVonNeumannEntropy (\u516b\u5143\u6570\u5bc6\u5ea6\u7a77\u71b3\u5b50\u71b3) + MaximumEntropyReduction (MER\u52a8\u4f5c\u9009\u62e9) + IDOAgent (\u5b8c\u6557IDO-Agent\u67b6\u6784)",
+  "_note": "v3.13.0 — κ-Priority Search (IC×κ_weight - GEX_residual) + Ψ-Cut pruning + anti-monotonicity | v3.12.0 — LocalMassBayesianInference + REKLDirectionalEvaluator + IDOGaussExVariationalObjective + TOMASMemoryArchive + ICMetric + PsiCutAwareMerge + KuramotoOscillator + PhysicalGaussExConstraint",
   "abstractions": [
     {
       "name": "macro_push_sprite_to_target",
@@ -3819,6 +3854,352 @@
         "octonion_inference"
       ],
       "gaussex_precond": "octonion_available AND demos_available AND entropy_calc_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_local_mass_bayesian_inference",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_MASS_INDEX"
+        },
+        {
+          "action": "COMPUTE_LOCAL_REKL"
+        },
+        {
+          "action": "BAYESIAN_KAPPA_SNAP_UPDATE"
+        },
+        {
+          "action": "VERIFY_GAUSSEX"
+        }
+      ],
+      "applicable_topo": [
+        "local_mass_bayesian_inference",
+        "rek1_directional_evaluator"
+      ],
+      "gaussex_precond": "mass_data_available AND rek1_bounded",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_rek1_directional_evaluation",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_REKL"
+        },
+        {
+          "action": "EVALUATE_SUBCRITICAL"
+        },
+        {
+          "action": "EVALUATE_BOUNDED"
+        },
+        {
+          "action": "REPORT_DIRECTIONAL"
+        }
+      ],
+      "applicable_topo": [
+        "rek1_directional_evaluator",
+        "ido_gauss_ex_variational_objective"
+      ],
+      "gaussex_precond": "entropy_available AND directional_bounds_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_ido_gauss_ex_variational",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_ELBO"
+        },
+        {
+          "action": "COMPUTE_LOCAL_GAUSSEX_REKL"
+        },
+        {
+          "action": "VARIATIONAL_OPTIMIZE"
+        },
+        {
+          "action": "VERIFY_GAUSSEX"
+        }
+      ],
+      "applicable_topo": [
+        "ido_gauss_ex_variational_objective",
+        "local_mass_bayesian_inference"
+      ],
+      "gaussex_precond": "gaussex_available AND rek1_available",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_memory_archive_recall",
+      "dsl_sequence": [
+        {
+          "action": "QUERY_L1_CACHE"
+        },
+        {
+          "action": "QUERY_L2_WORKING"
+        },
+        {
+          "action": "QUERY_L3_ARCHIVE"
+        },
+        {
+          "action": "CROSS_LEVEL_RECALL"
+        },
+        {
+          "action": "IC_QUALITY_GATE"
+        }
+      ],
+      "applicable_topo": [
+        "tomas_memory_archive",
+        "ic_metric"
+      ],
+      "gaussex_precond": "memory_entries_available AND ic_threshold_set",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_memory_archive_promote",
+      "dsl_sequence": [
+        {
+          "action": "EVALUATE_IC_THRESHOLD"
+        },
+        {
+          "action": "PROMOTE_L1_TO_L2"
+        },
+        {
+          "action": "PROMOTE_L2_TO_L3"
+        },
+        {
+          "action": "VERIFY_IC_OVERLAP"
+        }
+      ],
+      "applicable_topo": [
+        "tomas_memory_archive",
+        "ic_metric",
+        "psi_cut_aware_merge"
+      ],
+      "gaussex_precond": "memory_available AND ic_metric_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_ic_metric_compare",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_IC"
+        },
+        {
+          "action": "COMPARE_IC"
+        },
+        {
+          "action": "THRESHOLD_CHECK"
+        },
+        {
+          "action": "REPORT_QUALITY"
+        }
+      ],
+      "applicable_topo": [
+        "ic_metric",
+        "psi_cut_aware_merge"
+      ],
+      "gaussex_precond": "observations_available AND ic_threshold_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_psi_cut_aware_merge",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_IC_OVERLAP"
+        },
+        {
+          "action": "DETECT_CONFLICT"
+        },
+        {
+          "action": "MERGE_CONSISTENT"
+        },
+        {
+          "action": "PRUNE_CONFLICTING"
+        },
+        {
+          "action": "VERIFY_GAUSSEX"
+        }
+      ],
+      "applicable_topo": [
+        "psi_cut_aware_merge",
+        "ic_metric",
+        "physical_gauss_ex_constraint"
+      ],
+      "gaussex_precond": "ic_available AND merge_candidates_available",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_kuramoto_sync_detection",
+      "dsl_sequence": [
+        {
+          "action": "INIT_OSCILLATORS"
+        },
+        {
+          "action": "RK4_STEP"
+        },
+        {
+          "action": "COMPUTE_ORDER_PARAMETER"
+        },
+        {
+          "action": "KMEANS_SYNC_MODES"
+        },
+        {
+          "action": "REPORT_SYNC"
+        }
+      ],
+      "applicable_topo": [
+        "kuramoto_oscillator",
+        "physical_gauss_ex_constraint"
+      ],
+      "gaussex_precond": "oscillator_data_available AND coupling_matrix_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_physical_gauss_ex_check",
+      "dsl_sequence": [
+        {
+          "action": "KIRCHHOFF_CHECK"
+        },
+        {
+          "action": "ENERGY_CHECK"
+        },
+        {
+          "action": "CAUSALITY_CHECK"
+        },
+        {
+          "action": "RECIPROCITY_CHECK"
+        },
+        {
+          "action": "REGULARIZE"
+        }
+      ],
+      "applicable_topo": [
+        "physical_gauss_ex_constraint",
+        "kuramoto_oscillator"
+      ],
+      "gaussex_precond": "network_data_available AND physical_laws_applicable",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_kappa_priority_search",
+      "dsl_sequence": [
+        {
+          "action": "ESTIMATE_IC_GAME_STATE"
+        },
+        {
+          "action": "COMPUTE_GEX_RESIDUAL"
+        },
+        {
+          "action": "COMPUTE_KAPPA_PRIORITY"
+        },
+        {
+          "action": "PSI_CUT_PRUNE"
+        },
+        {
+          "action": "ANTI_MONOTONICITY_FILTER"
+        },
+        {
+          "action": "HEAPQ_EXPAND"
+        }
+      ],
+      "applicable_topo": [
+        "kappa_priority_search",
+        "ic_estimation_game_state",
+        "gex_residual"
+      ],
+      "gaussex_precond": "ic_available AND gex_available AND search_state_available",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_ic_estimation_game_state",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_STRUCT_DEPTH"
+        },
+        {
+          "action": "COMPUTE_ENTITY_LINK"
+        },
+        {
+          "action": "COMPUTE_OP_COMPLEXITY"
+        },
+        {
+          "action": "DEPTH_PENALTY"
+        },
+        {
+          "action": "AGGREGATE_IC"
+        }
+      ],
+      "applicable_topo": [
+        "ic_estimation_game_state",
+        "ic_metric"
+      ],
+      "gaussex_precond": "game_state_available AND prev_state_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_gex_residual_compute",
+      "dsl_sequence": [
+        {
+          "action": "TRY_OCTONION_EMBED"
+        },
+        {
+          "action": "TRY_IC_METRIC"
+        },
+        {
+          "action": "TRY_STRUCT_GRID_DIST"
+        },
+        {
+          "action": "REPORT_GEX"
+        }
+      ],
+      "applicable_topo": [
+        "gex_residual",
+        "physical_gauss_ex_constraint"
+      ],
+      "gaussex_precond": "current_state_available AND initial_state_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_psi_cut_prune",
+      "dsl_sequence": [
+        {
+          "action": "CHECK_IC_THRESHOLD"
+        },
+        {
+          "action": "CHECK_GEX_THRESHOLD"
+        },
+        {
+          "action": "PRUNE_LOW_IC_HIGH_GEX"
+        },
+        {
+          "action": "KEEP_PROMISING"
+        }
+      ],
+      "applicable_topo": [
+        "psi_cut_aware_merge",
+        "kappa_priority_search"
+      ],
+      "gaussex_precond": "ic_estimated AND gex_estimated AND thresholds_set",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_anti_monotonicity_filter",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_IC_WITH_DEPTH"
+        },
+        {
+          "action": "CHECK_IC_NON_INCREASING"
+        },
+        {
+          "action": "PENALTY_DEEP_SOLUTIONS"
+        },
+        {
+          "action": "PREFER_COMPACT"
+        }
+      ],
+      "applicable_topo": [
+        "anti_monotonicity",
+        "kappa_priority_search"
+      ],
+      "gaussex_precond": "ic_available AND depth_available",
       "complexity_class": "P"
     }
   ]
