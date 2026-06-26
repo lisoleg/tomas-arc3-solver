@@ -157,6 +157,20 @@ from .neural_dsl import (
     neurally_gated_expand,
 )
 
+# ── v3.17.0 — 天行相变 + YinLong 八元数 + DOGA + PTS孤子判别 ──
+from .neural_dsl import (
+    YinLongDSL,
+    TianxingGaussExVerifier,
+    is_soliton,
+    is_soliton_from_sprite,
+    doga_score,
+    solve_tianxing,
+    estimate_order_anchoring,
+    estimate_alienation,
+    estimate_structural_phase,
+    yinlong_tensor_product,
+)
+
 # ── MetaSnapNet可选集成 ──
 try:
     from .meta_snap_net import (
@@ -314,6 +328,17 @@ __all__ = [
     "estimate_ic_with_motifs",
     "neuro_inspired_kps_search",
     "neurally_gated_expand",
+    # v3.17.0 — 天行相变 + YinLong 八元数 + DOGA + PTS孤子判别
+    "YinLongDSL",
+    "TianxingGaussExVerifier",
+    "is_soliton",
+    "is_soliton_from_sprite",
+    "doga_score",
+    "solve_tianxing",
+    "estimate_order_anchoring",
+    "estimate_alienation",
+    "estimate_structural_phase",
+    "yinlong_tensor_product",
     # MetaSnapNet κ-Snap Beam Scoring (SPP集成)
     "TopoFeatureExtractor",
     "ProgramNodeFeatureExtractor",

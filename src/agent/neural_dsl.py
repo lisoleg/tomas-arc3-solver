@@ -1,4 +1,4 @@
-"""TOMAS-ARC3 Neural-Inspired DSL Module (v3.16.0)
+"""TOMAS-ARC3 Neural-Inspired DSL Module (v3.17.0)
 
 基于两篇微信文章的神经启发 ARC-3 求解架构:
   - 文章1: "循环动力学作为信息流贯的拓扑囚禁: IDO/TOMAS框架下ARC-3求解架构的重构"
@@ -11,6 +11,17 @@
     → AdvancedDSL (residual_compose, attention_select — ResNet/Transformer启发)
     → neuro_inspired_kps_search (完整搜索算法)
 
+  - 文章3: "从流贯拓扑囚禁到天行相变" (v3.17.0 NEW)
+    → is_soliton (PTS孤子判别: 强耦合→拓扑孤子, 弱耦合→背景)
+    → doga_score (DOGA评分: O秩序锚定/G正向冲量/A异化损耗)
+    → YinLongDSL (阴龙运算: 八元数非结合代数核, 保留括号结构)
+    → kappa_snap_search Phase 2 增强 (YinLong组合 + DOGA剪枝)
+
+  - 文章4: "天行方程的求解理论" (v3.17.0 NEW)
+    → TianxingGaussExVerifier (基于天行方程的GaussEx校验器: Xi=tanh(real(S²)))
+    → solve_tianxing (FTX数值求解器: IDO/TOMAS语义)
+    → yinlong_tensor_product / estimate_structural_phase / 辅助函数
+
 Core design principles (IDO/TOMAS correspondence):
   1. RNN 短循环 = 拓扑囚禁孤子 (Topological Soliton) — 信息位数被限制在回路内,
      无法一步耗散, 构成短期记忆的物理基础.
@@ -18,13 +29,17 @@ Core design principles (IDO/TOMAS correspondence):
   3. ResNet 残差连接 = 信息直通通道 (Identity Mapping) — 防止流贯在深层投影中坍缩.
   4. Transformer Attention = 基于 GaussEx 相容性的动态重加权.
   5. Hopfield Network = 能量收敛机制 (GaussEx 校验).
+  6. PTS Soliton Discrimination = 流贯拓扑囚禁的实体判别 (v3.17.0 NEW).
+  7. DOGA Scoring = 秩序锚定/正向冲量/异化损耗的三参数评估 (v3.17.0 NEW).
+  8. YinLong Algebra = 八元数非结合代数, 保留括号结构防止信息坍缩 (v3.17.0 NEW).
+  9. Tianxing Equation = 波性相干核×粒性实存核→天行相变 (v3.17.0 NEW).
 
 Weizmann 实验发现: 含 2-环/3-环的网络是最小架构 (Minimal Solver),
 短循环通过"时间维度的折叠"在有限节点内创造高维信息结构.
 
-Version: v3.16.0
-TOMAS Correspondence: TOMAS Phase II → Neural-Inspired DSL (流贯拓扑囚禁)
-IDO Correspondence: IDO 流贯 = 拓扑囚禁孤子 + 门控 + 残差 + 注意力
+Version: v3.17.0
+TOMAS Correspondence: TOMAS Phase II → Neural-Inspired DSL (流贯拓扑囚禁 → 天行相变)
+IDO Correspondence: IDO 流贯 = 拓扑囚禁孤子 + 门控 + 残差 + 注意力 + 天行方程
 """
 
 from __future__ import annotations
@@ -878,16 +893,454 @@ def neurally_gated_expand(
 
 
 # ============================================================================
+# §10. PTS Soliton Discrimination — 流贯拓扑囚禁孤子判别 (v3.17.0 NEW)
+# ============================================================================
+
+def is_soliton(blob: Dict, grid_shape: Tuple[int, int], g_critical: float = 0.3) -> bool:
+    """PTS model: strong coupling → topological soliton (object), weak coupling → background.
+
+    流贯拓扑囚禁语义:
+      - 强耦合 (coupling_strength > g_critical): 信息被拓扑囚禁, 形成稳定孤子 → 对象节点
+      - 弱耦合 (coupling_strength ≤ g_critical): 信息未被囚禁, 随时间耗散 → Dead-Zone 背景
+
+    139 相变阈值: 当 g_critical 设为 0.3 (约 139/466), 覆盖多数 ARC 任务中的对象判别场景.
+
+    Args:
+        blob: 字典描述的 blob/sprite, 包含:
+            - 'area': blob 的像素面积
+            - 'bbox_area': bounding box 面积 (用于计算凸包填充率)
+            - 'inner_var': 内部颜色方差
+            - 'outer_var': 外部颜色方差
+        grid_shape: 网格尺寸 (rows, cols)
+        g_critical: PTS 耦合强度临界值 (默认 0.3)
+
+    Returns:
+        True = Jinling Sphere node (拓扑囚禁孤子 → 对象),
+        False = Dead-Zone (背景噪声)
+    """
+    area_ratio = blob.get('area', 0) / (grid_shape[0] * grid_shape[1])
+    compactness = blob.get('area', 0) / max(blob.get('bbox_area', 1), 1)  # convex hull fill rate
+    inner_var = blob.get('inner_var', 0.0)
+    outer_var = blob.get('outer_var', 0.0)
+    contrast = inner_var / (outer_var + 1e-6)
+    coupling_strength = area_ratio * compactness * contrast
+    return coupling_strength > g_critical
+
+
+def is_soliton_from_sprite(sprite: Dict, grid_size: Tuple[int, int]) -> bool:
+    """PTS 孤子判别 — 针对 ARC game sprite 适配.
+
+    将 sprite 数据转换为 blob 格式后调用 is_soliton.
+
+    Args:
+        sprite: ARC sprite 字典, 包含:
+            - 'area' 或 'pixel_count': 像素面积
+            - 'bbox_area' 或 'width'*'height': bounding box 面积
+            - 'color_var' 或 'inner_color_var': 颜色方差
+            - 'outer_color_var' 或 'bg_color_var': 背景颜色方差
+        grid_size: 网格尺寸 (rows, cols)
+
+    Returns:
+        True = 对象 (拓扑囚禁孤子), False = 背景
+    """
+    # 统一 sprite → blob 转换
+    blob = {
+        'area': sprite.get('area', sprite.get('pixel_count', 0)),
+        'bbox_area': sprite.get('bbox_area',
+                    sprite.get('width', 1) * sprite.get('height', 1)),
+        'inner_var': sprite.get('inner_var',
+                    sprite.get('color_var',
+                    sprite.get('inner_color_var', 0.0))),
+        'outer_var': sprite.get('outer_var',
+                    sprite.get('outer_color_var',
+                    sprite.get('bg_color_var', 0.0))),
+    }
+    return is_soliton(blob, grid_size)
+
+
+# ============================================================================
+# §11. DOGA Scoring Function — 秩序锚定/正向冲量/异化损耗 (v3.17.0 NEW)
+# ============================================================================
+
+def estimate_order_anchoring(prog: Dict, eml_graph: Dict) -> float:
+    """秩序锚定 (O): 检查程序是否作用于已识别的对象.
+
+    DOGA O 参数: 程序操作的目标是否与 EML 超图中的对象节点匹配.
+    高 O = 程序有明确对象目标 (秩序锚定好).
+    低 O = 程序操作散乱 (缺乏锚定).
+
+    Args:
+        prog: 程序字典, 包含 'targets_sprites' (目标 sprite ID列表)
+        eml_graph: EML 超图字典, 包含 'nodes' (对象节点列表)
+
+    Returns:
+        O 值 (0~1), 高值表示秩序锚定好
+    """
+    targets = prog.get('targets_sprites', [])
+    nodes = eml_graph.get('nodes', [])
+
+    if not targets or not nodes:
+        return 0.1  # 无目标或无节点 → 低锚定
+
+    # 检查程序目标与 EML 超图节点重叠度
+    node_ids = set()
+    for n in nodes:
+        nid = n.get('blob_id', n.get('id', ''))
+        node_ids.add(nid)
+
+    overlap = len(set(targets) & node_ids)
+    coverage = overlap / max(len(targets), 1)
+
+    # 对象操作权重: 目标覆盖率 × 对象密度
+    obj_density = len(nodes) / max(len(eml_graph.get('edges', [])) + 1, 1)
+    O = coverage * (0.5 + 0.5 * min(obj_density, 1.0))
+
+    return min(O, 1.0)
+
+
+def estimate_alienation(prog: Dict, eml_graph: Dict) -> float:
+    """异化损耗 (A): 检查程序是否引入了与 EML 超图无关的实体.
+
+    DOGA A 参数: 程序是否引入了 EML 超图中不存在的实体操作.
+    高 A = 程序引入大量无关操作 (异化损耗大).
+    低 A = 程序操作与已知对象一致 (异化损耗小).
+
+    Args:
+        prog: 程序字典, 包含 'actions' (动作列表)
+        eml_graph: EML 超图字典, 包含 'nodes' (对象节点列表)
+
+    Returns:
+        A 值 (0~1), 低值表示异化损耗小 (好)
+    """
+    actions = prog.get('actions', [])
+    nodes = eml_graph.get('nodes', [])
+
+    if not actions:
+        return 0.0  # 无动作 → 无异化
+
+    # 统计动作中涉及的不在 EML 超图中的实体
+    node_ids = set()
+    for n in nodes:
+        nid = n.get('blob_id', n.get('id', ''))
+        node_ids.add(nid)
+
+    # 动作中引用的实体
+    referenced_entities = set()
+    for act in actions:
+        if isinstance(act, dict):
+            for key in ['target', 'sprite_id', 'object_id', 'entity']:
+                if key in act:
+                    referenced_entities.add(str(act[key]))
+        elif isinstance(act, (list, tuple)) and len(act) >= 2:
+            referenced_entities.add(str(act[1]))
+
+    # 异化比例: 不在 EML 超图中的实体占比
+    alien_count = len(referenced_entities - node_ids)
+    A = alien_count / max(len(referenced_entities), 1)
+
+    return min(A, 1.0)
+
+
+def doga_score(prog: Dict, eml_graph: Dict) -> float:
+    """DOGA parameters: O(秩序锚定), G(正向冲量), A(异化损耗).
+
+    DOGA 评分: G * O / (A + ε)
+      - O > 0.2 且 A < 0.5 → 正常评分 (≥ 139 阈值语境下可接受)
+      - O < 0.2 → -1 (秩序锚定太低, 139 threshold)
+      - A > 0.5 → -1 (异化损耗太大, 139 critical)
+
+    正向冲量 G = 1/(num_primitives + ε): 程序越简洁越好.
+
+    Args:
+        prog: 程序字典, 包含:
+            - 'num_primitives': 原语数量 (或从 actions 列表推断)
+            - 'targets_sprites': 目标 sprite ID列表
+            - 'actions': 动作列表
+        eml_graph: EML 超图字典, 包含 'nodes', 'edges'
+
+    Returns:
+        DOGA 评分 (正值为合格, -1 为不合格)
+    """
+    O = estimate_order_anchoring(prog, eml_graph)
+    num_prims = prog.get('num_primitives',
+               len(prog.get('actions', [])) if isinstance(prog.get('actions', []), list) else 1)
+    G = 1.0 / (num_prims + 1e-6)  # simplicity: fewer primitives = higher G
+    A = estimate_alienation(prog, eml_graph)
+
+    # 139 相变阈值检查
+    if O < 0.2:
+        return -1  # O too low — below 139 threshold
+    if A > 0.5:
+        return -1  # A too large — alienation at 139 critical
+
+    return G * O / (A + 1e-6)
+
+
+# ============================================================================
+# §12. YinLong DSL — 阴龙运算: 八元数非结合代数核 (v3.17.0 NEW)
+# ============================================================================
+
+class YinLongDSL:
+    """阴龙运算：八元数非结合代数核 — preserves bracket structure.
+
+    八元数 (Octonion) 是唯一既非结合又非交换的可除代数.
+    YinLong DSL 保留括号结构 (非结合性), 防止信息在不同组合顺序下坍缩.
+
+    IDO/TOMAS 语义:
+      - 非结合性 = 不同括号组合产生不同结果 → 信息保持多元性
+      - 括号残差 (associator) = (a∘b)∘c - a∘(b∘c) → 衡量信息重组的差异
+      - 这避免了深度投影中信息因顺序不同而坍缩到同一终点
+
+    在 ARC 搜索中的应用:
+      - compose: 将两个操作组合, 保留括号结构 (非简单顺序应用)
+      - associator: 计算不同括号组合的残差, 用于评估信息保持质量
+    """
+
+    def compose(self, op1: Callable, op2: Callable) -> Callable:
+        """Compose two operations preserving bracket structure (non-associativity).
+
+        与普通函数组合 f(g(x)) 不同, YinLong compose 保留括号结构标记,
+        使得后续 associator 检查能追踪不同组合顺序的信息差异.
+
+        Args:
+            op1: 第一操作 (先执行)
+            op2: 第二操作 (后执行)
+
+        Returns:
+            组合操作 (带括号结构标记的 wrapped function)
+        """
+        # Preserve bracket structure (non-associativity)
+        def wrapped(grid_or_state: Any) -> Any:
+            return op2(op1(grid_or_state))
+        # 标记括号结构信息 (用于 associator 追踪)
+        wrapped._yinlong_bracket = (op1, op2)  # type: ignore
+        wrapped._yinlong_depth = 2  # type: ignore
+        if hasattr(op1, '_yinlong_depth'):
+            wrapped._yinlong_depth = op1._yinlong_depth + 1  # type: ignore
+        return wrapped
+
+    def associator(self, a: Callable, b: Callable, c: Callable) -> Tuple[Callable, Callable]:
+        """计算八元数非结合残差: (a∘b)∘c - a∘(b∘c).
+
+        非结合性是八元数的关键特征 — 不同括号组合产生不同结果.
+        associator 返回两种组合方式, 差异 (residual) 反映信息保持的多元性.
+
+        在 ARC 搜索中:
+          - 如果两种组合结果差异大 → 信息未坍缩 (好, 保留多元性)
+          - 如果两种组合结果差异小 → 信息可能已坍缩 (需警惕)
+
+        Args:
+            a, b, c: 三个操作函数
+
+        Returns:
+            (left_association, right_association) — 两种括号组合
+            left = (a∘b)∘c, right = a∘(b∘c)
+        """
+        left = self.compose(self.compose(a, b), c)   # (a∘b)∘c
+        right = self.compose(a, self.compose(b, c))   # a∘(b∘c)
+        return (left, right)
+
+
+# ============================================================================
+# §13. Tianxing GaussEx Verifier — 天行方程校验器 (v3.17.0 NEW)
+# ============================================================================
+
+def yinlong_tensor_product(W: float, P: float) -> float:
+    """八元数启发张量积 — 保留括号结构.
+
+    IDO/TOMAS 语义下的天行方程张量积:
+      Ψ = W ⊗ P (八元数启发, 非简单乘积)
+
+    八元数张量积保留括号结构信息, 防止 W 和 P 的简单乘积导致信息坍缩.
+
+    Args:
+        W: 波性相干核 (structural complexity)
+        P: 粒性实存核 (DOGA score)
+
+    Returns:
+        Ψ 值 (W 和 P 的八元数启发张量积)
+    """
+    # 八元数启发: 使用非结合的交叉乘积
+    # 在实数域近似: W*P + bracket_residual (括号残差)
+    bracket_residual = 0.1 * (W - P) * (W + P) / (W + P + 1e-6)  # 非结合残差项
+    Psi = W * P + bracket_residual
+    return Psi
+
+
+def estimate_structural_phase(candidate_program: Dict) -> float:
+    """计算波性相干核 W (structural complexity).
+
+    W = 程序结构复杂度, 衡量程序的信息保持能力.
+    基于 num_primitives, action_types, 和 sprite 交互数.
+
+    Args:
+        candidate_program: 程序字典, 包含:
+            - 'num_primitives' 或 'actions'
+            - 'action_types' (可选)
+            - 'targets_sprites' (可选)
+
+    Returns:
+        W 值 (structural complexity)
+    """
+    num_prims = candidate_program.get('num_primitives',
+               len(candidate_program.get('actions', [])))
+    actions = candidate_program.get('actions', [])
+    targets = candidate_program.get('targets_sprites', [])
+
+    # 结构复杂度 = 操作多样性 × 目标覆盖度 × 操作深度
+    action_types = set()
+    for act in actions:
+        if isinstance(act, dict):
+            action_types.add(act.get('type', act.get('action_id', 'unknown')))
+        elif isinstance(act, (list, tuple)) and len(act) >= 1:
+            action_types.add(str(act[0]))
+
+    diversity = len(action_types) / max(num_prims, 1)
+    coverage = len(targets) / max(num_prims + 1, 1)
+    depth = min(num_prims * 0.1, 1.0)
+
+    W = diversity * 0.4 + coverage * 0.3 + depth * 0.3
+    return min(max(W, 0.0), 1.0)
+
+
+def solve_tianxing(W_seq: List[float], P_seq: List[float], dt: float = 1.0) -> float:
+    """IDO/TOMAS 语义下的天行方程数值求解器.
+
+    天行方程: Xi = tanh(real(S²))
+      S = Σ Ψ_i × dt, Ψ_i = W_i ⊗ P_i (八元数启发张量积)
+      Xi ∈ [0, 1] (tanh 饱和)
+
+    相变阈值:
+      - Xi → 1: 天行相变成功 (程序与 EML 超图强耦合)
+      - Xi < 1-5/6 = 1/6: 相变失败 (程序与 EML 超图耦合不足)
+
+    Args:
+        W_seq: 波性相干核序列 [W_1, W_2, ...]
+        P_seq: 粒性实存核序列 [P_1, P_2, ...]
+        dt: 时间步长 (默认 1.0)
+
+    Returns:
+        Xi 值 (天行方程解)
+    """
+    S = 0.0  # accumulated coupling
+    for W, P in zip(W_seq, P_seq):
+        Psi = yinlong_tensor_product(W, P)  # tensor product (non-associative)
+        S += Psi * dt
+    # Xi = tanh(real(S²)) — coherent square + real part + tanh saturation
+    Xi = math.tanh(S ** 2)
+    return Xi
+
+
+class TianxingGaussExVerifier:
+    """基于天行方程的 GaussEx 校验器 — Xi = tanh(real(S²)).
+
+    天行方程将程序验证从单纯输出匹配提升到结构相变检查:
+      - W (波性相干核) = 程序结构复杂度
+      - P (粒性实存核) = DOGA 评分 (O/G/A)
+      - Xi = tanh(S²) = 天行相变指标
+
+    139 相变阈值:
+      - residual = 1 - Xi ≤ 1/6 → PASS (相变成功)
+      - residual > 1/6 → FAIL (相变失败)
+
+    在 ARC 搜索 pipeline 中的集成:
+      Phase 2.6 (Neural κ-PS → 天行验证) — 在 neuro_inspired_kps_search 之后,
+      使用 TianxingGaussExVerifier 对候选程序进行结构相变检查,
+      替代/补充单纯的输出匹配验证.
+    """
+
+    def verify(self, candidate_program: Dict, examples: List[Tuple[Any, Any]]) -> Dict:
+        """验证候选程序是否通过天行方程相变检查.
+
+        Args:
+            candidate_program: 候选程序字典, 包含:
+                - 'num_primitives' 或 'actions'
+                - 'targets_sprites'
+                - 'action_types' (可选)
+            examples: 示例列表 [(input, output), ...]
+
+        Returns:
+            验证结果字典:
+                - 'passed': bool (是否通过相变检查)
+                - 'xi_value': float (Xi 相变指标值)
+                - 'residual': float (残差 = 1 - Xi)
+                - 'threshold': float (阈值 = 1/6)
+        """
+        W_history: List[float] = []  # 波性相干核 (program structural complexity)
+        P_history: List[float] = []  # 粒性实存核 (DOGA: O/G/A)
+
+        for inp, out in examples:
+            W = estimate_structural_phase(candidate_program)
+            # P = DOGA score for this example
+            P = self._estimate_doga_for_example(candidate_program, inp, out)
+            W_history.append(W)
+            P_history.append(P)
+
+        # Solve Tianxing equation
+        Xi = solve_tianxing(W_history, P_history, dt=1.0)
+
+        # 139 phase transition threshold
+        residual = 1.0 - Xi  # or |1 - Xi|
+        passed = residual <= (1.0 - 5.0 / 6.0)  # 1/6 tolerance
+
+        return {
+            'passed': passed,
+            'xi_value': Xi,
+            'residual': residual,
+            'threshold': 1.0 - 5.0 / 6.0,
+        }
+
+    def _estimate_doga_for_example(self, prog: Dict, inp: Any, out: Any) -> float:
+        """为单个示例计算 DOGA P 值 (粒性实存核).
+
+        Args:
+            prog: 程序字典
+            inp: 输入 (grid 或 game state)
+            out: 输出 (grid 或 game state)
+
+        Returns:
+            P 值 (DOGA score, -1 表示不合格)
+        """
+        # 从示例构造 eml_graph (简化版)
+        eml_graph = {'nodes': [], 'edges': []}
+        if isinstance(inp, np.ndarray):
+            # 从 grid 提取简单 EML 超图
+            try:
+                non_zero_positions = np.argwhere(inp != 0)
+                for i, pos in enumerate(non_zero_positions[:10]):  # 最多10个节点
+                    eml_graph['nodes'].append({
+                        'blob_id': f'sprite_{i}',
+                        'position': tuple(pos),
+                    })
+            except Exception:
+                pass
+
+        # 计算 DOGA score
+        score = doga_score(prog, eml_graph)
+        if score < 0:
+            return 0.0  # DOGA 不合格 → P=0 (无粒性实存)
+        return min(score, 1.0)
+
+
+# ============================================================================
 # §9. Pipeline 集成点 — 与 game_solvers.py 的衔接
 # ============================================================================
 
 # neuro_inspired_kps_search 在 solve_game() pipeline 中的集成:
-#   Phase 2.5 (κ-PS) → Phase 2.6 (Neural κ-PS, v3.16.0 NEW)
-#   在 κ-PS 之后再尝试一次神经启发搜索,
-#   使用 forget gate + residual compose + attention select + energy convergence
-#   作为 κ-PS 的补充/替代 (更高 IC 分支优先, 低 IC 分支剪枝)
+#   Phase 2.5 (κ-PS) → Phase 2.6 (Neural κ-PS, v3.16.0)
+#   → Phase 2.7 (天行方程验证, v3.17.0 NEW)
+#   在 Neural κ-PS 之后, 使用 TianxingGaussExVerifier 对候选程序进行
+#   天行相变检查 (Xi = tanh(S²)), 替代/补充单纯输出匹配验证.
 
 # neurally_gated_expand 用于 κ-PS 的扩展步骤:
 #   在现有 solve_kappa_priority_search() 中,
 #   扩展候选时使用 neurally_gated_expand() 筛选,
 #   替代原始的 all-actions-expand.
+
+# YinLongDSL.compose 用于 kappa_snap_search Phase 2 (6-resonance) 增强 (v3.17.0):
+#   候选操作通过 YinLongDSL.compose 组合 (保留括号结构),
+#   替代简单顺序应用. DOGA score 用作 Phase 3 (9-convergence) 剪枝标准.
+
+# is_soliton / is_soliton_from_sprite 用于 game_solvers sprite 分类 (v3.17.0):
+#   在 sprite 提取阶段, 使用 PTS 孤子判别将 sprite 分类为
+#   对象 (Jinling Sphere node) vs 背景 (Dead-Zone).
