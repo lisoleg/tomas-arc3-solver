@@ -782,195 +782,191 @@ def solve_g50t(game: Any, level_idx: int) -> list | None:
 
 
 # ============================================================================
-# KA59 Solver: Push blocks to targets with enemy chase
+# KA59 Solver: Sokoban push-box game with enemy chase
 # ============================================================================
+
 
 def _solve_ka59_sokoban_strategy(
     game: Any,
     original_level: int,
 ) -> list[tuple] | None:
-    """KA59 Hungarian assignment strategy — optimal block-to-target matching.
+    """KA59 Sokoban BFS strategy — push all blocks onto targets.
 
-    Based on v3.14.0 article2 §3.3 Liu Mechanism: assigns 5 blocks to 5
-    targets using the Hungarian algorithm (optimal bipartite matching),
-    computes BFS paths for each assignment, and generates macro-action
-    sequences to push each block along its assigned path.
+    TRUE mechanics (from ka59.py source):
+        - Player controls 0022vrxelxosfy[0] (first target sprite, tagged prkgpeyexo)
+        - Move with ACTION1(up)/2(down)/3(left)/4(right), step_size=zsqdfmgyjo
+        - Push mechanic: player collides with 0010xzmuziohuf block → block moves same dir (Sokoban)
+        - ACTION6 click on 0022vrxelxosfy target → switch active player to that target
+        - Enemy omeizjufss → moves toward 0001uqqokjrptk goal target, reaching it = LOSE
+        - Win: all 0010xzmuziohuf overlap with 0022vrxelxosfy AND
+               all 0027jbgxilrocf overlap with 0001uqqokjrptk
+        - Available actions: [1, 2, 3, 4, 6]
 
     Strategy:
-        1. Extract block and target positions from game sprites.
-        2. Compute Hungarian assignment (minimize total Manhattan distance).
-        3. For each (block, target) pair, compute BFS path avoiding walls.
-        4. Generate macro-action sequence: select block → move along path.
-        5. Execute macro-action plan via simulation to verify correctness.
+        BFS over game states using deepcopy for simulation.
+        Actions: 4-direction moves (push blocks Sokoban-style) + ACTION6 to switch target.
+        Goal: _is_level_solved() returns True.
 
     Args:
         game: The game object (will use deepcopy for simulation).
         original_level: Original level index for solved-check.
 
     Returns:
-        List of (GameAction, data) tuples, or None if strategy fails.
+        List of (action, data) tuples, or None if strategy fails.
 
     Self-test:
-        >>> result = _solve_ka59_hungarian_strategy(None, 0)
+        >>> result = _solve_ka59_sokoban_strategy(None, 0)
         >>> assert result is None  # No game → no plan
     """
-    from arcengine import GameAction, ActionInput
+    from arcengine import GameAction, ActionInput, GameState
+    import time
 
     if game is None:
         return None
 
-    # ── Step 1: Extract block and target positions ──
+    # ── Step 1: Identify game entities from sprites ──
     blocks = _get_sprites_by_tag(game, '0010xzmuziohuf')
     targets = _get_sprites_by_tag(game, '0022vrxelxosfy')
     goal_targets = _get_sprites_by_tag(game, '0001uqqokjrptk')
 
     if not blocks or not targets:
-        # Try alternative tag names
-        blocks = _get_sprites_by_tag(game, 'block')
-        targets = _get_sprites_by_tag(game, 'target')
-        if not blocks or not targets:
+        # Fallback tag names
+        blocks_fb = _get_sprites_by_tag(game, 'block')
+        targets_fb = _get_sprites_by_tag(game, 'target')
+        if not blocks_fb or not targets_fb:
             return None
+        blocks = blocks_fb
+        targets = targets_fb
 
-    block_positions = [_sprite_display_center(game, b) for b in blocks]
-    target_positions = [_sprite_display_center(game, t) for t in targets]
+    # Get step size from game variable zsqdfmgyjo
+    step_size = getattr(game, 'zsqdfmgyjo', None)
+    if step_size is None:
+        step_size = getattr(game, '_step_size', None)
+    if step_size is None or step_size <= 0:
+        step_size = 3  # Default for KA59
 
-    # ── Step 2: Hungarian assignment ──
-    assignment = _hungarian_assignment(block_positions, target_positions)
-    if not assignment:
-        return None
+    # ── Step 2: BFS search using game deepcopy simulation ──
+    t0 = time.time()
+    max_time_budget = 25.0
+    max_depth = 60
+    max_nodes = 50000
 
-    # ── Step 3: Compute BFS paths and generate macro-action plan ──
-    step_size = getattr(game, '_step_size', 3)
-    if step_size <= 0:
-        step_size = 3
+    initial_hash = _game_state_hash(game)
+    queue: deque[tuple[Any, list[tuple], str]] = deque()
+    queue.append((copy.deepcopy(game), [], initial_hash))
+    visited: set[str] = {initial_hash}
+    total_nodes = 0
 
-    # Get wall positions for path avoidance
-    # Only use the internal obstacle wall (0015qniapgwsvb)
-    # The boundary/background wall (0029ifoxxfvvvs, 51x51) is NOT a BFS obstacle
-    # — it covers most of the screen and would block all paths
-    walls = _get_sprites_by_tag(game, '0015qniapgwsvb')
-    # Skip 0029ifoxxfvvvs — it's the game boundary/background, not a path obstacle
+    # Build action set for KA59: [1=UP, 2=DOWN, 3=LEFT, 4=RIGHT, 6=CLICK]
+    move_actions = [
+        (GameAction.ACTION1, {}),   # UP
+        (GameAction.ACTION2, {}),   # DOWN
+        (GameAction.ACTION3, {}),   # LEFT
+        (GameAction.ACTION4, {}),   # RIGHT
+    ]
 
-    wall_cells: set[tuple[int, int]] = set()
-    for w in walls:
-        # Convert wall sprite to display coordinates (0-63) to match BFS grid
-        w_disp = _sprite_display_center(game, w)
-        ww = int(getattr(w, 'width', 1))
-        wh = int(getattr(w, 'height', 1))
-        # Scale wall size to display coordinates
-        cam = getattr(game, 'camera', None)
-        if cam is not None:
-            cam_w = int(getattr(cam, 'width', 64))
-            cam_h = int(getattr(cam, 'height', 64))
-            scale_w = int(64 / cam_w) if cam_w > 0 else 1
-            scale_h = int(64 / cam_h) if cam_h > 0 else 1
-            scale = max(1, min(scale_w, scale_h))
-            disp_w = max(1, ww * scale)
-            disp_h = max(1, wh * scale)
-        else:
-            disp_w = max(1, ww)
-            disp_h = max(1, wh)
-        # Add wall cells in display coordinate space
-        wcx, wcy = w_disp
-        half_w = max(1, disp_w // 2)
-        half_h = max(1, disp_h // 2)
-        for dx in range(-half_w, half_w + 1):
-            for dy in range(-half_h, half_h + 1):
-                wall_cells.add((wcx + dx, wcy + dy))
+    # Get clickable target positions for ACTION6
+    target_click_positions: list[tuple[int, int]] = []
+    for t in targets:
+        tpos = _sprite_display_center(game, t)
+        target_click_positions.append(tpos)
 
-    plan: list[tuple] = []
-    sim_game = copy.deepcopy(game)
+    # Also try goal targets as click targets
+    for gt in goal_targets:
+        gtpos = _sprite_display_center(game, gt)
+        if gtpos not in target_click_positions:
+            target_click_positions.append(gtpos)
 
-    for block_idx, target_idx in assignment:
-        block = blocks[block_idx]
-        target = targets[target_idx]
+    while queue:
+        if time.time() - t0 > max_time_budget:
+            break
+        if total_nodes > max_nodes:
+            break
 
-        # Switch to this block (ACTION6 click on block)
-        block_disp = _sprite_display_center(sim_game, block)
-        plan.append((GameAction.ACTION6, {'x': block_disp[0], 'y': block_disp[1]}))
+        g, path, prev_hash = queue.popleft()
+        total_nodes += 1
 
-        # Simulate the switch
-        ai_switch = ActionInput(id=6, data={'x': block_disp[0], 'y': block_disp[1]})
-        _perform_action_safe(sim_game, ai_switch)
+        # ── 2a: Try movement actions (Sokoban push) ──
+        for game_action, action_data in move_actions:
+            if len(path) >= max_depth:
+                break
 
-        # Compute path from block to target (in display coordinates 0-63)
-        b_pos = _sprite_display_center(sim_game, block)
-        t_pos = _sprite_display_center(sim_game, target)
-        path_coords = _bfs_path(
-            b_pos, t_pos,
-            walls=wall_cells, step=step_size, grid_size=64,
-        )
+            g_copy = copy.deepcopy(g)
+            ai_move = ActionInput(id=game_action, data=action_data)
+            result = _perform_action_safe(g_copy, ai_move)
 
-        if path_coords is None:
-            # Direct movement fallback
-            dx = t_pos[0] - b_pos[0]
-            dy = t_pos[1] - b_pos[1]
-            n_x = abs(dx) // step_size
-            n_y = abs(dy) // step_size
-            if dx > 0:
-                for _ in range(n_x):
-                    plan.append((GameAction.ACTION4, None))
-            elif dx < 0:
-                for _ in range(n_x):
-                    plan.append((GameAction.ACTION3, None))
-            if dy > 0:
-                for _ in range(n_y):
-                    plan.append((GameAction.ACTION2, None))
-            elif dy < 0:
-                for _ in range(n_y):
-                    plan.append((GameAction.ACTION1, None))
-        else:
-            # Generate movement actions from path
-            for i in range(len(path_coords) - 1):
-                curr = path_coords[i]
-                next_pos = path_coords[i + 1]
-                dx = next_pos[0] - curr[0]
-                dy = next_pos[1] - curr[1]
-                if dx > 0:
-                    plan.append((GameAction.ACTION4, None))
-                elif dx < 0:
-                    plan.append((GameAction.ACTION3, None))
-                if dy > 0:
-                    plan.append((GameAction.ACTION2, None))
-                elif dy < 0:
-                    plan.append((GameAction.ACTION1, None))
-
-        # Simulate movement actions for this assignment
-        # Calculate how many actions were just added for this (block, target) pair
-        # = 1 (ACTION6 switch) + len(path steps) or (n_x + n_y direct moves)
-        if path_coords is not None:
-            n_new_actions = 1 + len(path_coords)  # switch + path steps
-        else:
-            # Direct fallback: n_x + n_y moves + 1 switch
-            dx_fb = t_pos[0] - b_pos[0]
-            dy_fb = t_pos[1] - b_pos[1]
-            n_new_actions = 1 + abs(dx_fb) // step_size + abs(dy_fb) // step_size
-        sim_start = len(plan) - n_new_actions
-        for action_tuple in plan[sim_start:]:
-            aid = action_tuple[0]
-            aid_val = aid.value if hasattr(aid, 'value') else aid
-            # Skip ACTION6 (click) — already simulated above
-            if aid_val == 6:
+            if not result:
                 continue
-            ai_move = ActionInput(id=aid_val, data={})
-            _perform_action_safe(sim_game, ai_move)
 
-    # Verify the plan
-    if _is_level_solved(sim_game, original_level):
-        return plan
+            # Check game over (enemy reached goal = lose)
+            if g_copy._state == GameState.GAME_OVER:
+                continue
 
-    # If Hungarian plan didn't solve it, try EML object search
-    try:
-        eml_hg = extract_eml_hypergraph(game)
-        eml_plan = solve_eml_object_search(game, eml_hg, max_depth=40, max_time=15.0)
-        if eml_plan is not None:
-            return eml_plan
-    except Exception:
-        pass
+            action_tuple = (game_action, None)
+            new_path = path + [action_tuple]
+
+            # Check if solved
+            if _is_level_solved(g_copy, original_level):
+                return new_path
+
+            # Dedup by state hash
+            new_hash = _game_state_hash(g_copy)
+            if new_hash in visited:
+                continue
+            visited.add(new_hash)
+
+            # Skip unchanged states (ineffective move)
+            if new_hash == prev_hash:
+                continue
+
+            queue.append((g_copy, new_path, new_hash))
+
+        # ── 2b: Try ACTION6 (switch active target) ──
+        # Need to re-get target positions from current game state
+        # since positions may have changed due to pushes
+        current_targets = _get_sprites_by_tag(g, '0022vrxelxosfy')
+        current_goal_targets = _get_sprites_by_tag(g, '0001uqqokjrptk')
+
+        click_positions: list[tuple[int, int]] = []
+        for ct in current_targets:
+            cpos = _sprite_display_center(g, ct)
+            click_positions.append(cpos)
+        for cgt in current_goal_targets:
+            cgtpos = _sprite_display_center(g, cgt)
+            if cgtpos not in click_positions:
+                click_positions.append(cgtpos)
+
+        for click_pos in click_positions:
+            if len(path) >= max_depth:
+                break
+
+            g_copy = copy.deepcopy(g)
+            ai_click = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
+            result = _perform_action_safe(g_copy, ai_click)
+
+            if not result:
+                continue
+
+            if g_copy._state == GameState.GAME_OVER:
+                continue
+
+            action_tuple = (GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]})
+            new_path = path + [action_tuple]
+
+            if _is_level_solved(g_copy, original_level):
+                return new_path
+
+            new_hash = _game_state_hash(g_copy)
+            if new_hash in visited:
+                continue
+            visited.add(new_hash)
+
+            if new_hash == prev_hash:
+                continue
+
+            queue.append((g_copy, new_path, new_hash))
 
     return None
-
-
 def solve_ka59(game: Any, level_idx: int) -> list | None:
     """Solve KA59: Push blocks to align with target positions.
 
@@ -984,9 +980,8 @@ def solve_ka59(game: Any, level_idx: int) -> list | None:
         - ACTION6: switch active player
         - Win: all blocks adjacent to targets + all 0027jbgxilrocf adjacent to 0001uqqokjrptk
 
-    Strategy (v3.14.0):
-        Primary: Hungarian assignment strategy (optimal block-to-target matching)
-        + EML object-level macro-action search.
+    Strategy (v3.17.0):
+        Primary: Sokoban BFS strategy (push blocks onto targets with enemy avoidance).
         Fallback: κ-Priority Search (κ-PS) with Liu mechanism S_rel formula.
         Last resort: BFS with deepcopy.
     """
@@ -1000,9 +995,8 @@ def solve_ka59(game: Any, level_idx: int) -> list | None:
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Primary (v3.14.0): Hungarian assignment + macro-action strategy ──
-    # Assign blocks to targets via Hungarian algorithm, compute BFS paths,
-    # generate macro-action sequences for each assignment
+    # ── Primary (v3.17.0): Sokoban BFS strategy ──
+    # Push blocks onto targets using BFS with deepcopy simulation
     try:
         hungarian_plan = _solve_ka59_sokoban_strategy(game, original_level)
         if hungarian_plan is not None:
@@ -1836,396 +1830,187 @@ def solve_s5i5(game: Any, level_idx: int) -> list | None:
 
 
 # ============================================================================
-# TN36 Solver: Engine-delegated click game
+# TN36 Solver: Click-based programming game
 # ============================================================================
 
-def _solve_tn36_state_transition_strategy(
+
+def _solve_tn36_click_sequence_strategy(
     game: Any,
     original_level: int,
 ) -> list[tuple] | None:
-    """TN36 state transition graph strategy — deterministic BFS on transition graph.
+    """TN36 click-sequence search — find the right click order to win.
 
-    Based on v3.14.0 article2 §3.3 Liu Mechanism: TN36 has two state machines
-    where each click triggers a deterministic state transition. By simulating
-    all possible click targets from each reachable state, we build a transition
-    graph and search for the shortest path from initial state to goal state.
+    TRUE mechanics (from tn36.py source):
+        - Available actions: [6] — ONLY ACTION6 (click)
+        - Each click activates a sprite program via ytkjoffamq (inner state manager)
+        - miytdaqzei = clickable sprites (kntfjgchzd tag)
+        - mvqheosngn = first sprite (mkfavqnwxy tag, sorted by x)
+        - bzirenxmrg = second sprite (same tag, sorted by x) — the goal-check sprite
+        - When you click a kntfjgchzd sprite → egjahxmvrj(sprite) sets first sprite
+          to that position/rotation/program, then animates it moving
+        - Background ccfrgpdila scrolls left each step
+        - Win: bzirenxmrg.vklyonlcrw becomes True (second sprite reaches some state)
+        - Lose: background scrolled past player (ccfrgpdila.x > player.x + player.width)
 
     Strategy:
-        1. Get all click targets from the game engine.
-        2. Build state transition graph by simulating each click.
-        3. BFS on transition graph for shortest path to goal state.
-        4. Convert click sequence to (GameAction.ACTION6, {x,y}) plan.
+        BFS/DFS over click sequences: try clicking each clickable sprite in order.
+        After each click, simulate the program execution.
+        Check win condition (bzirenxmrg.vklyonlcrw) and lose condition after each click.
+        Use deepcopy of game for simulation.
 
     Args:
         game: The game object (will use deepcopy for simulation).
         original_level: Original level index for solved-check.
 
     Returns:
-        List of (GameAction, data) tuples, or None if strategy fails.
-
-    Self-test:
-        >>> result = _solve_tn36_state_transition_strategy(None, 0)
-        >>> assert result is None  # No game → no plan
+        List of (action, data) tuples, or None if strategy fails.
     """
-    from arcengine import GameAction, ActionInput
+    from arcengine import GameAction, ActionInput, GameState
+    import time
 
     if game is None:
         return None
 
-    # ── Step 1: Get click targets ──
-    click_targets: list[tuple[int, int]] = []
-    seen_targets: set[tuple[int, int]] = set()
-
-    all_valid = _get_valid_action_inputs(game)
-    for ai in all_valid:
-        aid = ai.id if not hasattr(ai.id, 'value') else ai.id.value
-        if aid == 6:
-            data = ai.data if ai.data else {}
-            x = int(data.get('x', 0))
-            y = int(data.get('y', 0))
-            if (x, y) != (0, 0) and (x, y) not in seen_targets:
-                seen_targets.add((x, y))
-                click_targets.append((x, y))
-
-    # Fallback: find click targets by sprite tags
-    if not click_targets:
-        for tag_name in ("Maidxz", "qqifsatqdo", "sys_click"):
+    # ── Step 1: Find clickable sprites (kntfjgchzd tag) ──
+    clickables = _get_sprites_by_tag(game, 'kntfjgchzd')
+    if not clickables:
+        # Fallback tag names
+        for tag_name in ('Maidxz', 'qqifsatqdo', 'sys_click'):
             clickables = _get_sprites_by_tag(game, tag_name)
             if clickables:
-                for sprite in sorted(clickables, key=lambda s: (_sprite_pos(s)[1], _sprite_pos(s)[0])):
-                    pos = _sprite_display_center(game, sprite)
-                    if pos != (0, 0) and pos not in seen_targets:
-                        seen_targets.add(pos)
-                        click_targets.append(pos)
                 break
 
-    if not click_targets:
-        return None
+    if not clickables:
+        # Last fallback: try engine-valid action inputs
+        all_valid = _get_valid_action_inputs(game)
+        click_positions = []
+        seen: set[tuple[int, int]] = set()
+        for ai in all_valid:
+            aid = ai.id if not hasattr(ai.id, 'value') else ai.id.value
+            if aid == 6:
+                data = ai.data if ai.data else {}
+                x = int(data.get('x', 0))
+                y = int(data.get('y', 0))
+                if (x, y) != (0, 0) and (x, y) not in seen:
+                    seen.add((x, y))
+                    click_positions.append((x, y))
+        if not click_positions:
+            return None
+        # Use engine click positions directly
+    else:
+        # Sort clickables by x position (matching the mkfavqnwxy tag sorting)
+        clickables = sorted(clickables, key=lambda s: int(getattr(s, 'x', 0)))
+        click_positions = [_sprite_display_center(game, s) for s in clickables]
 
-    # ── Step 2: Build state transition graph ──
-    transition_graph = _build_state_transition_graph(
-        game, click_targets, max_sim_depth=30,
-    )
+    # ── Step 2: BFS over click sequences ──
+    t0 = time.time()
+    max_time_budget = 30.0
+    max_depth = 30  # Click sequences are typically short
+    max_nodes = 20000
 
-    if not transition_graph:
-        return None
+    initial_hash = _game_state_hash(game)
+    queue: deque[tuple[Any, list[tuple], str]] = deque()
+    queue.append((copy.deepcopy(game), [], initial_hash))
+    visited: set[str] = {initial_hash}
+    total_nodes = 0
 
-    # ── Step 3: BFS for shortest path ──
-    initial_hash = _tn36_internal_state_hash(game)
+    while queue:
+        if time.time() - t0 > max_time_budget:
+            break
+        if total_nodes > max_nodes:
+            break
 
-    # Goal check: use _is_level_solved to verify win condition
-    # Also check "no outgoing transitions" as a fallback (some solved states
-    # may have no transitions because the game is complete)
-    def goal_check(state_hash: str) -> bool:
-        # Primary: check if state is explicitly solved (has WIN state or level advance)
-        # We check via the transition graph — states with level advance transitions
-        for _, click_pos in transition_graph.get(state_hash, []):
-            # Simulate the click to check if it solves the level
-            g_check = copy.deepcopy(game)
-            ai_check = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
-            _perform_action_safe(g_check, ai_check)
-            if _is_level_solved(g_check, original_level):
-                return True
-        # Fallback: terminal state (no outgoing transitions) may be goal
-        return state_hash not in transition_graph
+        g, path, prev_hash = queue.popleft()
+        total_nodes += 1
 
-    shortest_click_path = _find_shortest_path_in_transition_graph(
-        transition_graph, initial_hash, goal_check,
-    )
+        # Get current click targets — may change after each click
+        # Use engine-valid action inputs for reliability
+        current_clicks: list[tuple[int, int]] = []
+        current_seen: set[tuple[int, int]] = set()
 
-    if shortest_click_path is None:
-        # Try longer BFS with more permissive goal check
-        # Re-build with deeper simulation
-        transition_graph2 = _build_state_transition_graph(
-            game, click_targets, max_sim_depth=50,
-        )
-        shortest_click_path = _find_shortest_path_in_transition_graph(
-            transition_graph2, initial_hash, goal_check,
-        )
+        # Try engine-valid inputs first
+        try:
+            for ai_out in _get_valid_action_inputs(g):
+                aid_out = ai_out.id if not hasattr(ai_out.id, 'value') else ai_out.id.value
+                if aid_out == 6:
+                    data_out = ai_out.data if ai_out.data else {}
+                    x_out = int(data_out.get('x', 0))
+                    y_out = int(data_out.get('y', 0))
+                    if (x_out, y_out) != (0, 0) and (x_out, y_out) not in current_seen:
+                        current_seen.add((x_out, y_out))
+                        current_clicks.append((x_out, y_out))
+        except Exception:
+            pass
 
-    if shortest_click_path is None:
-        return None
+        # Fallback to sprite-based click positions
+        if not current_clicks:
+            current_clickables = _get_sprites_by_tag(g, 'kntfjgchzd')
+            if not current_clickables:
+                for tag_name in ('Maidxz', 'qqifsatqdo', 'sys_click'):
+                    current_clickables = _get_sprites_by_tag(g, tag_name)
+                    if current_clickables:
+                        break
+            if current_clickables:
+                for s in sorted(current_clickables, key=lambda s: int(getattr(s, 'x', 0))):
+                    pos = _sprite_display_center(g, s)
+                    if pos not in current_seen:
+                        current_seen.add(pos)
+                        current_clicks.append(pos)
+            else:
+                # Use initial click positions as fallback
+                current_clicks = click_positions
 
-    # ── Step 4: Convert to action plan ──
-    plan: list[tuple] = []
-    sim_game = copy.deepcopy(game)
+        for click_pos in current_clicks:
+            if len(path) >= max_depth:
+                break
 
-    for click_pos in shortest_click_path:
-        plan.append((GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]}))
-        ai = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
-        _perform_action_safe(sim_game, ai)
+            g_copy = copy.deepcopy(g)
+            ai_click = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
+            result = _perform_action_safe(g_copy, ai_click)
 
-    # Verify
-    if _is_level_solved(sim_game, original_level):
-        return plan
+            if not result:
+                continue
 
-    # If not solved, try EML object-level search
-    try:
-        eml_hg = extract_eml_hypergraph(game)
-        eml_plan = solve_eml_object_search(game, eml_hg, max_depth=30, max_time=15.0)
-        if eml_plan is not None:
-            return eml_plan
-    except Exception:
-        pass
+            # Check lose condition (background scrolled past player)
+            try:
+                if g_copy._state == GameState.GAME_OVER:
+                    continue
+            except Exception:
+                pass
+
+            action_tuple = (GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]})
+            new_path = path + [action_tuple]
+
+            # Check if solved
+            if _is_level_solved(g_copy, original_level):
+                return new_path
+
+            # Also check the TN36-specific win condition directly
+            # bzirenxmrg.vklyonlcrw == True
+            try:
+                fdksqlmpki = getattr(g_copy, 'fdksqlmpki', None)
+                if fdksqlmpki is not None:
+                    bzirenxmrg = getattr(fdksqlmpki, 'bzirenxmrg', None)
+                    if bzirenxmrg is not None:
+                        vklyonlcrw = getattr(bzirenxmrg, 'vklyonlcrw', None)
+                        if vklyonlcrw is True or vklyonlcrw == 1:
+                            return new_path
+            except Exception:
+                pass
+
+            # Dedup by state hash
+            new_hash = _game_state_hash(g_copy)
+            if new_hash in visited:
+                continue
+            visited.add(new_hash)
+
+            # Skip unchanged states (ineffective click)
+            if new_hash == prev_hash:
+                continue
+
+            queue.append((g_copy, new_path, new_hash))
 
     return None
-
-
-def _tn36_internal_state_hash(game: Any) -> str:
-    """TN36-specific state hash — version-robust with duck-typing.
-
-    The win condition checks:
-        htntnzkbzu.x == aqszntqeae.x AND htntnzkbzu.y == aqszntqeae.y
-        AND htntnzkbzu.scale == aqszntqeae.scale AND htntnzkbzu.rotation == aqszntqeae.rotation
-        AND htntnzkbzu.sjmtdfxdrc == aqszntqeae.sjmtdfxdrc
-
-    Uses _try_attrs() to try multiple attribute name variants, handling
-    potential dataset version mismatches (tn36-ef4dde99 vs tn36-ab4f63cc).
-    """
-    import hashlib
-
-    def _try_attrs(obj, *names, default="0"):
-        """Try multiple attribute names in order, return first found or default."""
-        if obj is None:
-            return default
-        for name in names:
-            val = getattr(obj, name, None)
-            if val is not None:
-                return val
-        return default
-
-    def _get_color(obj):
-        """Extract color value with multiple fallback paths."""
-        if obj is None:
-            return 0
-        # Try direct color attribute names (multiple variants for version robustness)
-        for name in ("ubescnrjpf", "sjmtdfxdrc", "color", "vklyonlcrw"):
-            val = getattr(obj, name, None)
-            if val is not None:
-                try:
-                    return int(val)
-                except (ValueError, TypeError):
-                    return val
-        # Try pixel-based extraction (multiple pixel grid attribute names)
-        for pix_name in ("axbjgpzkyi", "pixels", "grid"):
-            pix = getattr(obj, pix_name, None)
-            if pix is not None:
-                try:
-                    if hasattr(pix, '__getitem__'):
-                        return int(pix[1, 1])
-                    # Try nested .pixels attribute
-                    inner_pix = getattr(pix, 'pixels', None)
-                    if inner_pix is not None and hasattr(inner_pix, '__getitem__'):
-                        return int(inner_pix[1, 1])
-                except Exception:
-                    pass
-        return 0
-
-    # Find the main state container - try multiple names
-    fdksqlmpki = _try_attrs(game, "fdksqlmpki", "dimsufvezo", None)
-    if fdksqlmpki is None:
-        # Fallback: use general game state hash
-        return _game_state_hash(game)
-
-    parts = []
-
-    # Program index and step counter
-    jwmpcflifn = _try_attrs(fdksqlmpki, "jwmpcflifn", "program_index", "prog_idx", 0)
-    parts.append(f"prog:{jwmpcflifn}")
-
-    # Timer state - try multiple names
-    timer_obj = _try_attrs(game, "lmkazecqdh", "timer", None)
-    if timer_obj is not None:
-        timer_val = _try_attrs(timer_obj, "lmkazecqdh", "value", "step_count", 0)
-        parts.append(f"step:{timer_val}")
-
-    # Animation queue state - try multiple names
-    anim = _try_attrs(fdksqlmpki, "pxbksnibsu", "animation_queue", "anim_queue", [])
-    anim_len = len(anim) if hasattr(anim, '__len__') else 0
-    parts.append(f"anim:{anim_len}")
-
-    # bzirenxmrg (the one that must be solved for win)
-    bzirenxmrg = _try_attrs(fdksqlmpki, "bzirenxmrg", "state_machine_right", "sm_right", None)
-    if bzirenxmrg is not None:
-        htntnzkbzu = _try_attrs(bzirenxmrg, "htntnzkbzu", "current_selection", "cur_sel", None)
-        if htntnzkbzu is not None:
-            x = _try_attrs(htntnzkbzu, "x", 0)
-            y = _try_attrs(htntnzkbzu, "y", 0)
-            parts.append(f"cur_sel:x={x},y={y}")
-            scale = _try_attrs(htntnzkbzu, "sjqqopsqvr", "scale", "qsvr", 1)
-            parts.append(f"cur_sel:scale={scale}")
-            rot = _try_attrs(htntnzkbzu, "daiyaakser", "rotation", "rotation_deg", 0)
-            parts.append(f"cur_sel:rot={rot}")
-            color = _get_color(htntnzkbzu)
-            parts.append(f"cur_sel:color={color}")
-            vis = _try_attrs(htntnzkbzu, "byqkqlmkfo", "is_visible", "visible", True)
-            parts.append(f"cur_sel:vis={vis}")
-            timer = _try_attrs(htntnzkbzu, "xfbffsrbdz", "timer", "anim_timer", 0)
-            parts.append(f"cur_sel:timer={timer}")
-
-        aqszntqeae = _try_attrs(bzirenxmrg, "aqszntqeae", "target", "tgt", None)
-        if aqszntqeae is not None:
-            x = _try_attrs(aqszntqeae, "x", 0)
-            y = _try_attrs(aqszntqeae, "y", 0)
-            parts.append(f"target:x={x},y={y}")
-            scale = _try_attrs(aqszntqeae, "scale", "sjqqopsqvr", 1)
-            parts.append(f"target:scale={scale}")
-            rot = _try_attrs(aqszntqeae, "rotation", "daiyaakser", 0)
-            parts.append(f"target:rot={rot}")
-            color = _get_color(aqszntqeae)
-            parts.append(f"target:color={color}")
-            vis = _try_attrs(aqszntqeae, "is_visible", "byqkqlmkfo", True)
-            parts.append(f"target:vis={vis}")
-
-        # Control panel state - try multiple name variants
-        ctrl_prog = _try_attrs(bzirenxmrg, "fsdcrzcexp", "program", "prog_list", [])
-        ctrl_step = _try_attrs(bzirenxmrg, "oocupkguhu", "prog_step", "step", 0)
-        ctrl_len = len(ctrl_prog) if hasattr(ctrl_prog, '__len__') else 0
-        parts.append(f"ctrl:prog_len={ctrl_len},step={ctrl_step}")
-
-        # Saved initial state - try multiple name variants
-        saved_x = _try_attrs(bzirenxmrg, "fwrnsvyvrz", "saved_x", "init_x", 0)
-        saved_y = _try_attrs(bzirenxmrg, "bmhxacplut", "saved_y", "init_y", 0)
-        saved_rot = _try_attrs(bzirenxmrg, "qixyeojolu", "saved_rot", "init_rot", 0)
-        saved_scale = _try_attrs(bzirenxmrg, "fpofcohbab", "saved_scale", "init_scale", 1)
-        saved_color = _try_attrs(bzirenxmrg, "nzmblccilq", "saved_color", "init_color", 0)
-        parts.append(f"saved:x={saved_x},y={saved_y}")
-        parts.append(f"saved:rot={saved_rot},scale={saved_scale}")
-        parts.append(f"saved:color={saved_color}")
-
-    # mvqheosngn (first state machine - also needs tracking)
-    mvqheosngn = _try_attrs(fdksqlmpki, "mvqheosngn", "state_machine_left", "sm_left", None)
-    if mvqheosngn is not None:
-        htnt = _try_attrs(mvqheosngn, "htntnzkbzu", "current_selection", "cur_sel", None)
-        if htnt is not None:
-            x = _try_attrs(htnt, "x", 0)
-            y = _try_attrs(htnt, "y", 0)
-            parts.append(f"mv_sel:x={x},y={y}")
-            scale = _try_attrs(htnt, "sjqqopsqvr", "scale", 1)
-            parts.append(f"mv_sel:scale={scale}")
-            rot = _try_attrs(htnt, "daiyaakser", "rotation", 0)
-            parts.append(f"mv_sel:rot={rot}")
-            color = _get_color(htnt)
-            parts.append(f"mv_sel:color={color}")
-            vis = _try_attrs(htnt, "byqkqlmkfo", "is_visible", True)
-            parts.append(f"mv_sel:vis={vis}")
-            timer = _try_attrs(htnt, "xfbffsrbdz", "timer", 0)
-            parts.append(f"mv_sel:timer={timer}")
-
-        aqs = _try_attrs(mvqheosngn, "aqszntqeae", "target", "tgt", None)
-        if aqs is not None:
-            x = _try_attrs(aqs, "x", 0)
-            y = _try_attrs(aqs, "y", 0)
-            parts.append(f"mv_tgt:x={x},y={y}")
-            scale = _try_attrs(aqs, "scale", "sjqqopsqvr", 1)
-            parts.append(f"mv_tgt:scale={scale}")
-            rot = _try_attrs(aqs, "rotation", "daiyaakser", 0)
-            parts.append(f"mv_tgt:rot={rot}")
-            color = _get_color(aqs)
-            parts.append(f"mv_tgt:color={color}")
-
-        mv_step = _try_attrs(mvqheosngn, "oocupkguhu", "prog_step", 0)
-        parts.append(f"mv_ctrl:prog_step={mv_step}")
-        mv_saved_x = _try_attrs(mvqheosngn, "fwrnsvyvrz", "saved_x", 0)
-        mv_saved_y = _try_attrs(mvqheosngn, "bmhxacplut", "saved_y", 0)
-        parts.append(f"mv_saved:x={mv_saved_x},y={mv_saved_y}")
-
-    # Program progress - try multiple name variants
-    phmchnuhkr = _try_attrs(fdksqlmpki, "phmchnuhkr", "prog_progress", "progress", [])
-    if phmchnuhkr and hasattr(phmchnuhkr, '__len__') and len(phmchnuhkr) > 0:
-        prog_str = "|".join(str(p) for p in phmchnuhkr)
-        parts.append(f"prog_progress:{hashlib.md5(prog_str.encode()).hexdigest()[:8]}")
-
-    return hashlib.md5("|".join(parts).encode()).hexdigest()
-
-
-def _tn36_progress_score(game: Any) -> int:
-    """Score tn36 state by distance to win condition.
-
-    Lower score = closer to solved. 0 = solved.
-    Version-robust: uses duck-typing for attribute names.
-    """
-    def _try_attrs(obj, *names, default=0):
-        """Try multiple attribute names in order."""
-        if obj is None:
-            return default
-        for name in names:
-            val = getattr(obj, name, None)
-            if val is not None:
-                try:
-                    return float(val)
-                except (ValueError, TypeError):
-                    return val
-        return default
-
-    def _get_color(obj):
-        """Extract color value with multiple fallback paths."""
-        if obj is None:
-            return 0
-        for name in ("ubescnrjpf", "sjmtdfxdrc", "color", "vklyonlcrw"):
-            val = getattr(obj, name, None)
-            if val is not None:
-                try:
-                    return int(val)
-                except (ValueError, TypeError):
-                    return 0
-        for pix_name in ("axbjgpzkyi", "pixels", "grid"):
-            pix = getattr(obj, pix_name, None)
-            if pix is not None:
-                try:
-                    if hasattr(pix, '__getitem__'):
-                        return int(pix[1, 1])
-                    inner = getattr(pix, 'pixels', None)
-                    if inner is not None and hasattr(inner, '__getitem__'):
-                        return int(inner[1, 1])
-                except Exception:
-                    pass
-        return 0
-
-    fdksqlmpki = _try_attrs(game, "fdksqlmpki", "dimsufvezo", None)
-    if fdksqlmpki is None:
-        return 100
-
-    bzirenxmrg = _try_attrs(fdksqlmpki, "bzirenxmrg", "state_machine_right", "sm_right", None)
-    if bzirenxmrg is None:
-        return 100
-
-    htntnzkbzu = _try_attrs(bzirenxmrg, "htntnzkbzu", "current_selection", "cur_sel", None)
-    aqszntqeae = _try_attrs(bzirenxmrg, "aqszntqeae", "target", "tgt", None)
-
-    if htntnzkbzu is None or aqszntqeae is None:
-        return 100
-
-    # Win condition: x, y, scale, rotation, sjmtdfxdrc all match
-    score = 0
-    cur_x = _try_attrs(htntnzkbzu, 'x', 0)
-    cur_y = _try_attrs(htntnzkbzu, 'y', 0)
-    tgt_x = _try_attrs(aqszntqeae, 'x', 0)
-    tgt_y = _try_attrs(aqszntqeae, 'y', 0)
-    score += abs(int(cur_x) - int(tgt_x)) + abs(int(cur_y) - int(tgt_y))
-
-    cur_scale = _try_attrs(htntnzkbzu, 'sjqqopsqvr', 'scale', 'qsvr', 1)
-    tgt_scale = _try_attrs(aqszntqeae, 'scale', 'sjqqopsqvr', 1)
-    score += abs(int(cur_scale) - int(tgt_scale)) * 10
-
-    cur_rot = _try_attrs(htntnzkbzu, 'daiyaakser', 'rotation', 'rotation_deg', 0)
-    tgt_rot = _try_attrs(aqszntqeae, 'rotation', 'daiyaakser', 0)
-    rot_diff = min(abs(int(cur_rot) - int(tgt_rot)), 360 - abs(int(cur_rot) - int(tgt_rot)))
-    score += rot_diff // 90 * 5
-
-    cur_color = _get_color(htntnzkbzu)
-    tgt_color = _get_color(aqszntqeae)
-    if cur_color != tgt_color:
-        score += 20
-
-    # Visible penalty
-    vis = _try_attrs(htntnzkbzu, 'byqkqlmkfo', 'is_visible', 'visible', True)
-    if not vis:
-        score += 50
-
-    return score
-
-
 def solve_tn36(game: Any, level_idx: int) -> list | None:
     """Solve TN36: Multi-state animation click game.
 
@@ -2235,9 +2020,8 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
         - Each has htntnzkbzu (current selection) and aqszntqeae (target)
         - Win: bzirenxmrg.htntnzkbzu matches aqszntqeae in x,y,scale,rotation,color
 
-    Strategy (v3.14.0):
-        Primary: State transition graph strategy — simulate all click targets,
-        build deterministic transition graph, BFS for shortest path to goal.
+    Strategy (v3.17.0):
+        Primary: Click-sequence search — BFS over click sequences with deepcopy simulation.
         Fallback: κ-Priority Search (κ-PS) with Liu mechanism S_rel formula.
         Last resort: Best-first search using deepcopy for each node.
     """
@@ -2252,10 +2036,10 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Primary (v3.14.0): State transition graph strategy ──
-    # Build transition graph from click simulations, BFS shortest path
+    # ── Primary (v3.17.0): Click-sequence search strategy ──
+    # BFS over click sequences with deepcopy simulation
     try:
-        stg_plan = _solve_tn36_state_transition_strategy(game, original_level)
+        stg_plan = _solve_tn36_click_sequence_strategy(game, original_level)
         if stg_plan is not None:
             return stg_plan
     except Exception:
@@ -2681,141 +2465,243 @@ def solve_re86(game: Any, level_idx: int) -> list | None:
 
 
 # ============================================================================
-# AR25 Solver: Mirror reflection
+# AR25 Solver: Mirror reflection coverage puzzle
 # ============================================================================
 
-def _solve_ar25_mirror_strategy(
+
+def _solve_ar25_coverage_strategy(
     game: Any,
     original_level: int,
 ) -> list[tuple] | None:
-    """AR25 mirror mapping strategy — compute reflection + generate REFLECT macros.
+    """AR25 mirror-reflection coverage BFS — cover all coins with pieces + reflections.
 
-    Based on v3.14.0 article1 §3.1 EML超图折叠: extracts source sprites
-    and target positions from the game, computes mirror mapping (which
-    mirror axis maps each sprite to its target), and generates REFLECT
-    macro-actions that move each sprite to its reflected position.
+    TRUE mechanics (from ar25.py source):
+        - Win: all 0001sruqbuvukh (coins, 1x1 pixel color 11) have non-negative value
+          in merged grid naxbskjmlg() — every coin must be covered by a piece OR its reflection
+        - Mirror axes: 0054kgxrvfihgm (vertical mirror, reflects x: 2*mirror_x - x)
+          and 0002nuguepuujf (horizontal mirror, reflects y: 2*mirror_y - y)
+        - Movement: player yvifanjrcyu moves with ACTION1-4, but:
+          * If player has 0054kgxrvfihgm tag → can only move UP/DOWN
+          * If player has 0002nuguepuujf tag → can only move LEFT/RIGHT
+          * Regular pieces move all 4 directions
+        - Pieces with 0003uqrdzdofso tag get reflected through mirror axes
+        - Pieces crossing a mirror axis rotate 90 degrees (np.rot90)
+        - ACTION5: cycle through movable pieces (skip 0056icpryeujyf fixed)
+        - ACTION6: click to select piece at grid position
+        - ACTION7: undo last move
+        - StepCounter: limited steps per level (64, 128, 320)
 
     Strategy:
-        1. Extract sprites, targets, mirrors from game tags.
-        2. Compute mirror mapping via _mirror_mapping().
-        3. For each mapping, generate pixel-level action sequence to
-           move sprite to reflected target position.
-        4. Verify plan via simulation.
+        BFS over game states using deepcopy for simulation.
+        State = (active_piece, piece_positions).
+        Actions: move active piece (constrained by mirror type),
+                 switch active piece (ACTION5/6), undo (ACTION7).
+        Goal: all coins covered (naxbskjmlg() has all coins ≥ 0).
 
     Args:
         game: The game object (will use deepcopy for simulation).
         original_level: Original level index for solved-check.
 
     Returns:
-        List of (GameAction, data) tuples, or None if strategy fails.
-
-    Self-test:
-        >>> result = _solve_ar25_mirror_strategy(None, 0)
-        >>> assert result is None  # No game → no plan
+        List of (action, data) tuples, or None if strategy fails.
     """
-    from arcengine import GameAction, ActionInput
+    from arcengine import GameAction, ActionInput, GameState
+    import time
 
     if game is None:
         return None
 
-    # ── Step 1: Extract sprites, targets, mirrors ──
-    sprites = _get_sprites_by_tag(game, '0006lxjtqggkmi')
-    if not sprites:
-        sprites = _get_sprites_by_tag(game, 'sys_click')
-    if not sprites:
-        sprites = _get_sprites_by_tag(game, 'movable')
-    if not sprites:
-        # Fallback: use all sprites except targets and mirrors
-        all_sprites = _get_all_sprites(game)
-        targets = _get_sprites_by_tag(game, '0001sruqbuvukh')
-        mirrors = _get_sprites_by_tag(game, '0003uqrdzdofso')
-        exclude = set(id(t) for t in targets) | set(id(m) for m in mirrors)
-        sprites = [s for s in all_sprites if id(s) not in exclude]
+    # ── Step 1: Identify game entities from sprites ──
+    coins = _get_sprites_by_tag(game, '0001sruqbuvukh')
+    movable_pieces = _get_sprites_by_tag(game, '0006lxjtqggkmi')
+    mirror_sprites = _get_sprites_by_tag(game, '0003uqrdzdofso')
+    fixed_pieces = _get_sprites_by_tag(game, '0056icpryeujyf')
 
-    targets = _get_sprites_by_tag(game, '0001sruqbuvukh')
-    if not targets:
-        targets = _get_sprites_by_tag(game, 'target')
-    if not targets:
+    if not coins:
+        # Fallback tag names for coins
+        coins = _get_sprites_by_tag(game, 'target')
+
+    if not movable_pieces:
+        # Fallback tag names
+        for tag in ('sys_click', 'movable'):
+            movable_pieces = _get_sprites_by_tag(game, tag)
+            if movable_pieces:
+                break
+
+    if not coins or not movable_pieces:
         return None
 
-    mirrors = _get_sprites_by_tag(game, '0003uqrdzdofso')
-    if not mirrors:
-        mirrors = _get_sprites_by_tag(game, 'mirror')
+    # Find mirror axis positions
+    v_mirror_x: float | None = None  # Vertical mirror x coordinate
+    h_mirror_y: float | None = None  # Horizontal mirror y coordinate
 
-    # ── Step 2: Compute mirror mapping ──
-    sprite_tuples = [
-        (int(getattr(s, 'x', 0)), int(getattr(s, 'y', 0)),
-         int(getattr(s, 'width', 1)), int(getattr(s, 'height', 1)))
-        for s in sprites
-    ]
-    target_tuples = [
-        (int(getattr(t, 'x', 0)), int(getattr(t, 'y', 0)),
-         int(getattr(t, 'width', 1)), int(getattr(t, 'height', 1)))
-        for t in targets
-    ]
-    mirror_tuples = [
-        (int(getattr(m, 'x', 0)), int(getattr(m, 'y', 0)),
-         int(getattr(m, 'width', 1)), int(getattr(m, 'height', 1)))
-        for m in mirrors
-    ] if mirrors else []
+    v_mirror_sprites = _get_sprites_by_tag(game, '0054kgxrvfihgm')
+    h_mirror_sprites = _get_sprites_by_tag(game, '0002nuguepuujf')
 
-    mappings = _mirror_mapping(sprite_tuples, target_tuples, mirror_tuples)
-    if not mappings:
-        # Try EML object-level search as backup
-        try:
-            eml_hg = extract_eml_hypergraph(game)
-            eml_plan = solve_eml_object_search(game, eml_hg, max_depth=60, max_time=15.0)
-            if eml_plan is not None:
-                return eml_plan
-        except Exception:
-            pass
-        return None
+    if v_mirror_sprites:
+        v_mirror_x = int(getattr(v_mirror_sprites[0], 'x', 0)) + int(getattr(v_mirror_sprites[0], 'width', 0)) // 2
+    if h_mirror_sprites:
+        h_mirror_y = int(getattr(h_mirror_sprites[0], 'y', 0)) + int(getattr(h_mirror_sprites[0], 'height', 0)) // 2
 
-    # ── Step 3: Generate macro-action plan ──
-    step_size = getattr(game, '_step_size', 1)
-    if step_size <= 0:
-        step_size = 1
+    # ── Step 2: BFS search using game deepcopy simulation ──
+    t0 = time.time()
+    max_time_budget = 30.0
+    max_depth = 320  # Max steps per level
+    max_nodes = 80000
 
-    plan: list[tuple] = []
-    sim_game = copy.deepcopy(game)
+    initial_hash = _game_state_hash(game)
+    queue: deque[tuple[Any, list[tuple], str]] = deque()
+    queue.append((copy.deepcopy(game), [], initial_hash))
+    visited: set[str] = {initial_hash}
+    total_nodes = 0
 
-    for sprite_idx, axis, target_pos in mappings:
-        sprite = sprites[sprite_idx]
+    # Build action set for AR25: [1=UP, 2=DOWN, 3=LEFT, 4=RIGHT, 5=SWITCH, 6=CLICK, 7=UNDO]
+    # Determine movement constraints for current active piece
+    move_actions_map = {
+        'all': [
+            (GameAction.ACTION1, {}),   # UP
+            (GameAction.ACTION2, {}),   # DOWN
+            (GameAction.ACTION3, {}),   # LEFT
+            (GameAction.ACTION4, {}),   # RIGHT
+        ],
+        'vertical_only': [
+            (GameAction.ACTION1, {}),   # UP
+            (GameAction.ACTION2, {}),   # DOWN
+        ],
+        'horizontal_only': [
+            (GameAction.ACTION3, {}),   # LEFT
+            (GameAction.ACTION4, {}),   # RIGHT
+        ],
+    }
 
-        # Switch to sprite (ACTION5)
-        plan.append((GameAction.ACTION5, None))
-        ai_switch = ActionInput(id=5, data={})
-        _perform_action_safe(sim_game, ai_switch)
+    while queue:
+        if time.time() - t0 > max_time_budget:
+            break
+        if total_nodes > max_nodes:
+            break
 
-        # Click sprite to select it
-        click_pos = _sprite_display_center(sim_game, sprite)
-        plan.append((GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]}))
-        ai_click = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
-        _perform_action_safe(sim_game, ai_click)
+        g, path, prev_hash = queue.popleft()
+        total_nodes += 1
 
-        # Move sprite to reflected target position
-        move_actions = _generate_move_pixel_actions(
-            sim_game, sprite, target_pos[0], target_pos[1], step_size,
-        )
-        plan.extend(move_actions)
-
-        # Simulate movement
-        for action_tuple in move_actions:
-            aid = action_tuple[0]
-            aid_val = aid.value if hasattr(aid, 'value') else aid
-            if aid_val == 6 and action_tuple[1] is not None:
-                ai_move = ActionInput(id=aid_val, data=action_tuple[1])
+        # ── 2a: Determine movement constraints for active piece ──
+        # Check which tags the current active piece (yvifanjrcyu) has
+        active_piece = getattr(g, 'yvifanjrcyu', None)
+        if active_piece is not None:
+            active_tags = getattr(active_piece, 'tags', [])
+            if '0054kgxrvfihgm' in active_tags:
+                move_key = 'vertical_only'
+            elif '0002nuguepuujf' in active_tags:
+                move_key = 'horizontal_only'
             else:
-                ai_move = ActionInput(id=aid_val, data={})
-            _perform_action_safe(sim_game, ai_move)
+                move_key = 'all'
+        else:
+            move_key = 'all'
 
-    # Verify the plan
-    if _is_level_solved(sim_game, original_level):
-        return plan
+        current_moves = move_actions_map[move_key]
+
+        # ── 2b: Try movement actions ──
+        for game_action, action_data in current_moves:
+            if len(path) >= max_depth:
+                break
+
+            g_copy = copy.deepcopy(g)
+            ai_move = ActionInput(id=game_action, data=action_data)
+            result = _perform_action_safe(g_copy, ai_move)
+
+            if not result:
+                continue
+
+            try:
+                if g_copy._state == GameState.GAME_OVER:
+                    continue
+            except Exception:
+                pass
+
+            action_tuple = (game_action, None)
+            new_path = path + [action_tuple]
+
+            if _is_level_solved(g_copy, original_level):
+                return new_path
+
+            new_hash = _game_state_hash(g_copy)
+            if new_hash in visited:
+                continue
+            visited.add(new_hash)
+
+            if new_hash == prev_hash:
+                continue
+
+            queue.append((g_copy, new_path, new_hash))
+
+        # ── 2c: Try ACTION5 (cycle through movable pieces) ──
+        if len(path) < max_depth:
+            g_copy = copy.deepcopy(g)
+            ai_switch = ActionInput(id=5, data={})
+            result = _perform_action_safe(g_copy, ai_switch)
+
+            if result:
+                try:
+                    if g_copy._state == GameState.GAME_OVER:
+                        result = False
+                except Exception:
+                    pass
+
+            if result:
+                action_tuple = (GameAction.ACTION5, None)
+                new_path = path + [action_tuple]
+
+                if _is_level_solved(g_copy, original_level):
+                    return new_path
+
+                new_hash = _game_state_hash(g_copy)
+                if new_hash not in visited and new_hash != prev_hash:
+                    visited.add(new_hash)
+                    queue.append((g_copy, new_path, new_hash))
+
+        # ── 2d: Try ACTION6 (click to select piece) ──
+        # Get clickable piece positions from current game state
+        current_movable = _get_sprites_by_tag(g, '0006lxjtqggkmi')
+        if not current_movable:
+            for tag in ('sys_click', 'movable'):
+                current_movable = _get_sprites_by_tag(g, tag)
+                if current_movable:
+                    break
+
+        for piece in (current_movable or []):
+            if len(path) >= max_depth:
+                break
+
+            click_pos = _sprite_display_center(g, piece)
+            g_copy = copy.deepcopy(g)
+            ai_click = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
+            result = _perform_action_safe(g_copy, ai_click)
+
+            if not result:
+                continue
+
+            try:
+                if g_copy._state == GameState.GAME_OVER:
+                    continue
+            except Exception:
+                pass
+
+            action_tuple = (GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]})
+            new_path = path + [action_tuple]
+
+            if _is_level_solved(g_copy, original_level):
+                return new_path
+
+            new_hash = _game_state_hash(g_copy)
+            if new_hash in visited:
+                continue
+            visited.add(new_hash)
+
+            if new_hash == prev_hash:
+                continue
+
+            queue.append((g_copy, new_path, new_hash))
 
     return None
-
-
 def solve_ar25(game: Any, level_idx: int) -> list | None:
     """Solve AR25: Move sprites with mirrors for symmetric pattern using BFS.
 
@@ -2829,9 +2715,8 @@ def solve_ar25(game: Any, level_idx: int) -> list | None:
         - ACTION7: undo
         - Win: all target positions covered by reflection
 
-    Strategy (v3.14.0):
-        Primary: Mirror mapping strategy (compute reflection mapping from
-        EML hypergraph, generate REFLECT macro-actions for each sprite).
+    Strategy (v3.17.0):
+        Primary: Mirror-reflection coverage BFS (cover all coins with pieces + reflections).
         Fallback: κ-Priority Search (κ-PS) with Liu mechanism S_rel formula.
         Last resort: BFS with deepcopy.
     """
@@ -2845,10 +2730,10 @@ def solve_ar25(game: Any, level_idx: int) -> list | None:
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Primary (v3.14.0): Mirror mapping strategy ──
-    # Compute mirror reflection mapping + generate REFLECT macro-actions
+    # ── Primary (v3.17.0): Mirror-reflection coverage BFS ──
+    # Cover all coins with pieces + their reflections
     try:
-        mirror_plan = _solve_ar25_mirror_strategy(game, original_level)
+        mirror_plan = _solve_ar25_coverage_strategy(game, original_level)
         if mirror_plan is not None:
             return mirror_plan
     except Exception:
