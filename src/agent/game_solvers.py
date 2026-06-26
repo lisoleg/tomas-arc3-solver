@@ -4831,6 +4831,29 @@ def solve_game(
     except Exception:
         pass
 
+    # ═══════════════════════════════════════════════════════════════════
+    # v3.8.0 — Thinker-Performer Pipeline (Wan-Streamer dual-track)
+    # ═══════════════════════════════════════════════════════════════════
+    # Thinker runs fast perception (topo + complexity + KV-cache)
+    # Performer uses Thinker's cached state for deep search
+    thinker_performer_pipeline = None
+    try:
+        from .tomas_learner import ThinkerPerformerPipeline
+        thinker_performer_pipeline = ThinkerPerformerPipeline()
+        thinker_result = thinker_performer_pipeline.think_phase(
+            grid=grid_for_classify,
+            game_state=game_state_for_classify,
+            game_id=base_id,
+        )
+        # Override phys_pruner with Thinker's result (same object, but now KV-cached)
+        if thinker_result.get("phys_pruner"):
+            phys_pruner = thinker_result["phys_pruner"]
+        # Override complexity with Thinker's result
+        if thinker_result.get("complexity"):
+            task_complexity = thinker_result["complexity"]
+    except Exception:
+        pass  # Fallback to v3.7.0 behavior
+
     # Determine phase strategy from complexity class
     complexity_class = task_complexity.get("complexity_class", "NP_C_likely") if task_complexity else "NP_C_likely"
     skip_search_phases = complexity_class in ("P", "NP_C_likely")  # Skip BFS/Beam/DFS for easy tasks
@@ -4852,6 +4875,19 @@ def solve_game(
         beam_time = 5.0
         idfs_time = 6.0
         idfs_depths = [4, 6, 10, 15]
+
+    # v3.8.0 — Topology-Invariant-Guided κ-Snap Beam Ranking (CHL isomorphism)
+    topo_invariant_score = 0.5
+    if thinker_performer_pipeline is not None:
+        try:
+            topo_invariant_score = thinker_performer_pipeline._kv_cache.get_topology_invariant_score()
+        except Exception:
+            pass
+    # Use topo_invariant_score to weight beam search depth
+    if topo_invariant_score > 0.7:
+        beam_w = min(beam_w + 4, 24)  # High topology stability → wider beam
+    elif topo_invariant_score < 0.3:
+        beam_w = max(beam_w - 4, 8)   # Low topology stability → narrower beam (more careful)
 
     # Phase -1: ARC3 Replay Oracle (human-optimal sequences from arc3.games)
     # This is the highest-RHAE approach: precomputed shortest solutions.

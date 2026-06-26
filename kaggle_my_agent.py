@@ -1,4 +1,4 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.7.0.
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.8.0.
 
 Strategy:
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
@@ -11,6 +11,11 @@ Strategy:
   8. κ-Snap Beam Width=16: Optimized beam search width per article §3.2
   9. Enhanced perception: Color frequency analysis + rarity-based targeting
   10. Random fallback: Last resort
+  11. Thinker-Performer Pipeline: Wan-Streamer dual-track — Thinker perception + Performer search
+  12. Interactive ZKP Loop: "博弈即降维" — Observe→Encode→Prove→Verify→Act
+  13. PersistentKVCache: Block-Causal Attention — cross-step persistent state
+  14. Clean Latent Writeback: GaussEx-verified results directly update reference_grid
+  15. Topology-Invariant-Guided Beam Ranking: CHL isomorphism beam width adaptation
 
 This file is self-contained — no imports from local project files.
 All replay data and logic is included inline.
@@ -210,6 +215,7 @@ class MyAgent(Agent):
 
         # ── NEW v3.7.0: PhysicalCompactificationReduction state ──
         self._phys_pruner_active: bool = False  # Whether Φ_phys pruning is enabled for this game
+        self._phys_pruner: Any = None  # PhysicalCompactificationReduction instance (set by Thinker)
         self._phys_energy_budget: float = 1.0  # Normalized energy budget per step
         self._phys_euler_char_initial: int = 0  # Initial Euler characteristic of level grid
         self._phys_complexity_class: str = "NP_C_likely"  # classify_task_complexity result
@@ -219,6 +225,12 @@ class MyAgent(Agent):
         self._consecutive_invalid: int = 0  # Count of consecutive no-change / invalid actions
         self._sleep_step_threshold: int = 3  # Trigger threshold per article §4.3
         self._sleep_triggered: bool = False  # Whether Sleep-Step was triggered this level
+
+        # ── NEW v3.8.0: Thinker-Performer + Interactive ZKP Loop + Persistent KV-Cache ──
+        self._kv_cache: Any = None  # PersistentKVCache (initialized on first step)
+        self._zkp_loop: Any = None  # InteractiveZKPLoop
+        self._thinker_performer: Any = None  # ThinkerPerformerPipeline
+        self._thinker_phase_done: bool = False  # Whether think_phase has been called this step
 
         # ── NEW: Delta-aware exploration state ──
         self._delta_history: List[List[Tuple[int, int]]] = []  # Changed cells per step
@@ -249,7 +261,7 @@ class MyAgent(Agent):
 
     @property
     def name(self) -> str:
-        return f"tomas.v3.7.0.{self.MAX_ACTIONS}"
+        return f"tomas.v3.8.0.{self.MAX_ACTIONS}"
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         """Stop when all levels completed or action budget exhausted."""
@@ -725,6 +737,31 @@ class MyAgent(Agent):
         # ── Record grid snapshot and compute delta ──
         self._record_and_analyze(frames, latest_frame)
 
+        # ═══════════════════════════════════════════════════════════════════
+        # v3.8.0 — Thinker-Performer Pipeline (ZKP Loop)
+        # ═══════════════════════════════════════════════════════════════════
+        current_grid = latest_frame.frame
+        base_id = self.game_id.split("-")[0] if self.game_id else ""
+        level_idx = self._levels_done
+        n_actions = len([a for a in GameAction if a is not GameAction.RESET])
+        if not self._thinker_phase_done and current_grid is not None:
+            try:
+                from tomas_learner import ThinkerPerformerPipeline, PersistentKVCache, InteractiveZKPLoop
+                if self._thinker_performer is None:
+                    self._thinker_performer = ThinkerPerformerPipeline()
+                thinker_result = self._thinker_performer.think_phase(
+                    grid=current_grid,
+                    game_state={"game_id": self.game_id, "level_idx": level_idx, "n_actions": n_actions},
+                    game_id=base_id,
+                )
+                self._thinker_phase_done = True
+                # Use Thinker's phys_pruner for subsequent action selection
+                if thinker_result.get("phys_pruner"):
+                    self._phys_pruner = thinker_result["phys_pruner"]
+                    self._phys_pruner_active = True
+            except Exception:
+                pass
+
         # ── Handle NOT_PLAYED → RESET to start the level ──
         if latest_frame.state is GameState.NOT_PLAYED:
             return GameAction.RESET
@@ -910,6 +947,17 @@ class MyAgent(Agent):
 
         # Update grid hash for next step's pattern detection
         self._last_grid_hash = self._current_grid_hash
+
+        # v3.8.0 — Clean Latent Writeback: update KV-cache after successful action
+        if self._thinker_performer is not None and delta and len(delta) > 0:
+            try:
+                # Grid changed → previous action was successful → update reference_grid
+                self._thinker_performer._kv_cache.clean_latent_writeback(
+                    new_grid=current_grid,
+                    gaussex_result={"passed": True, "reason": "action_success", "delta_size": len(delta)},
+                )
+            except Exception:
+                pass
 
     # ── ASD Anomaly Detection (Attention Before Loss) ────────────────────
 

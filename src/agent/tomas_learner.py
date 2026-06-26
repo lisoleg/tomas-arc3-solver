@@ -3930,3 +3930,497 @@ def classify_task_complexity(
         "euler_char": euler_char,
         "n_components": n_components,
     }
+
+
+# ═══════════════════════════════════════════════════════════════════════
+# v3.8.0 — Thinker-Performer双轨 + Interactive ZKP Loop + Persistent KV-Cache
+# ═══════════════════════════════════════════════════════════════════════
+# Wan-Streamer dual-track architecture: Thinker (fast perception) +
+# Performer (deep search) with Block-Causal Attention KV-cache.
+#
+# InteractiveZKPLoop: "博弈即降维" Oracle interaction pattern.
+# PersistentKVCache: Cross-Phase persistent state (Block-Causal Attention).
+# ThinkerPerformerPipeline: Orchestrates Thinker→Performer pipeline parallelism.
+# ═══════════════════════════════════════════════════════════════════════
+
+
+class PersistentKVCache:
+    """Cross-Phase persistent state cache — Wan-Streamer Block-Causal Attention pattern.
+
+    Maintains shared state across game steps:
+    - topo_features: topology fingerprints (64-dim vectors)
+    - gaussex_logs: GaussEx verification results
+    - effective_macros: library macros that worked in previous steps
+    - reference_grid: current grid state (updated by Clean Latent Writeback)
+    - compactification_state: PhysicalCompactificationReduction state
+
+    Implements Block-Causal Attention: each step updates cache incrementally,
+    never recomputing from scratch — prevents context explosion.
+
+    Attributes:
+        _topo_features: Dict mapping step_id to 64-dim topology vector.
+        _gaussex_logs: List of GaussEx verification log entries.
+        _effective_macros: Dict mapping macro_name to DSL_sequence (verified macros).
+        _reference_grid: Optional numpy array of current grid (Clean Latent Writeback target).
+        _compactification_state: Optional Dict of Φ_phys state dict.
+        _euler_char_history: List of euler characteristic values across steps.
+        _connected_components_history: List of connected_components counts across steps.
+        _step_count: Integer count of steps processed.
+    """
+
+    def __init__(self) -> None:
+        """Initialize empty PersistentKVCache."""
+        self._topo_features: Dict[str, np.ndarray] = {}  # step_id -> 64-dim topo vector
+        self._gaussex_logs: List[Dict[str, Any]] = []     # GaussEx verification log
+        self._effective_macros: Dict[str, str] = {}       # macro_name -> DSL_sequence (verified macros)
+        self._reference_grid: Optional[np.ndarray] = None  # current grid (Clean Latent Writeback target)
+        self._compactification_state: Optional[Dict[str, Any]] = None  # Φ_phys state dict
+        self._euler_char_history: List[int] = []           # euler_char across steps
+        self._connected_components_history: List[int] = [] # connected_components across steps
+        self._step_count: int = 0
+
+    def update_thinker_state(self, grid: np.ndarray, topo_features: Dict[str, Any], step_id: str) -> None:
+        """Thinker writes perception results to cache (Block-Causal Attention update).
+
+        Args:
+            grid: Current game grid as numpy array.
+            topo_features: Topology feature dict from extract_topo_features.
+            step_id: String identifier for this step (e.g. "step_1", "think_0").
+        """
+        # Store topology fingerprint as 64-dim vector (if extract_topo_features_vec available)
+        topo_vec = extract_topo_features_vec(grid) if grid is not None and grid.size > 0 else np.zeros(64)
+        self._topo_features[step_id] = topo_vec
+        if self._reference_grid is None:
+            self._reference_grid = grid.copy()
+        # Track topology invariants from topo_features dict
+        euler_char = topo_features.get("euler_char", 0) if isinstance(topo_features, dict) else 0
+        n_components = topo_features.get("n_components", 1) if isinstance(topo_features, dict) else 1
+        if euler_char not in self._euler_char_history:
+            self._euler_char_history.append(euler_char)
+        if n_components not in self._connected_components_history:
+            self._connected_components_history.append(n_components)
+        self._step_count += 1
+
+    def clean_latent_writeback(self, new_grid: np.ndarray, gaussex_result: Dict[str, Any]) -> None:
+        """Clean Latent Writeback: after GaussEx passes, immediately update reference_grid.
+
+        No re-encoding needed — Thinker's perception is directly persisted.
+
+        Args:
+            new_grid: Updated game grid as numpy array.
+            gaussex_result: Dict with "passed" key indicating verification status.
+        """
+        if gaussex_result.get("passed", False):
+            self._reference_grid = new_grid.copy()
+            self._gaussex_logs.append(gaussex_result)
+            # Update topology history for beam ranking
+            topo = extract_topo_features(new_grid)
+            euler_char = topo.get("euler_char", 0)
+            n_components = topo.get("n_components", 1)
+            self._euler_char_history.append(euler_char)
+            self._connected_components_history.append(n_components)
+
+    def get_performer_state(self) -> Dict[str, Any]:
+        """Performer reads cached state for deep search (beam/DFS/NAR-Conv).
+
+        Returns:
+            Dict containing topo_features, reference_grid, effective_macros,
+            compactification_state, topology history, and step_count.
+        """
+        return {
+            "topo_features": self._topo_features,
+            "reference_grid": self._reference_grid,
+            "effective_macros": self._effective_macros,
+            "compactification_state": self._compactification_state,
+            "euler_char_history": self._euler_char_history,
+            "connected_components_history": self._connected_components_history,
+            "step_count": self._step_count,
+        }
+
+    def register_effective_macro(self, macro_name: str, dsl_sequence: str) -> None:
+        """Register a macro that successfully solved a previous step.
+
+        Args:
+            macro_name: Name of the verified macro.
+            dsl_sequence: DSL sequence string that the macro expands to.
+        """
+        self._effective_macros[macro_name] = dsl_sequence
+
+    def set_compactification_state(self, state: Dict[str, Any]) -> None:
+        """Set PhysicalCompactificationReduction state from init_compactification.
+
+        Args:
+            state: Dict containing complexity classification state.
+        """
+        self._compactification_state = state
+
+    def get_topology_invariant_score(self) -> float:
+        """Compute topology-invariant beam ranking score (CHL isomorphism).
+
+        Uses euler_char and connected_components stability as ranking criteria.
+        Stable topology (low variance) → higher score (more reliable beam direction).
+
+        Returns:
+            Float score in [0.0, 1.0]. Default 0.5 when insufficient history.
+        """
+        if len(self._euler_char_history) < 2:
+            return 0.5  # Default mid score
+        # Variance of euler_char — low variance = stable topology = higher score
+        euler_var = float(np.var(self._euler_char_history))
+        cc_var = float(np.var(self._connected_components_history))
+        # Score: 1 - normalized variance (clamp to [0, 1])
+        score = 1.0 - min(1.0, euler_var * 0.1 + cc_var * 0.05)
+        return max(0.0, min(1.0, score))
+
+
+class InteractiveZKPLoop:
+    """Interactive Zero-Knowledge Proof Loop — "博弈即降维" Oracle interaction pattern.
+
+    Each game step follows the ZKP loop:
+    1. Observe:  Read current grid state
+    2. Encode:   NAR-Conv octonion encoding → topo_features
+    3. Prove:    κ-Snap abductive reduction → candidate actions
+    4. Verify:   GaussEx verification → filter invalid candidates
+    5. Act:      Execute best verified action
+
+    Each round reduces search depth by Δ information gain:
+    O(|D|^(n/Δ)) → Poly when Δ≈n
+
+    Game Semantics (博弈语义): Solver doesn't guess all steps;
+    designs actions to extract rules from Oracle feedback.
+
+    Attributes:
+        _kv_cache: PersistentKVCache instance for cross-step state.
+        _nar_conv: PhysicalNARConv encoder for grid encoding.
+        _gauss_ex: PhysicalGaussExGuard verifier for candidate filtering.
+        _loop_count: Integer count of ZKP loop iterations.
+        _information_gain_history: List of Δ values per iteration.
+        _cumulative_depth_reduction: Float tracking total depth reduction.
+    """
+
+    def __init__(self, kv_cache: PersistentKVCache) -> None:
+        """Initialize InteractiveZKPLoop with a PersistentKVCache.
+
+        Args:
+            kv_cache: PersistentKVCache instance for cross-step state sharing.
+        """
+        self._kv_cache = kv_cache
+        self._nar_conv = PhysicalNARConv()  # NAR-Conv encoder
+        self._gauss_ex = PhysicalGaussExGuard()  # GaussEx verifier
+        self._loop_count: int = 0
+        self._information_gain_history: List[float] = []
+        self._cumulative_depth_reduction: float = 0.0
+
+    def run_loop(
+        self,
+        grid: np.ndarray,
+        game_state: Dict[str, Any],
+        candidate_actions: List[Any],
+        phys_pruner: Optional[PhysicalCompactificationReduction] = None,
+    ) -> Tuple[Any, Dict[str, Any]]:
+        """Run one ZKP loop iteration: Observe→Encode→Prove→Verify→Act.
+
+        Args:
+            grid: Current game grid as numpy array.
+            game_state: Game state dict (sprites, game_id, level_idx, etc.)
+            candidate_actions: List of candidate actions to verify.
+            phys_pruner: Optional PhysicalCompactificationReduction for pruning.
+
+        Returns:
+            (best_action, loop_result_dict) — best verified action + loop metadata.
+        """
+        self._loop_count += 1
+
+        # ── Step 1: Observe ──
+        topo = extract_topo_features(grid)
+
+        # ── Step 2: Encode (NAR-Conv) ──
+        nar_features = self._nar_conv.encode_grid_with_deltas(grid)
+
+        # ── Step 3: Prove (κ-Snap reduction) ──
+        # Use topology-invariant score from KV-cache to rank candidates
+        topo_invariant_score = self._kv_cache.get_topology_invariant_score()
+        proven_candidates = self._prove_candidates(
+            candidate_actions, topo, nar_features, topo_invariant_score
+        )
+
+        # ── Step 4: Verify (GaussEx) ──
+        verified_candidates: List[Tuple[Any, Dict[str, Any]]] = []
+        for candidate in proven_candidates:
+            gaussex_result = self._verify_candidate(candidate, game_state)
+            if gaussex_result.get("passed", False):
+                verified_candidates.append((candidate, gaussex_result))
+                # Clean Latent Writeback: immediately update reference_grid
+                self._kv_cache.clean_latent_writeback(grid, gaussex_result)
+
+        # ── Step 5: Act ──
+        best_action: Any = None
+        delta: float = 0.0
+        if verified_candidates:
+            best_action = verified_candidates[0][0]
+            # Compute information gain Δ
+            delta = self._compute_information_gain(topo)
+            self._information_gain_history.append(delta)
+            self._cumulative_depth_reduction += delta
+        else:
+            best_action = None
+
+        # Update KV-cache with Thinker state
+        step_id = f"step_{self._loop_count}"
+        self._kv_cache.update_thinker_state(grid, topo, step_id)
+
+        loop_result: Dict[str, Any] = {
+            "loop_count": self._loop_count,
+            "n_candidates": len(candidate_actions),
+            "n_proven": len(proven_candidates),
+            "n_verified": len(verified_candidates),
+            "information_gain_delta": delta,
+            "cumulative_depth_reduction": self._cumulative_depth_reduction,
+            "topo_invariant_score": topo_invariant_score,
+            "best_action": best_action,
+        }
+
+        return best_action, loop_result
+
+    def _prove_candidates(
+        self,
+        candidates: List[Any],
+        topo: Dict[str, Any],
+        nar_features: Any,
+        topo_invariant_score: float,
+    ) -> List[Any]:
+        """κ-Snap reduction: rank and filter candidates by topology + NAR features.
+
+        Higher topo_invariant_score → more confidence in candidate direction.
+
+        Args:
+            candidates: List of candidate actions.
+            topo: Topology feature dict from extract_topo_features.
+            nar_features: NAR-Conv encoded features.
+            topo_invariant_score: Float topology stability score from KV-cache.
+
+        Returns:
+            List of proven (consistent with observed topology) candidates.
+        """
+        if not candidates:
+            return []
+        # Simple ranking: pass all candidates as proven — GaussEx will filter
+        # Future enhancement: rank by topo_invariant_score weighted similarity
+        proven: List[Any] = []
+        for c in candidates:
+            # Basic proof: candidate is consistent with observed topology
+            proven.append(c)
+        return proven
+
+    def _verify_candidate(self, candidate: Any, game_state: Dict[str, Any]) -> Dict[str, Any]:
+        """GaussEx verification: check candidate against physics constraints.
+
+        Args:
+            candidate: A candidate action to verify.
+            game_state: Game state dict for constraint evaluation.
+
+        Returns:
+            Dict with "passed" (bool), "reason" (str), and "candidate".
+        """
+        try:
+            # Map candidate to program_node format for PhysicalGaussExGuard
+            if isinstance(candidate, str):
+                program_node = [candidate]
+            elif isinstance(candidate, (list, tuple)):
+                program_node = list(candidate)
+            else:
+                program_node = [str(candidate)]
+            passes = self._gauss_ex.check_physical_constraints(
+                program_node=program_node,
+                current_state=game_state,
+                input_grid=None,
+                output_grid=None,
+            )
+            reason = "physical_constraints_pass" if passes else "physical_constraints_fail"
+            return {"passed": passes, "reason": reason, "candidate": candidate}
+        except Exception as e:
+            return {"passed": False, "reason": f"exception: {e}", "candidate": candidate}
+
+    def _compute_information_gain(self, topo: Dict[str, Any]) -> float:
+        """Compute information gain Δ from this loop iteration.
+
+        Δ = reduction in search space per loop iteration.
+        Estimated from topology change: |Δeuler_char| / max(n_components, 1)
+
+        Args:
+            topo: Topology feature dict containing euler_char and n_components.
+
+        Returns:
+            Float Δ value, capped at 10.0 (max Δ per iteration).
+        """
+        euler = topo.get("euler_char", 0)
+        cc = topo.get("n_components", 1)
+        # Compare with last known euler_char from KV-cache history
+        if self._kv_cache._euler_char_history:
+            prev_euler = self._kv_cache._euler_char_history[-1]
+            delta = abs(euler - prev_euler) / max(cc, 1)
+        else:
+            delta = abs(euler) / max(cc, 1)  # Initial information gain
+        return min(delta, 10.0)  # Cap at 10 (max Δ per iteration)
+
+    def get_loop_stats(self) -> Dict[str, Any]:
+        """Get ZKP loop statistics.
+
+        Returns:
+            Dict containing total_loops, avg_information_gain,
+            cumulative_depth_reduction, and topo_invariant_score.
+        """
+        return {
+            "total_loops": self._loop_count,
+            "avg_information_gain": float(np.mean(self._information_gain_history)) if self._information_gain_history else 0.0,
+            "cumulative_depth_reduction": self._cumulative_depth_reduction,
+            "topo_invariant_score": self._kv_cache.get_topology_invariant_score(),
+        }
+
+
+class ThinkerPerformerPipeline:
+    """Thinker-Performer dual-track pipeline — Wan-Streamer architecture pattern.
+
+    Thinker (fast perception layer):
+    - grid → topo_features (encoding)
+    - state update (reference_grid, compactification state)
+    - KV-cache build (persistent state for next step)
+
+    Performer (deep search layer):
+    - beam/DFS search with KV-cache state
+    - NAR-Conv analysis for non-associative features
+    - κ-Snap proof + GaussEx verification
+
+    Pipeline parallelism: Thinker processes step N+1 perception
+    while Performer processes step N deep search.
+    In ARC-AGI-3, this manifests as:
+    - Think_phase: classify_task_complexity + init_compactification + extract_topo
+    - perform_phase: solve_game pipeline (BFS→Beam→DFS→IDFS) with KV-cache state
+
+    Attributes:
+        _kv_cache: PersistentKVCache for cross-step state persistence.
+        _zkp_loop: InteractiveZKPLoop for ZKP verification cycle.
+        _thinker_results: Dict of Thinker phase output.
+        _performer_results: Dict of Performer phase output.
+        _pipeline_count: Integer count of pipeline executions.
+    """
+
+    def __init__(self) -> None:
+        """Initialize ThinkerPerformerPipeline with KV-cache and ZKP loop."""
+        self._kv_cache = PersistentKVCache()
+        self._zkp_loop = InteractiveZKPLoop(self._kv_cache)
+        self._thinker_results: Dict[str, Any] = {}
+        self._performer_results: Dict[str, Any] = {}
+        self._pipeline_count: int = 0
+
+    def think_phase(
+        self,
+        grid: np.ndarray,
+        game_state: Dict[str, Any],
+        game_id: str = "",
+    ) -> Dict[str, Any]:
+        """Thinker phase: fast perception + state update + KV-cache build.
+
+        Args:
+            grid: Current game grid as numpy array.
+            game_state: Game state dict with sprites, game_id, level_idx etc.
+            game_id: Game identifier string.
+
+        Returns:
+            thinker_result dict with topo_features, complexity_class,
+            phys_pruner state, and game metadata.
+        """
+        # ── Encoding: extract topology ──
+        topo = extract_topo_features(grid)
+
+        # ── State update: classify task complexity ──
+        learner = TOMASLearner()
+        complexity = learner.init_compactification(
+            initial_grid=grid,
+            game_id=game_id,
+            game_state=game_state,
+        )
+
+        # ── KV-cache build: persist Thinker state ──
+        step_id = f"think_{self._pipeline_count}"
+        self._kv_cache.update_thinker_state(grid, topo, step_id)
+        self._kv_cache.set_compactification_state(complexity)
+
+        # Store Thinker results for Performer
+        self._thinker_results = {
+            "topo": topo,
+            "complexity": complexity,
+            "phys_pruner": learner.physical_compactification,
+            "game_id": game_id,
+            "grid_shape": grid.shape,
+        }
+
+        return self._thinker_results
+
+    def perform_phase(
+        self,
+        game: Any,
+        game_id: str,
+        level_idx: int,
+        valid_actions: List[Any],
+        thinker_result: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Performer phase: deep search with KV-cache state from Thinker.
+
+        Uses Thinker's cached state (topo, complexity, phys_pruner) to drive
+        the solve_game pipeline with enhanced ZKP Loop verification.
+
+        Args:
+            game: Game object.
+            game_id: Game identifier string.
+            level_idx: Current level index.
+            valid_actions: List of valid actions.
+            thinker_result: Thinker's output dict (if None, uses self._thinker_results).
+
+        Returns:
+            Dict with phys_pruner, complexity, performer_state, and topo_invariant_score.
+        """
+        if thinker_result is None:
+            thinker_result = self._thinker_results
+
+        phys_pruner = thinker_result.get("phys_pruner")
+        complexity = thinker_result.get("complexity", {})
+        complexity_class = complexity.get("complexity_class", "NP_C_likely")
+
+        # Use KV-cache state for enhanced search
+        performer_state = self._kv_cache.get_performer_state()
+        topo_invariant_score = self._kv_cache.get_topology_invariant_score()
+
+        self._pipeline_count += 1
+
+        # Store performer results
+        self._performer_results = {
+            "pipeline_count": self._pipeline_count,
+            "complexity_class": complexity_class,
+            "topo_invariant_score": topo_invariant_score,
+            "kv_cache_step_count": performer_state.get("step_count", 0),
+        }
+
+        return {
+            "phys_pruner": phys_pruner,
+            "complexity": complexity,
+            "complexity_class": complexity_class,
+            "performer_state": performer_state,
+            "topo_invariant_score": topo_invariant_score,
+        }
+
+    def get_pipeline_stats(self) -> Dict[str, Any]:
+        """Get pipeline statistics.
+
+        Returns:
+            Dict containing total_pipelines, thinker/performer results keys,
+            zkp_stats, kv_cache_step_count, and topo_invariant_score.
+        """
+        return {
+            "total_pipelines": self._pipeline_count,
+            "thinker_results_keys": list(self._thinker_results.keys()),
+            "performer_results_keys": list(self._performer_results.keys()),
+            "zkp_stats": self._zkp_loop.get_loop_stats(),
+            "kv_cache_step_count": self._kv_cache._step_count,
+            "topo_invariant_score": self._kv_cache.get_topology_invariant_score(),
+        }

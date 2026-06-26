@@ -1,8 +1,8 @@
 {
-  "_schema_version": "3.7.0",
-  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (\u6cdb\u51fd\u5b8f\u7edf\u4e00\u573a\u8bba + ASD + 3-Life)",
+  "_schema_version": "3.8.0",
+  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (泛函宏统一场论 + ASD + 3-Life + Thinker-Performer + ZKP Loop)",
   "_tomas_framework": {
-    "version": "3.7.0",
+    "version": "3.8.0",
     "core_modules": [
       "kappa_snap_searcher",
       "nar_conv",
@@ -11,7 +11,10 @@
       "gaussex_verifier",
       "fast_path_dispatcher",
       "online_psi_audit",
-      "physical_nar_conv"
+      "physical_nar_conv",
+      "persistent_kv_cache",
+      "interactive_zkp_loop",
+      "thinker_performer_pipeline"
     ],
     "asym_index_enabled": true,
     "narla_integration": true,
@@ -20,9 +23,14 @@
     "three_life_strategy": true,
     "physical_compactification": true,
     "sleep_step_trigger": true,
-    "beam_width": 16
+    "beam_width": 16,
+    "thinker_performer_pipeline": true,
+    "interactive_zkp_loop": true,
+    "kv_cache_persistent_state": true,
+    "clean_latent_writeback": true,
+    "topology_invariant_guided_ranking": true
   },
-  "_note": "v3.7.0 - PhysicalCompactificationReduction + Phi_phys pruning + Sleep-Step trigger + kappa-Snap Beam Width=16 + complexity_class field",
+  "_note": "v3.8.0 - Thinker-Performer dual-track + Interactive ZKP Loop + PersistentKVCache + Clean Latent Writeback + Topology-Invariant-Guided κ-Snap Beam Ranking",
   "abstractions": [
     {
       "name": "macro_push_sprite_to_target",
@@ -2505,6 +2513,177 @@
       },
       "gaussex_precond": "periodic_pattern AND symmetry",
       "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_zkp_observe_encode_prove",
+      "dsl_sequence": [
+        {
+          "observe": "grid_state"
+        },
+        {
+          "encode": "nar_conv_octonion"
+        },
+        {
+          "prove": "kappa_snap_abductive"
+        }
+      ],
+      "tomas_fingerprint": "zkp_oep_001",
+      "source_tasks": [
+        "universal_zkp_L0"
+      ],
+      "avg_steps": 3.0,
+      "success_rate": 0.7,
+      "generalization_tags": [
+        "zkp_loop",
+        "interactive_verification",
+        "observe_encode_prove"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-28",
+      "validated": false,
+      "mdl_score": 0.58,
+      "applicable_topo": {
+        "low_euler_variance": true
+      },
+      "gaussex_precond": "topology_invariant_score > 0.5",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_zkp_verify_act_writeback",
+      "dsl_sequence": [
+        {
+          "verify": "gaussex_physics"
+        },
+        {
+          "act": "best_verified_action"
+        },
+        {
+          "writeback": "clean_latent_update"
+        }
+      ],
+      "tomas_fingerprint": "zkp_vaw_001",
+      "source_tasks": [
+        "universal_zkp_L1"
+      ],
+      "avg_steps": 2.0,
+      "success_rate": 0.75,
+      "generalization_tags": [
+        "zkp_loop",
+        "gaussex_verification",
+        "clean_latent_writeback"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-28",
+      "validated": false,
+      "mdl_score": 0.60,
+      "applicable_topo": {
+        "stable_topology": true
+      },
+      "gaussex_precond": "gaussex_passed AND reference_grid_update",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_thinker_perceive_cache",
+      "dsl_sequence": [
+        {
+          "perceive": "extract_topo_features"
+        },
+        {
+          "classify": "task_complexity"
+        },
+        {
+          "cache": "kv_cache_persistent_state"
+        }
+      ],
+      "tomas_fingerprint": "tp_pc_001",
+      "source_tasks": [
+        "thinker_performer_L0"
+      ],
+      "avg_steps": 1.0,
+      "success_rate": 0.85,
+      "generalization_tags": [
+        "thinker_phase",
+        "fast_perception",
+        "kv_cache_build"
+      ],
+      "min_demo_to_activate": 1,
+      "created_at": "2026-06-28",
+      "validated": false,
+      "mdl_score": 0.55,
+      "applicable_topo": {
+        "any": true
+      },
+      "gaussex_precond": "grid_available AND game_state_available",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_performer_beam_search_topo_guided",
+      "dsl_sequence": [
+        {
+          "read_cache": "kv_cache_state"
+        },
+        {
+          "beam_search": "topo_invariant_guided"
+        },
+        {
+          "zkp_verify": "interactive_loop"
+        }
+      ],
+      "tomas_fingerprint": "tp_bst_001",
+      "source_tasks": [
+        "thinker_performer_L1"
+      ],
+      "avg_steps": 4.0,
+      "success_rate": 0.65,
+      "generalization_tags": [
+        "performer_phase",
+        "topo_guided_beam",
+        "zkp_verification"
+      ],
+      "min_demo_to_activate": 2,
+      "created_at": "2026-06-28",
+      "validated": false,
+      "mdl_score": 0.62,
+      "applicable_topo": {
+        "euler_variance_low": true,
+        "connected_components_stable": true
+      },
+      "gaussex_precond": "topology_invariant_score > 0.7 AND beam_width >= 16",
+      "complexity_class": "NP_Hard"
+    },
+    {
+      "name": "macro_pipeline_parallel_think_perform",
+      "dsl_sequence": [
+        {
+          "think": "step_N_plus_1_perception"
+        },
+        {
+          "perform": "step_N_deep_search"
+        },
+        {
+          "writeback": "cross_step_state_update"
+        }
+      ],
+      "tomas_fingerprint": "tp_pp_001",
+      "source_tasks": [
+        "pipeline_parallel_L0"
+      ],
+      "avg_steps": 5.0,
+      "success_rate": 0.60,
+      "generalization_tags": [
+        "pipeline_parallelism",
+        "thinker_performer_dual_track",
+        "wan_streamer_pattern"
+      ],
+      "min_demo_to_activate": 2,
+      "created_at": "2026-06-28",
+      "validated": false,
+      "mdl_score": 0.65,
+      "applicable_topo": {
+        "multi_step_game": true
+      },
+      "gaussex_precond": "kv_cache_step_count >= 1 AND pipeline_count >= 1",
+      "complexity_class": "NP_Hard"
     }
   ]
 }

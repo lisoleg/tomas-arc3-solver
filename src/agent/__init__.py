@@ -72,6 +72,10 @@ from .tomas_learner import (
     classify_task_complexity,
     # v3.7.0 — 流贯归约框架
     PhysicalCompactificationReduction,
+    # v3.8.0 — Thinker-Performer双轨 + Interactive ZKP Loop
+    ThinkerPerformerPipeline,
+    InteractiveZKPLoop,
+    PersistentKVCache,
 )
 
 # ── MetaSnapNet可选集成 ──
@@ -159,6 +163,10 @@ __all__ = [
     "classify_task_complexity",
     # v3.7.0 — 流贯归约框架
     "PhysicalCompactificationReduction",
+    # v3.8.0 — Thinker-Performer双轨 + Interactive ZKP Loop
+    "ThinkerPerformerPipeline",
+    "InteractiveZKPLoop",
+    "PersistentKVCache",
     # MetaSnapNet κ-Snap Beam Scoring (SPP集成)
     "TopoFeatureExtractor",
     "ProgramNodeFeatureExtractor",
