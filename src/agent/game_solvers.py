@@ -820,8 +820,8 @@ def _solve_ka59_hungarian_strategy(
         if not blocks or not targets:
             return None
 
-    block_positions = [_sprite_center(b) for b in blocks]
-    target_positions = [_sprite_center(t) for t in targets]
+    block_positions = [_sprite_display_center(game, b) for b in blocks]
+    target_positions = [_sprite_display_center(game, t) for t in targets]
 
     # ── Step 2: Hungarian assignment ──
     assignment = _hungarian_assignment(block_positions, target_positions)
@@ -840,13 +840,30 @@ def _solve_ka59_hungarian_strategy(
 
     wall_cells: set[tuple[int, int]] = set()
     for w in all_walls:
-        wx = int(getattr(w, 'x', 0))
-        wy = int(getattr(w, 'y', 0))
+        # Convert wall sprite to display coordinates (0-63) to match BFS grid
+        w_disp = _sprite_display_center(game, w)
         ww = int(getattr(w, 'width', 1))
         wh = int(getattr(w, 'height', 1))
-        for dx in range(ww):
-            for dy in range(wh):
-                wall_cells.add((wx + dx, wy + dy))
+        # Scale wall size to display coordinates
+        cam = getattr(game, 'camera', None)
+        if cam is not None:
+            cam_w = int(getattr(cam, 'width', 64))
+            cam_h = int(getattr(cam, 'height', 64))
+            scale_w = int(64 / cam_w) if cam_w > 0 else 1
+            scale_h = int(64 / cam_h) if cam_h > 0 else 1
+            scale = max(1, min(scale_w, scale_h))
+            disp_w = max(1, ww * scale)
+            disp_h = max(1, wh * scale)
+        else:
+            disp_w = max(1, ww)
+            disp_h = max(1, wh)
+        # Add wall cells in display coordinate space
+        wcx, wcy = w_disp
+        half_w = max(1, disp_w // 2)
+        half_h = max(1, disp_h // 2)
+        for dx in range(-half_w, half_w + 1):
+            for dy in range(-half_h, half_h + 1):
+                wall_cells.add((wcx + dx, wcy + dy))
 
     plan: list[tuple] = []
     sim_game = copy.deepcopy(game)
@@ -863,9 +880,9 @@ def _solve_ka59_hungarian_strategy(
         ai_switch = ActionInput(id=6, data={'x': block_disp[0], 'y': block_disp[1]})
         _perform_action_safe(sim_game, ai_switch)
 
-        # Compute path from block to target
-        b_pos = _sprite_center(block)
-        t_pos = _sprite_center(target)
+        # Compute path from block to target (in display coordinates 0-63)
+        b_pos = _sprite_display_center(sim_game, block)
+        t_pos = _sprite_display_center(sim_game, target)
         path_coords = _bfs_path(
             b_pos, t_pos,
             walls=wall_cells, step=step_size, grid_size=64,
@@ -905,10 +922,23 @@ def _solve_ka59_hungarian_strategy(
                 elif dy < 0:
                     plan.append((GameAction.ACTION1, None))
 
-        # Simulate movement actions
-        for action_tuple in plan[len(plan) - (len(path_coords or []) + 1):]:
+        # Simulate movement actions for this assignment
+        # Calculate how many actions were just added for this (block, target) pair
+        # = 1 (ACTION6 switch) + len(path steps) or (n_x + n_y direct moves)
+        if path_coords is not None:
+            n_new_actions = 1 + len(path_coords)  # switch + path steps
+        else:
+            # Direct fallback: n_x + n_y moves + 1 switch
+            dx_fb = t_pos[0] - b_pos[0]
+            dy_fb = t_pos[1] - b_pos[1]
+            n_new_actions = 1 + abs(dx_fb) // step_size + abs(dy_fb) // step_size
+        sim_start = len(plan) - n_new_actions
+        for action_tuple in plan[sim_start:]:
             aid = action_tuple[0]
             aid_val = aid.value if hasattr(aid, 'value') else aid
+            # Skip ACTION6 (click) — already simulated above
+            if aid_val == 6:
+                continue
             ai_move = ActionInput(id=aid_val, data={})
             _perform_action_safe(sim_game, ai_move)
 
