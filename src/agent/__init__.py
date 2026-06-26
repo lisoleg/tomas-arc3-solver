@@ -79,6 +79,13 @@ from .tomas_learner import (
     # v3.9.0 — Sleep-Step Algorithm 1 + Abductive Lift + Ω_topo Trigger + MoonshineProver
     MoonshineProver,
     check_breakthrough_and_trigger,
+    # v3.10.0 — 博弈即降维 + 神经流形与因果紧化 (6 new concepts)
+    GibbsEnsemble,
+    IDOFramework,
+    QuantumContextualEvaluator,
+    CHLIsomorphism,
+    compute_effective_search_depth,
+    UniverseZKP,
 )
 
 # ── MetaSnapNet可选集成 ──
@@ -173,6 +180,13 @@ __all__ = [
     # v3.9.0 — Sleep-Step Algorithm 1 + Abductive Lift + Ω_topo Trigger + MoonshineProver
     "MoonshineProver",
     "check_breakthrough_and_trigger",
+    # v3.10.0 — 博弈即降维 + 神经流形与因果紧化 (6 new concepts)
+    "GibbsEnsemble",
+    "IDOFramework",
+    "QuantumContextualEvaluator",
+    "CHLIsomorphism",
+    "compute_effective_search_depth",
+    "UniverseZKP",
     # MetaSnapNet κ-Snap Beam Scoring (SPP集成)
     "TopoFeatureExtractor",
     "ProgramNodeFeatureExtractor",

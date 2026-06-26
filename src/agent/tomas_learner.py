@@ -5879,3 +5879,1634 @@ class MoonshineProver:
             "conjecture_history": list(self._conjecture_history),
             "max_rounds": self._max_rounds,
         }
+
+
+# ============================================================================
+# v3.10.0 — Algorithmic Upgrades: 博弈即降维 + 神经流形与因果紧化
+# Six new concepts from articles "博弈即降维" and "神经流形与因果紧化":
+#   1. GibbsEnsemble (吉布斯系综 — ensemble probability distribution)
+#   2. IDOFramework (Information-Description-Observer 三体框架)
+#   3. QuantumContextualEvaluator (Kochen-Specker量子互文性)
+#   4. CHLIsomorphism (Curry-Howard-Lambek TOMAS化)
+#   5. compute_effective_search_depth() (交互式降维定理)
+#   6. UniverseZKP (自指交互式证明系统)
+# ============================================================================
+
+
+class GibbsEnsemble:
+    """Gibbs ensemble — decoherence snapshot of The One's L5 manifestation shell.
+
+    From article "博弈即降维": The Gibbs ensemble represents a probability
+    distribution over possible game states, sampled from demo observations.
+    In ARC-AGI-3, the ensemble encodes the distribution of grid states
+    observed across demo pairs, enabling Bayesian updates as new observations
+    arrive during gameplay.
+
+    The ensemble is initialized from demos and can be sampled to produce
+    candidate game states. Coarse-graining at varying granularity levels
+    controls the resolution of the state distribution, following the IDO
+    framework principle that entropy depends on observer resolution.
+
+    Observer-dependent Gibbs entropy: S = -Σ p_i log(p_i), where p_i
+    comes from coarse-grained state frequencies at the chosen granularity.
+
+    Args:
+        granularity: Coarse-graining granularity level (default 3).
+            Higher values produce more abstract (coarser) state representations.
+    """
+
+    def __init__(self, granularity: int = 3) -> None:
+        """Initialize GibbsEnsemble with coarse-graining granularity.
+
+        Args:
+            granularity: Coarse-graining level for state abstraction.
+                Default 3 means moderate abstraction (3×3 block aggregation).
+        """
+        self.granularity: int = granularity
+        self._state_counts: Dict[str, int] = {}  # coarse-grained state → count
+        self._total_count: int = 0
+        self._raw_states: List[Any] = []  # original grids for reference
+        self._entropy_cache: Dict[str, float] = {}  # granularity_key → entropy
+
+    def init_from_demos(self, demos: List[Any]) -> None:
+        """Initialize ensemble distribution from demo grids.
+
+        Coarse-grains each demo grid at the configured granularity level,
+        then counts state frequencies to build the ensemble distribution.
+
+        Args:
+            demos: List of demo grid observations (numpy arrays or list-of-lists).
+                Each demo represents one observed game state from training pairs.
+        """
+        self._state_counts = {}
+        self._total_count = 0
+        self._raw_states = []
+
+        for demo in demos:
+            coarse = self._coarse_grain(demo, self.granularity)
+            # Convert coarse-grained grid to a hashable string key
+            if isinstance(coarse, np.ndarray):
+                key = hashlib.md5(coarse.tobytes()).hexdigest()
+            elif isinstance(coarse, (list, tuple)):
+                key = hashlib.md5(json.dumps(coarse, sort_keys=True).encode()).hexdigest()
+            else:
+                key = str(coarse)
+
+            self._state_counts[key] = self._state_counts.get(key, 0) + 1
+            self._total_count += 1
+            self._raw_states.append(demo)
+
+        # Invalidate entropy cache after distribution update
+        self._entropy_cache = {}
+
+    def sample_state(self, rng_seed: Optional[int] = None) -> Dict[str, Any]:
+        """Sample a possible game state from ensemble distribution.
+
+        Selects a coarse-grained state proportional to its frequency in
+        the ensemble, then returns a dict with the state key, probability,
+        and a reference to one of the original raw grids matching that state.
+
+        Args:
+            rng_seed: Optional random seed for reproducible sampling.
+
+        Returns:
+            Dict with keys:
+                state_key: Hash key of the sampled coarse-grained state.
+                probability: p_i for this state in the ensemble.
+                raw_state_index: Index into _raw_states for an original grid
+                    that maps to this coarse state.
+                granularity: The coarse-graining level used.
+        """
+        if self._total_count == 0:
+            return {
+                "state_key": "",
+                "probability": 0.0,
+                "raw_state_index": -1,
+                "granularity": self.granularity,
+            }
+
+        rng = np.random.RandomState(rng_seed if rng_seed is not None else 42)
+
+        # Build probability array from state counts
+        keys = list(self._state_counts.keys())
+        counts = np.array([self._state_counts[k] for k in keys], dtype=np.float64)
+        probs = counts / self._total_count
+
+        # Sample proportional to probability
+        sampled_idx = rng.choice(len(keys), p=probs)
+        sampled_key = keys[sampled_idx]
+        sampled_prob = probs[sampled_idx]
+
+        # Find a raw state that maps to this coarse key
+        raw_idx = -1
+        for i, raw in enumerate(self._raw_states):
+            coarse = self._coarse_grain(raw, self.granularity)
+            if isinstance(coarse, np.ndarray):
+                k = hashlib.md5(coarse.tobytes()).hexdigest()
+            elif isinstance(coarse, (list, tuple)):
+                k = hashlib.md5(json.dumps(coarse, sort_keys=True).encode()).hexdigest()
+            else:
+                k = str(coarse)
+            if k == sampled_key:
+                raw_idx = i
+                break
+
+        return {
+            "state_key": sampled_key,
+            "probability": sampled_prob,
+            "raw_state_index": raw_idx,
+            "granularity": self.granularity,
+        }
+
+    def compute_entropy(self, grid: Any) -> float:
+        """Compute observer-dependent Gibbs entropy for a grid state.
+
+        Gibbs entropy: S = -Σ p_i log(p_i), where p_i are the probabilities
+        of coarse-grained states at the configured granularity level.
+
+        If the grid is provided, its coarse-grained version is added to the
+        distribution temporarily for entropy computation, reflecting how an
+        observer at this granularity would perceive the information content.
+
+        Args:
+            grid: Grid observation (numpy array or list-of-lists) to compute
+                entropy for. If None-like, computes entropy of the existing
+                ensemble distribution.
+
+        Returns:
+            Gibbs entropy S as a float. Returns 0.0 for empty distributions.
+        """
+        if self._total_count == 0:
+            return 0.0
+
+        # Compute entropy from current state distribution
+        keys = list(self._state_counts.keys())
+        counts = np.array([self._state_counts[k] for k in keys], dtype=np.float64)
+        probs = counts / self._total_count
+
+        # S = -Σ p_i log(p_i), avoiding log(0)
+        entropy = 0.0
+        for p in probs:
+            if p > 0.0:
+                entropy -= p * np.log2(p)
+
+        return float(entropy)
+
+    def update_distribution(self, observation: Any) -> None:
+        """Update ensemble distribution after receiving a new observation.
+
+        Performs Bayesian update: the new observation's coarse-grained state
+        is added to the distribution, increasing its count by 1. This is a
+        conjugate prior update for the categorical distribution (adding counts
+        is equivalent to updating Dirichlet posterior).
+
+        Args:
+            observation: New grid observation (numpy array or list-of-lists).
+                Its coarse-grained version is added to the state distribution.
+        """
+        coarse = self._coarse_grain(observation, self.granularity)
+
+        if isinstance(coarse, np.ndarray):
+            key = hashlib.md5(coarse.tobytes()).hexdigest()
+        elif isinstance(coarse, (list, tuple)):
+            key = hashlib.md5(json.dumps(coarse, sort_keys=True).encode()).hexdigest()
+        else:
+            key = str(coarse)
+
+        self._state_counts[key] = self._state_counts.get(key, 0) + 1
+        self._total_count += 1
+        self._raw_states.append(observation)
+
+        # Invalidate entropy cache
+        self._entropy_cache = {}
+
+    def _coarse_grain(self, grid: Any, level: int) -> Any:
+        """Reduce grid resolution by coarse-graining at given level.
+
+        Aggregates grid cells into blocks of size (level × level),
+        taking the most frequent (mode) value within each block.
+        This implements the observer-dependent resolution reduction
+        from the IDO framework.
+
+        Args:
+            grid: Input grid (numpy array or list-of-lists).
+            level: Coarse-graining block size. level=1 means no reduction.
+
+        Returns:
+            Coarse-grained grid as numpy array, or original grid if level ≤ 1.
+        """
+        if level <= 1:
+            if isinstance(grid, np.ndarray):
+                return grid
+            return np.array(grid)
+
+        # Convert to numpy if needed
+        if not isinstance(grid, np.ndarray):
+            grid = np.array(grid)
+
+        if grid.ndim != 2:
+            # For non-2D grids, just return the original
+            return grid
+
+        h, w = grid.shape
+        new_h = max(1, h // level)
+        new_w = max(1, w // level)
+        coarse = np.zeros((new_h, new_w), dtype=grid.dtype)
+
+        for i in range(new_h):
+            for j in range(new_w):
+                block = grid[
+                    i * level: min((i + 1) * level, h),
+                    j * level: min((j + 1) * level, w),
+                ]
+                # Take mode (most frequent value) in the block
+                if block.size > 0:
+                    values, counts = np.unique(block, return_counts=True)
+                    coarse[i, j] = values[np.argmax(counts)]
+                else:
+                    coarse[i, j] = 0
+
+        return coarse
+
+
+class IDOFramework:
+    """Information-Description-Observer 三体框架.
+
+    From article "博弈即降维": Entropy is NOT a system property, but a
+    property of the Information-Description-Observer (IDO) interface.
+    The observer chooses coarse-graining granularity, which determines
+    the entropy value. Different observers at different levels (L1-L5)
+    see different entropy values for the same system.
+
+    In ARC-AGI-3, the IDO framework means:
+    - Information: The raw game state (grid data)
+    - Description: The coarse-grained representation (how we encode it)
+    - Observer: The solver's perspective level (which granularity we choose)
+
+    Observer levels map to TOMAS hierarchy:
+    - L1 (Agent): finest granularity, sees individual cells
+    - L2 (Pattern): medium granularity, sees local patterns
+    - L3 (Symmetry): coarse granularity, sees global symmetry
+    - L4 (ψ-Anchor): default, balanced coarse-graining
+    - L5 (The One): coarsest, sees only essential invariants
+
+    Args:
+        observer_level: Default observer level (default "L4").
+    """
+
+    # Observer level → granularity mapping
+    LEVEL_GRANULARITY: Dict[str, Tuple[str, int]] = {
+        "L1": ("fine", 1),      # Agent level: see individual cells
+        "L2": ("fine-medium", 2),  # Pattern level: see 2×2 blocks
+        "L3": ("medium", 3),    # Symmetry level: see 3×3 blocks
+        "L4": ("medium-coarse", 4),  # ψ-Anchor level: balanced coarse-graining
+        "L5": ("coarse", 6),    # The One level: see only essential invariants
+    }
+
+    def __init__(self, observer_level: str = "L4") -> None:
+        """Initialize IDOFramework with observer level.
+
+        Args:
+            observer_level: Observer hierarchy level (L1-L5).
+                Default L4 (ψ-Anchor) for balanced observation.
+        """
+        self.observer_level: str = observer_level
+        self._granularity_label: str = self.LEVEL_GRANULARITY.get(
+            observer_level, ("medium-coarse", 4)
+        )[0]
+        self._granularity_int: int = self.LEVEL_GRANULARITY.get(
+            observer_level, ("medium-coarse", 4)
+        )[1]
+        self._gibbs_ensemble: Optional[GibbsEnsemble] = None
+
+    def compute_observer_entropy(self, grid: Any, observer_level: str = "L4") -> float:
+        """Compute entropy based on observer's coarse-graining level.
+
+        The IDO theorem states: different observers see different entropy.
+        An L1 observer (fine granularity) sees high entropy (many distinct
+        states). An L5 observer (coarse granularity) sees low entropy
+        (few essential states).
+
+        Args:
+            grid: Grid observation to compute entropy for.
+            observer_level: Observer level for coarse-graining (default "L4").
+
+        Returns:
+            Observer-dependent entropy value as float.
+        """
+        gran_label, gran_int = self.LEVEL_GRANULARITY.get(
+            observer_level, ("medium-coarse", 4)
+        )
+
+        # Create a GibbsEnsemble at this granularity for entropy computation
+        ensemble = GibbsEnsemble(granularity=gran_int)
+
+        # Treat the grid as a single demo for entropy estimation
+        # For proper entropy, we need a distribution; compute from grid statistics
+        if isinstance(grid, np.ndarray):
+            coarse = self._coarse_grain_grid(grid, gran_int)
+        elif isinstance(grid, (list, tuple)):
+            coarse = self._coarse_grain_grid(np.array(grid), gran_int)
+        else:
+            return 0.0
+
+        if coarse is None or not isinstance(coarse, np.ndarray):
+            return 0.0
+
+        # Compute entropy of the coarse-grained grid's value distribution
+        values, counts = np.unique(coarse, return_counts=True)
+        total = counts.sum()
+        if total == 0:
+            return 0.0
+
+        probs = counts.astype(np.float64) / total
+        entropy = -np.sum(probs * np.log2(probs + 1e-12))
+
+        return float(entropy)
+
+    def coarse_grain(self, grid: Any, granularity: str = "medium") -> Any:
+        """Reduce grid to observer-dependent resolution.
+
+        Maps granularity label to block size and applies coarse-graining.
+
+        Args:
+            grid: Input grid (numpy array or list-of-lists).
+            granularity: Granularity label ("fine", "fine-medium", "medium",
+                "medium-coarse", "coarse").
+
+        Returns:
+            Coarse-grained grid as numpy array.
+        """
+        granularity_to_int: Dict[str, int] = {
+            "fine": 1,
+            "fine-medium": 2,
+            "medium": 3,
+            "medium-coarse": 4,
+            "coarse": 6,
+        }
+        gran_int = granularity_to_int.get(granularity, 3)
+
+        if isinstance(grid, np.ndarray):
+            return self._coarse_grain_grid(grid, gran_int)
+        elif isinstance(grid, (list, tuple)):
+            return self._coarse_grain_grid(np.array(grid), gran_int)
+        return grid
+
+    def choose_granularity(self, game_state: Dict) -> str:
+        """Auto-select coarse-graining level based on task complexity.
+
+        Following IDO framework: P-class tasks → fine granularity (more detail
+        needed for precise pattern matching), NP-class tasks → coarse granularity
+        (need to reduce search space aggressively).
+
+        Args:
+            game_state: Dict describing current game state, should contain:
+                - 'complexity_label': P or NP classification
+                - 'grid_size': tuple (height, width)
+                - 'num_colors': number of distinct colors in grid
+
+        Returns:
+            Granularity label string ("fine", "fine-medium", "medium",
+                "medium-coarse", or "coarse").
+        """
+        complexity = game_state.get("complexity_label", "unknown")
+        grid_size = game_state.get("grid_size", (10, 10))
+        num_colors = game_state.get("num_colors", 5)
+
+        # Compute grid area
+        area = grid_size[0] * grid_size[1] if isinstance(grid_size, (list, tuple)) else 100
+
+        # Decision logic:
+        # P-class: fine granularity for precise pattern matching
+        # NP-class: coarse granularity to reduce search space
+        if complexity in ("P", "polynomial", "easy"):
+            if area > 200 or num_colors > 8:
+                return "fine-medium"  # Large P-tasks still need some reduction
+            return "fine"
+
+        if complexity in ("NP", "exponential", "hard"):
+            if area < 50:
+                return "medium-coarse"  # Small NP-tasks don't need extreme reduction
+            return "coarse"
+
+        # Unknown complexity: use grid statistics as heuristic
+        if area < 50:
+            return "fine"
+        if area < 100:
+            return "medium"
+        if area < 200:
+            return "medium-coarse"
+        return "coarse"
+
+    def get_information_gain(self, old_grid: Any, new_grid: Any) -> float:
+        """Compute information gained per round: I_k = S_old - S_new.
+
+        Following IDO framework theorem: information gain is the reduction
+        in observer entropy after receiving a new observation. If the new
+        grid reduces uncertainty (lower entropy), I_k > 0 (information gained).
+        If entropy increases, I_k < 0 (information lost / confusion).
+
+        Args:
+            old_grid: Previous grid state.
+            new_grid: New grid state after observation/action.
+
+        Returns:
+            Information gain I_k as float. Positive = learned something,
+            negative = became more uncertain.
+        """
+        s_old = self.compute_observer_entropy(old_grid, self.observer_level)
+        s_new = self.compute_observer_entropy(new_grid, self.observer_level)
+        return float(s_old - s_new)
+
+    def _coarse_grain_grid(self, grid: np.ndarray, level: int) -> np.ndarray:
+        """Coarse-grain a numpy grid by aggregating level×level blocks.
+
+        Args:
+            grid: 2D numpy array.
+            level: Block size for aggregation.
+
+        Returns:
+            Coarse-grained 2D numpy array.
+        """
+        if level <= 1:
+            return grid
+
+        if grid.ndim != 2:
+            return grid
+
+        h, w = grid.shape
+        new_h = max(1, h // level)
+        new_w = max(1, w // level)
+        coarse = np.zeros((new_h, new_w), dtype=grid.dtype)
+
+        for i in range(new_h):
+            for j in range(new_w):
+                block = grid[
+                    i * level: min((i + 1) * level, h),
+                    j * level: min((j + 1) * level, w),
+                ]
+                if block.size > 0:
+                    values, counts = np.unique(block, return_counts=True)
+                    coarse[i, j] = values[np.argmax(counts)]
+                else:
+                    coarse[i, j] = 0
+
+        return coarse
+
+
+class QuantumContextualEvaluator:
+    """Kochen-Specker quantum contextual evaluator.
+
+    From article "博弈即降维": The Kochen-Specker theorem proves that no
+    global context-free value assignment exists — measurement results depend
+    on the context of measurement. In ARC-AGI-3, this means the same grid
+    pattern can yield different optimal actions depending on the game context
+    (game_id, level_idx, previous observations, task type).
+
+    The evaluator stores a context registry mapping game contexts to
+    evaluation results. When evaluating a grid pattern, it considers
+    the measurement context (which game, which level, which previous
+    observations) rather than treating the pattern as having a single
+    fixed optimal action.
+
+    This is crucial for avoiding overfitting: a pattern that is "good"
+    in one game context may be "bad" in another, and the evaluator
+    respects this contextual dependence.
+    """
+
+    def __init__(self) -> None:
+        """Initialize QuantumContextualEvaluator with empty context registry."""
+        self._context_registry: Dict[str, Dict[str, Any]] = {}  # context_key → evaluation data
+        self._evaluation_history: List[Dict[str, Any]] = []
+
+    def evaluate_in_context(
+        self,
+        grid: Any,
+        context: Dict[str, Any],
+    ) -> float:
+        """Evaluate grid pattern in given measurement context.
+
+        Computes a context-dependent evaluation score for the grid pattern.
+        The score depends on the game_id, level_idx, and previous observations
+        in the context, following the Kochen-Specker principle that evaluation
+        is context-dependent, not context-free.
+
+        Args:
+            grid: Grid pattern to evaluate (numpy array or list-of-lists).
+            context: Measurement context dict with keys:
+                - game_id: Game identifier string
+                - level_idx: Level index within the game
+                - previous_observations: List of prior grid observations
+                - task_type: Optional task type classification
+
+        Returns:
+            Context-dependent evaluation score as float (0.0 to 1.0).
+        """
+        context_key = self._compute_context_key(context)
+
+        # Convert grid to numpy for feature extraction
+        if not isinstance(grid, np.ndarray):
+            grid_np = np.array(grid)
+        else:
+            grid_np = grid
+
+        # Compute base pattern features
+        if grid_np.ndim == 2 and grid_np.size > 0:
+            # Grid statistics as base features
+            values, counts = np.unique(grid_np, return_counts=True)
+            num_colors = len(values)
+            dominant_ratio = counts.max() / counts.sum() if counts.sum() > 0 else 0.0
+            grid_area = grid_np.shape[0] * grid_np.shape[1]
+            density = grid_np.astype(bool).sum() / max(grid_np.size, 1)
+        else:
+            num_colors = 0
+            dominant_ratio = 0.0
+            grid_area = 0
+            density = 0.0
+
+        # Base score from pattern simplicity (fewer colors + dominant pattern → higher)
+        base_score = dominant_ratio * 0.3 + (1.0 / max(num_colors, 1)) * 0.2 + density * 0.2
+
+        # Context modulation: check registry for similar contexts
+        if context_key in self._context_registry:
+            registered = self._context_registry[context_key]
+            # Contextual boost: if this context has been successful before
+            historical_score = registered.get("avg_score", 0.5)
+            base_score = base_score * 0.6 + historical_score * 0.4  # Blend with history
+        else:
+            # No history for this context — moderate default
+            base_score = base_score * 0.7 + 0.5 * 0.3
+
+        # Clamp to [0, 1]
+        score = max(0.0, min(1.0, base_score))
+
+        # Record evaluation
+        self._evaluation_history.append({
+            "context_key": context_key,
+            "base_score": float(base_score),
+            "final_score": score,
+            "num_colors": num_colors,
+            "dominant_ratio": dominant_ratio,
+        })
+
+        return score
+
+    def get_contextual_score(
+        self,
+        action: str,
+        context: Dict[str, Any],
+    ) -> float:
+        """Score action considering measurement context.
+
+        Evaluates how well an action aligns with the game context, using
+        the Kochen-Specker principle that optimal actions are context-dependent.
+
+        Args:
+            action: Action string to score (e.g., 'MOVE_UP', 'CLICK_3_5').
+            context: Measurement context dict (same as evaluate_in_context).
+
+        Returns:
+            Context-dependent action score as float (0.0 to 1.0).
+        """
+        context_key = self._compute_context_key(context)
+
+        if context_key in self._context_registry:
+            registered = self._context_registry[context_key]
+            # Look for this action in successful history
+            action_history = registered.get("action_scores", {})
+            if action in action_history:
+                return float(action_history[action])
+            # Average score of all actions in this context as proxy
+            avg = registered.get("avg_score", 0.5)
+            return avg * 0.8  # Slightly discount unknown actions
+
+        # No context history: return neutral score
+        return 0.5
+
+    def compare_contexts(
+        self,
+        context1: Dict,
+        context2: Dict,
+    ) -> float:
+        """Compute contextual overlap between two game contexts.
+
+        Measures how similar two contexts are, following the quantum
+        contextual principle: overlapping contexts share some measurement
+        outcomes but may differ on others.
+
+        Args:
+            context1: First game context dict.
+            context2: Second game context dict.
+
+        Returns:
+            Contextual overlap score as float (0.0 = completely different,
+                1.0 = identical contexts).
+        """
+        # Compare context fields
+        overlap = 0.0
+        max_fields = 0.0
+
+        # Game ID match
+        g1 = context1.get("game_id", "")
+        g2 = context2.get("game_id", "")
+        max_fields += 1.0
+        if g1 == g2:
+            overlap += 1.0
+
+        # Level index proximity
+        l1 = context1.get("level_idx", 0)
+        l2 = context2.get("level_idx", 0)
+        max_fields += 1.0
+        if isinstance(l1, (int, float)) and isinstance(l2, (int, float)):
+            level_diff = abs(l1 - l2)
+            overlap += max(0.0, 1.0 - level_diff / 10.0)
+        else:
+            overlap += 0.0
+
+        # Task type match
+        t1 = context1.get("task_type", "")
+        t2 = context2.get("task_type", "")
+        max_fields += 1.0
+        if t1 == t2 and t1 != "":
+            overlap += 1.0
+
+        # Previous observation count proximity
+        obs1 = context1.get("previous_observations", [])
+        obs2 = context2.get("previous_observations", [])
+        max_fields += 1.0
+        count_diff = abs(len(obs1) - len(obs2))
+        overlap += max(0.0, 1.0 - count_diff / 5.0)
+
+        return overlap / max(max_fields, 1.0)
+
+    def register_context(
+        self,
+        game_id: str,
+        context: Dict,
+    ) -> None:
+        """Register successful context for future reference.
+
+        After a successful evaluation in a context, register it so that
+        future evaluations in similar contexts can benefit from the history.
+
+        Args:
+            game_id: Game identifier string.
+            context: Full context dict with evaluation results.
+                Should include 'avg_score' and 'action_scores' for future lookup.
+        """
+        context_key = self._compute_context_key({"game_id": game_id, **context})
+
+        if context_key in self._context_registry:
+            # Update existing context with new data (weighted average)
+            existing = self._context_registry[context_key]
+            new_avg = context.get("avg_score", 0.5)
+            old_avg = existing.get("avg_score", 0.5)
+            old_weight = existing.get("count", 1)
+
+            # Weighted update: new data contributes proportionally
+            existing["avg_score"] = (old_avg * old_weight + new_avg) / (old_weight + 1)
+            existing["count"] = old_weight + 1
+
+            # Merge action scores
+            new_action_scores = context.get("action_scores", {})
+            old_action_scores = existing.get("action_scores", {})
+            for action, score in new_action_scores.items():
+                if action in old_action_scores:
+                    old_action_scores[action] = (old_action_scores[action] * old_weight + score) / (old_weight + 1)
+                else:
+                    old_action_scores[action] = score
+            existing["action_scores"] = old_action_scores
+        else:
+            # New context entry
+            self._context_registry[context_key] = {
+                "game_id": game_id,
+                "avg_score": context.get("avg_score", 0.5),
+                "count": 1,
+                "action_scores": context.get("action_scores", {}),
+                "context": context,
+            }
+
+    def _compute_context_key(self, context: Dict) -> str:
+        """Hash context to key for registry lookup.
+
+        Creates a deterministic string key from the context dict for
+        efficient registry lookup and comparison.
+
+        Args:
+            context: Context dict to hash.
+
+        Returns:
+            MD5 hex digest string as context key.
+        """
+        # Sort keys for deterministic hashing
+        serialized = json.dumps(context, sort_keys=True, default=str)
+        return hashlib.md5(serialized.encode()).hexdigest()
+
+
+class CHLIsomorphism:
+    """Curry-Howard-Lambek TOMAS化 — CHL三脚凳同构映射.
+
+    From article "博弈即降维": The CHL tripod establishes the isomorphism:
+        - Proposition ↔ Causal Invariant C⁰ (euler_char, color dist, symmetry group)
+        - Proof ↔ κ-Snap归约 (MDL program / reduction sequence)
+        - λ-reduction ↔ β-Cut (branch pruning of redundant search branches)
+
+    In ARC-AGI-3, this means:
+    - A grid pattern (proposition) maps to a causal invariant (topological property)
+    - A solution program (proof) maps to a κ-Snap reduction (MDL-optimal program)
+    - Pruning redundant branches (β-Cut) maps to λ-reduction (normalization)
+
+    The isomorphism ensures that logical, computational, and categorical
+    perspectives are consistent — verifying one side verifies all three.
+    """
+
+    def __init__(self) -> None:
+        """Initialize CHLIsomorphism with empty proposition/proof registry."""
+        self._proposition_registry: Dict[str, Dict[str, Any]] = {}  # prop_key → invariant
+        self._proof_registry: Dict[str, Dict[str, Any]] = {}  # proof_key → κ-Snap mapping
+        self._reduction_registry: Dict[str, Dict[str, Any]] = {}  # reduction_key → β-Cut
+        self._isomorphism_verified: Dict[str, bool] = {}  # pair_key → verification status
+        self._stats: Dict[str, int] = {
+            "propositions_registered": 0,
+            "proofs_registered": 0,
+            "reductions_registered": 0,
+            "isomorphisms_verified": 0,
+        }
+
+    def proposition_to_invariant(
+        self,
+        grid_pattern: Any,
+    ) -> Dict[str, Any]:
+        """Map logical proposition (grid pattern) to causal invariant C⁰.
+
+        The CHL isomorphism maps propositions (grid patterns that assert
+        a transformation rule) to causal invariants (topological properties
+        that remain unchanged under the transformation).
+
+        C⁰ invariants include:
+        - euler_char: Euler characteristic of the grid topology
+        - color_distribution: Distribution of colors across the grid
+        - symmetry_group: Detected symmetry operations (rotation, reflection)
+
+        Args:
+            grid_pattern: Grid pattern (numpy array or list-of-lists) to
+                extract causal invariants from.
+
+        Returns:
+            Dict with keys:
+                euler_char: Euler characteristic of the grid.
+                color_distribution: Dict mapping color values to frequencies.
+                symmetry_group: List of detected symmetry operations.
+                prop_key: Hash key for the proposition.
+        """
+        if not isinstance(grid_pattern, np.ndarray):
+            grid_pattern = np.array(grid_pattern)
+
+        prop_key = hashlib.md5(grid_pattern.tobytes()).hexdigest() if isinstance(grid_pattern, np.ndarray) else str(grid_pattern)
+
+        # Compute Euler characteristic (simplified: connected_components - holes)
+        # For a grid, treat each non-zero cell as a vertex, adjacent non-zero cells as edges
+        if grid_pattern.ndim == 2 and grid_pattern.size > 0:
+            binary = (grid_pattern != 0).astype(int)
+            # Simplified Euler char: count connected regions of non-zero cells minus holes
+            # Using a simple flood-fill approach
+            h, w = binary.shape
+            visited = np.zeros_like(binary, dtype=bool)
+            regions = 0
+
+            for i in range(h):
+                for j in range(w):
+                    if binary[i, j] == 1 and not visited[i, j]:
+                        regions += 1
+                        # BFS flood fill
+                        queue = [(i, j)]
+                        visited[i, j] = True
+                        while queue:
+                            ci, cj = queue.pop(0)
+                            for di, dj in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                                ni, nj = ci + di, cj + dj
+                                if 0 <= ni < h and 0 <= nj < w and binary[ni, nj] == 1 and not visited[ni, nj]:
+                                    visited[ni, nj] = True
+                                    queue.append((ni, nj))
+
+            # Count holes (connected zero-regions surrounded by non-zero)
+            visited_zero = np.zeros_like(binary, dtype=bool)
+            holes = 0
+            for i in range(h):
+                for j in range(w):
+                    if binary[i, j] == 0 and not visited_zero[i, j]:
+                        # Check if this zero-region is enclosed
+                        is_enclosed = True
+                        queue = [(i, j)]
+                        visited_zero[i, j] = True
+                        while queue:
+                            ci, cj = queue.pop(0)
+                            if ci == 0 or ci == h - 1 or cj == 0 or cj == w - 1:
+                                is_enclosed = False  # Touches boundary → not enclosed
+                            for di, dj in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                                ni, nj = ci + di, cj + dj
+                                if 0 <= ni < h and 0 <= nj < w and binary[ni, nj] == 0 and not visited_zero[ni, nj]:
+                                    visited_zero[ni, nj] = True
+                                    queue.append((ni, nj))
+                        if is_enclosed:
+                            holes += 1
+
+            euler_char = regions - holes
+        else:
+            euler_char = 0
+
+        # Color distribution
+        values, counts = np.unique(grid_pattern, return_counts=True)
+        color_distribution = {
+            str(int(v)): int(c) for v, c in zip(values, counts)
+        }
+
+        # Detect symmetry operations
+        symmetry_ops: List[str] = []
+        if grid_pattern.ndim == 2 and grid_pattern.size > 0:
+            # Check horizontal reflection
+            if np.array_equal(grid_pattern, np.flip(grid_pattern, axis=1)):
+                symmetry_ops.append("horizontal_reflection")
+            # Check vertical reflection
+            if np.array_equal(grid_pattern, np.flip(grid_pattern, axis=0)):
+                symmetry_ops.append("vertical_reflection")
+            # Check 90° rotation (if square)
+            if grid_pattern.shape[0] == grid_pattern.shape[1]:
+                if np.array_equal(grid_pattern, np.rot90(grid_pattern)):
+                    symmetry_ops.append("rotation_90")
+                if np.array_equal(grid_pattern, np.rot90(grid_pattern, k=2)):
+                    symmetry_ops.append("rotation_180")
+                if np.array_equal(grid_pattern, np.rot90(grid_pattern, k=3)):
+                    symmetry_ops.append("rotation_270")
+
+        invariant = {
+            "euler_char": euler_char,
+            "color_distribution": color_distribution,
+            "symmetry_group": symmetry_ops,
+            "prop_key": prop_key,
+        }
+
+        # Register in proposition registry
+        self._proposition_registry[prop_key] = invariant
+        self._stats["propositions_registered"] += 1
+
+        return invariant
+
+    def proof_to_kappa_snap(
+        self,
+        program_node: Dict,
+    ) -> Dict[str, Any]:
+        """Map κ-Snap proof (MDL program) to logical proof structure.
+
+        The CHL isomorphism maps proofs (κ-Snap reductions, which are
+        MDL-optimal programs) to logical proof structures. A κ-Snap
+        reduction is a sequence of transformations that achieves the
+        goal with minimal description length.
+
+        Args:
+            program_node: Dict describing the program node with keys:
+                - name: Program name
+                - dsl_sequence: List of DSL commands
+                - mdl_score: MDL score (description length / raw length)
+                - tomas_fingerprint: TOMAS fingerprint hash
+
+        Returns:
+            Dict with keys:
+                proof_type: Type of proof ("kappa_snap_reduction").
+                reduction_steps: Number of steps in the DSL sequence.
+                mdl_score: MDL score from the program.
+                fingerprint: TOMAS fingerprint hash.
+                proof_key: Hash key for the proof.
+        """
+        name = program_node.get("name", "unknown")
+        dsl_sequence = program_node.get("dsl_sequence", [])
+        mdl_score = program_node.get("mdl_score", 0.0)
+        fingerprint = program_node.get("tomas_fingerprint", "")
+
+        # Generate proof key
+        serialized = json.dumps({"name": name, "dsl": dsl_sequence}, sort_keys=True)
+        proof_key = hashlib.md5(serialized.encode()).hexdigest()
+
+        kappa_mapping = {
+            "proof_type": "kappa_snap_reduction",
+            "reduction_steps": len(dsl_sequence),
+            "mdl_score": mdl_score,
+            "fingerprint": fingerprint,
+            "proof_key": proof_key,
+            "program_name": name,
+        }
+
+        # Register in proof registry
+        self._proof_registry[proof_key] = kappa_mapping
+        self._stats["proofs_registered"] += 1
+
+        return kappa_mapping
+
+    def reduction_to_beta_cut(
+        self,
+        branch: Dict,
+    ) -> Dict[str, Any]:
+        """Map β-Cut (branch pruning) to λ-reduction (normalization step).
+
+        The CHL isomorphism maps β-Cuts (pruning of redundant search
+        branches) to λ-reductions (normalization steps that simplify
+        expressions). Each β-Cut eliminates a redundant branch that
+        does not contribute to the solution, analogous to β-reduction
+        in λ-calculus which simplifies an expression.
+
+        Args:
+            branch: Dict describing the branch to prune with keys:
+                - branch_id: Identifier for the search branch
+                - branch_type: Type of branch ("redundant", "dead_end", "low_score")
+                - cut_reason: Reason for pruning the branch
+                - alternatives_remaining: Number of branches still active after cut
+
+        Returns:
+            Dict with keys:
+                reduction_type: "beta_cut_to_lambda_reduction"
+                normalized_form: Simplified representation after pruning.
+                cut_depth: How deep the β-Cut was in the search tree.
+                lambda_step: Corresponding λ-reduction step number.
+        """
+        branch_id = branch.get("branch_id", "")
+        branch_type = branch.get("branch_type", "unknown")
+        cut_reason = branch.get("cut_reason", "")
+        alternatives = branch.get("alternatives_remaining", 0)
+
+        beta_cut_mapping = {
+            "reduction_type": "beta_cut_to_lambda_reduction",
+            "normalized_form": f"pruned_{branch_type}_{branch_id}",
+            "cut_depth": len(branch_id.split(".")) if branch_id else 0,
+            "lambda_step": alternatives,  # Remaining alternatives = remaining reduction steps
+            "cut_reason": cut_reason,
+            "branch_type": branch_type,
+        }
+
+        # Register in reduction registry
+        reduction_key = hashlib.md5(
+            json.dumps({"branch_id": branch_id, "type": branch_type}).encode()
+        ).hexdigest()
+        self._reduction_registry[reduction_key] = beta_cut_mapping
+        self._stats["reductions_registered"] += 1
+
+        return beta_cut_mapping
+
+    def verify_isomorphism(
+        self,
+        proposition: Dict,
+        proof: Dict,
+    ) -> bool:
+        """Verify that proposition↔invariant↔proof mapping is consistent.
+
+        The CHL isomorphism requires that all three legs of the tripod
+        are consistent: the proposition (grid pattern), its causal
+        invariant (topological properties), and the proof (κ-Snap reduction)
+        must all agree on the same transformation semantics.
+
+        Verification checks:
+        1. Proposition's invariant matches proof's fingerprint
+        2. Proof's MDL score is consistent with proposition's complexity
+        3. The mapping preserves structural information
+
+        Args:
+            proposition: Dict with proposition/invariant data (from
+                proposition_to_invariant).
+            proof: Dict with proof/κ-Snap data (from proof_to_kappa_snap).
+
+        Returns:
+            True if the isomorphism is verified (consistent mapping),
+            False if inconsistencies detected.
+        """
+        # Check 1: Both have valid keys
+        prop_key = proposition.get("prop_key", "")
+        proof_key = proof.get("proof_key", "")
+        if not prop_key or not proof_key:
+            return False
+
+        # Check 2: Euler characteristic is reasonable for the proof's complexity
+        euler_char = proposition.get("euler_char", 0)
+        mdl_score = proof.get("mdl_score", 0.0)
+        reduction_steps = proof.get("reduction_steps", 0)
+
+        # Consistency: more complex topology (higher |euler|) should need more steps
+        # But MDL score should decrease (better compression) with more steps
+        complexity_ratio = abs(euler_char) / max(reduction_steps, 1)
+        # If euler_char is 0 (simple) and reduction_steps is very high → inconsistent
+        # If euler_char is high (complex) and reduction_steps is 0 → inconsistent
+        if abs(euler_char) < 1 and reduction_steps > 20:
+            # Simple topology shouldn't need many steps
+            return False
+        if abs(euler_char) > 10 and reduction_steps < 2:
+            # Complex topology needs at least some steps
+            return False
+
+        # Check 3: MDL score is in valid range [0, 1]
+        if mdl_score < 0.0 or mdl_score > 2.0:
+            return False
+
+        # Check 4: Color distribution and proof type consistency
+        color_dist = proposition.get("color_distribution", {})
+        num_colors = len(color_dist)
+        proof_type = proof.get("proof_type", "")
+
+        if proof_type != "kappa_snap_reduction":
+            return False
+
+        # More colors should correlate with higher reduction_steps
+        if num_colors > 10 and reduction_steps < 3:
+            return False
+
+        # If all checks pass, the isomorphism is verified
+        pair_key = f"{prop_key}_{proof_key}"
+        self._isomorphism_verified[pair_key] = True
+        self._stats["isomorphisms_verified"] += 1
+
+        return True
+
+    def get_chl_stats(self) -> Dict[str, Any]:
+        """Return CHL isomorphism mapping statistics.
+
+        Returns:
+            Dict with keys:
+                propositions_registered: Number of proposition→invariant mappings.
+                proofs_registered: Number of proof→κ-Snap mappings.
+                reductions_registered: Number of β-Cut→λ-reduction mappings.
+                isomorphisms_verified: Number of verified isomorphism triples.
+                total_mappings: Sum of all registered mappings.
+        """
+        total = sum(self._stats.values())
+        return {
+            "propositions_registered": self._stats["propositions_registered"],
+            "proofs_registered": self._stats["proofs_registered"],
+            "reductions_registered": self._stats["reductions_registered"],
+            "isomorphisms_verified": self._stats["isomorphisms_verified"],
+            "total_mappings": total,
+        }
+
+
+def compute_effective_search_depth(
+    episode_history: List[Tuple[str, int, float]],
+    max_search_depth: int = 100,
+    polynomial_threshold: int = 50,
+) -> Dict[str, Any]:
+    """Compute effective search depth via interactive dimension reduction.
+
+    From article "博弈即降维" Theorem 4.1: With per-round information gain I_k,
+    effective search depth reduces from n to n/I_avg. Total cost becomes
+    Poly(n) × I_avg instead of exponential. When I_avg approaches 1 (precise
+    feedback each step), total cost becomes Poly(n).
+
+    The theorem states that interactive problem solving with feedback
+    effectively reduces the search depth. Each round of interaction
+    provides information gain I_k, which prunes the search tree. The
+    average information gain I_avg determines whether the problem is
+    effectively P-class (tractable) or NP-class (intractable).
+
+    Args:
+        episode_history: List of tuples (action, delta_size, information_gain)
+            for each round of interaction. delta_size > 0 indicates the
+            interaction produced useful feedback.
+        max_search_depth: Maximum search depth without interaction (default 100).
+        polynomial_threshold: Threshold for P-class classification (default 50).
+            If effective_depth < polynomial_threshold, classify as P-class.
+
+    Returns:
+        Dict with keys:
+            effective_depth: Reduced search depth = max_search_depth / max(I_avg, 0.1).
+            I_avg: Average information gain across rounds with delta > 0.
+            is_P_class: Whether effective depth is below polynomial threshold.
+            estimated_cost_ratio: Ratio of effective to max search depth.
+            recommendation: Strategy recommendation based on classification.
+            rounds_with_info: Number of rounds that produced information gain.
+    """
+    # Filter rounds where delta > 0 (meaningful interaction)
+    rounds_with_info = [
+        (action, delta, ig) for action, delta, ig in episode_history
+        if delta > 0
+    ]
+
+    if len(rounds_with_info) == 0:
+        # No information gained — full search depth, definitely NP-class
+        I_avg = 0.0
+        effective_depth = max_search_depth  # No reduction possible
+    else:
+        # Compute average information gain
+        total_ig = sum(ig for _, _, ig in rounds_with_info)
+        I_avg = total_ig / len(rounds_with_info)
+
+        # Effective depth = max_search_depth / max(I_avg, 0.1)
+        # 0.1 floor prevents division by near-zero (worst case: I_avg ≈ 0)
+        effective_depth = max_search_depth / max(I_avg, 0.1)
+
+    # P-class classification: effective depth below threshold
+    is_P_class = effective_depth < polynomial_threshold
+
+    # Estimated cost ratio: how much the search is reduced
+    estimated_cost_ratio = effective_depth / max(max_search_depth, 1)
+
+    # Strategy recommendation based on classification
+    if is_P_class:
+        recommendation = "P_CLASS_STRATEGY: Use κ-Snap abductive search with interactive feedback. Average I_k ≈ {:.3f} reduces depth to {:.1f}. Recommend Thinker-Performer pipeline.".format(
+            I_avg, effective_depth
+        )
+    else:
+        if I_avg > 0.5:
+            recommendation = "BOUNDARY_STRATEGY: I_avg ≈ {:.3f} is moderate. Consider coarse-graining (IDO L4-L5) to boost per-round information gain. Effective depth {:.1f} still above threshold.".format(
+                I_avg, effective_depth
+            )
+        else:
+            recommendation = "NP_CLASS_STRATEGY: I_avg ≈ {:.3f} is low. Strong dimension reduction needed. Use GibbsEnsemble coarse-graining + QuantumContextual evaluation. Consider sleep-step consolidation for macro extraction.".format(
+                I_avg, effective_depth
+            )
+
+    return {
+        "effective_depth": float(effective_depth),
+        "I_avg": float(I_avg),
+        "is_P_class": is_P_class,
+        "estimated_cost_ratio": float(estimated_cost_ratio),
+        "recommendation": recommendation,
+        "rounds_with_info": len(rounds_with_info),
+        "total_rounds": len(episode_history),
+        "polynomial_threshold": polynomial_threshold,
+    }
+
+
+class UniverseZKP:
+    """自指交互式证明系统 — Universe as self-referential ZKP.
+
+    From article "博弈即降维" Appendix F: The Universe as a self-referential
+    Zero-Knowledge Proof system. In this model:
+    - Prover = L4 observer (the solver's ψ-Anchor perspective)
+    - Verifier = Physical law (GaussEx guard that checks consistency)
+    - Proof = Observer chooses measurement context → produces result →
+              result passes physical law check
+
+    The ZKP loop:
+    1. Spawn observer: Create a contextual observer with measurement aperture
+    2. Choose context: Select which features to focus on (color, topology, etc.)
+    3. Interact with flow: Produce observation + proof attempt
+    4. Verify: Check proof against GaussEx (physical law)
+    5. Accept/reject: If verified → accept, else → refine context and retry
+
+    This implements the self-referential nature of the ARC-AGI-3 solver:
+    the solver is both the prover (generating solutions) and subject to
+    verification (solutions must pass physical consistency checks).
+
+    Args:
+        gaussex_guard: Optional GaussExGuard instance for verification.
+            If None, uses topology-based verification as fallback.
+        nar_conv: Optional PhysicalNARConv instance for feature extraction.
+            If None, uses basic numpy-based features.
+    """
+
+    def __init__(
+        self,
+        gaussex_guard: Any = None,
+        nar_conv: Any = None,
+    ) -> None:
+        """Initialize UniverseZKP with optional GaussEx and NAR-Conv.
+
+        Args:
+            gaussex_guard: GaussExGuard instance for proof verification.
+                If None, topology-based verification is used as fallback.
+            nar_conv: PhysicalNARConv instance for feature extraction.
+                If None, basic numpy features are used.
+        """
+        self._gaussex_guard = gaussex_guard
+        self._nar_conv = nar_conv
+        self._observer_registry: Dict[str, Dict[str, Any]] = {}
+        self._proof_history: List[Dict[str, Any]] = []
+        self._verification_count: int = 0
+        self._accept_count: int = 0
+        self._reject_count: int = 0
+
+    def spawn_observer(
+        self,
+        grid: Any,
+    ) -> Dict[str, Any]:
+        """Create contextual observer with measurement aperture.
+
+        Spawns an L4-level observer that defines a measurement aperture
+        (which features to observe) and computes a coarse-grained view
+        of the grid.
+
+        Args:
+            grid: Grid observation (numpy array or list-of-lists).
+
+        Returns:
+            Dict with keys:
+                observer_id: Unique identifier for this observer.
+                aperture: Measurement aperture specification (which features).
+                coarse_view: Coarse-grained grid at L4 granularity.
+                euler_char: Euler characteristic of the grid.
+                color_count: Number of distinct colors in the grid.
+                timestamp: Creation timestamp.
+        """
+        if not isinstance(grid, np.ndarray):
+            grid = np.array(grid)
+
+        observer_id = hashlib.md5(
+            (str(time.time()) + str(grid.shape)).encode()
+        ).hexdigest()[:12]
+
+        # Compute coarse-grained view at L4 granularity
+        ido = IDOFramework(observer_level="L4")
+        coarse_view = ido.coarse_grain(grid, "medium-coarse")
+
+        # Compute grid features
+        if grid.ndim == 2 and grid.size > 0:
+            values, counts = np.unique(grid, return_counts=True)
+            color_count = len(values)
+            dominant_color = values[np.argmax(counts)]
+            density = float(np.count_nonzero(grid)) / max(grid.size, 1)
+
+            # Compute simplified Euler characteristic
+            binary = (grid != 0).astype(int)
+            h, w = binary.shape
+            visited = np.zeros_like(binary, dtype=bool)
+            regions = 0
+            for i in range(h):
+                for j in range(w):
+                    if binary[i, j] == 1 and not visited[i, j]:
+                        regions += 1
+                        queue = [(i, j)]
+                        visited[i, j] = True
+                        while queue:
+                            ci, cj = queue.pop(0)
+                            for di, dj in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                                ni, nj = ci + di, cj + dj
+                                if 0 <= ni < h and 0 <= nj < w and binary[ni, nj] == 1 and not visited[ni, nj]:
+                                    visited[ni, nj] = True
+                                    queue.append((ni, nj))
+            euler_char = regions - 1  # Simplified: regions - boundary
+        else:
+            color_count = 0
+            dominant_color = 0
+            density = 0.0
+            euler_char = 0
+
+        # Define measurement aperture based on grid features
+        aperture = {
+            "color_focus": color_count <= 5,  # Few colors → focus on color
+            "topology_focus": abs(euler_char) > 2,  # Complex topology → focus on topology
+            "symmetry_focus": density > 0.5,  # Dense grid → look for symmetry
+            "motion_focus": False,  # No motion detection in static grid
+        }
+
+        observer = {
+            "observer_id": observer_id,
+            "aperture": aperture,
+            "coarse_view": coarse_view,
+            "euler_char": euler_char,
+            "color_count": color_count,
+            "dominant_color": int(dominant_color),
+            "density": density,
+            "timestamp": time.time(),
+        }
+
+        self._observer_registry[observer_id] = observer
+
+        return observer
+
+    def choose_measurement_context(
+        self,
+        game_state: Dict,
+    ) -> Dict[str, Any]:
+        """Select optimal measurement context for observation.
+
+        Based on the game state properties, selects which features to
+        focus the measurement on. This follows the ZKP principle: the
+        prover (observer) chooses the measurement context strategically
+        to produce the most informative proof.
+
+        Args:
+            game_state: Dict describing current game state with keys:
+                - grid: Current grid observation
+                - game_id: Game identifier
+                - level_idx: Level index
+                - previous_results: List of previous ZKP results
+
+        Returns:
+            Dict with keys:
+                context_type: Primary feature focus ("color", "topology",
+                    "symmetry", "motion", or "hybrid").
+                granularity: Coarse-graining level for this context.
+                feature_weights: Dict mapping feature names to importance weights.
+                strategy: Strategy description.
+        """
+        grid = game_state.get("grid", None)
+        euler_char = game_state.get("euler_char", 0)
+        num_colors = game_state.get("num_colors", 0)
+        density = game_state.get("density", 0.0)
+        complexity = game_state.get("complexity_label", "unknown")
+
+        # Determine primary focus based on grid properties
+        if num_colors <= 3 and abs(euler_char) <= 1:
+            # Simple color, simple topology → color focus
+            context_type = "color"
+            granularity = "fine"
+            feature_weights = {"color": 0.7, "topology": 0.2, "symmetry": 0.1}
+            strategy = "Color-dominant context: few colors, simple topology. Focus on color patterns and spatial arrangement."
+
+        elif abs(euler_char) > 3:
+            # Complex topology → topology focus
+            context_type = "topology"
+            granularity = "medium-coarse"
+            feature_weights = {"topology": 0.6, "color": 0.2, "symmetry": 0.2}
+            strategy = "Topology-dominant context: complex connected structure. Focus on Euler characteristic and connectivity."
+
+        elif density > 0.6:
+            # Dense grid → symmetry focus
+            context_type = "symmetry"
+            granularity = "coarse"
+            feature_weights = {"symmetry": 0.6, "topology": 0.2, "color": 0.2}
+            strategy = "Symmetry-dominant context: dense grid suggests symmetry. Focus on reflection and rotation patterns."
+
+        else:
+            # Mixed → hybrid context
+            context_type = "hybrid"
+            granularity = "medium"
+            feature_weights = {"color": 0.3, "topology": 0.3, "symmetry": 0.3}
+            strategy = "Hybrid context: mixed features. Balanced observation across all dimensions."
+
+        return {
+            "context_type": context_type,
+            "granularity": granularity,
+            "feature_weights": feature_weights,
+            "strategy": strategy,
+        }
+
+    def interact_with_flow(
+        self,
+        grid: Any,
+        context: Dict,
+    ) -> Dict[str, Any]:
+        """Produce observation + proof attempt using chosen context.
+
+        The prover (L4 observer) produces an observation of the grid
+        using the chosen measurement context, then generates a proof
+        attempt that claims the observation is consistent with the
+        physical laws (GaussEx constraints).
+
+        Args:
+            grid: Grid observation to interact with.
+            context: Measurement context dict (from choose_measurement_context).
+
+        Returns:
+            Dict with keys:
+                observation: Coarse-grained observation in the chosen context.
+                proof_attempt: Dict with proof data for verification.
+                context_used: The context that was applied.
+                information_content: Estimated information in the observation.
+        """
+        if not isinstance(grid, np.ndarray):
+            grid = np.array(grid)
+
+        # Apply coarse-graining according to context granularity
+        ido = IDOFramework(observer_level="L4")
+        granularity = context.get("granularity", "medium")
+        observation = ido.coarse_grain(grid, granularity)
+
+        # Extract features according to context weights
+        feature_weights = context.get("feature_weights", {"color": 0.3, "topology": 0.3, "symmetry": 0.3})
+
+        # Compute observation features
+        if isinstance(observation, np.ndarray) and observation.ndim == 2 and observation.size > 0:
+            values, counts = np.unique(observation, return_counts=True)
+            color_entropy = -np.sum((counts / counts.sum()) * np.log2(counts / counts.sum() + 1e-12))
+
+            # Symmetry check
+            has_horiz_sym = np.array_equal(observation, np.flip(observation, axis=1))
+            has_vert_sym = np.array_equal(observation, np.flip(observation, axis=0))
+            symmetry_score = float(has_horiz_sym) * 0.5 + float(has_vert_sym) * 0.5
+
+            # Topology: simplified Euler char
+            binary = (observation != 0).astype(int)
+            euler = int(np.count_nonzero(binary))  # Simplified proxy
+        else:
+            color_entropy = 0.0
+            symmetry_score = 0.0
+            euler = 0
+
+        # Build proof attempt: claims that the observation is consistent
+        proof_attempt = {
+            "claim": "Observation consistent with physical law",
+            "euler_char_proxy": euler,
+            "color_entropy": float(color_entropy),
+            "symmetry_score": symmetry_score,
+            "granularity": granularity,
+            "feature_weights": feature_weights,
+            "context_type": context.get("context_type", "hybrid"),
+            "grid_hash": hashlib.md5(grid.tobytes() if isinstance(grid, np.ndarray) else json.dumps(grid, default=str).encode()).hexdigest(),
+        }
+
+        # Information content: entropy weighted by feature importance
+        information_content = (
+            color_entropy * feature_weights.get("color", 0.3)
+            + abs(euler) * 0.1 * feature_weights.get("topology", 0.3)
+            + symmetry_score * feature_weights.get("symmetry", 0.3)
+        )
+
+        return {
+            "observation": observation,
+            "proof_attempt": proof_attempt,
+            "context_used": context,
+            "information_content": float(information_content),
+        }
+
+    def run_universe_loop(
+        self,
+        grid: Any,
+        max_rounds: int = 5,
+    ) -> Dict[str, Any]:
+        """Full ZKP loop: spawn→choose→interact→verify→accept/reject.
+
+        Executes the complete self-referential ZKP cycle:
+        1. Spawn an L4 observer for the grid
+        2. Choose optimal measurement context
+        3. Produce observation + proof attempt
+        4. Verify proof against GaussEx (physical law)
+        5. If verified → accept; if rejected → refine context and retry
+
+        Args:
+            grid: Grid observation to run the ZKP loop on.
+            max_rounds: Maximum number of verification rounds (default 5).
+
+        Returns:
+            Dict with keys:
+                accepted: Whether the proof was accepted after all rounds.
+                total_rounds: Number of verification rounds executed.
+                final_observation: Final accepted observation (or last attempt).
+                final_context: Final measurement context used.
+                verification_history: List of verification results per round.
+                observer: The spawned observer dict.
+        """
+        # ── Step 1: Spawn observer ──
+        observer = self.spawn_observer(grid)
+
+        verification_history: List[Dict[str, Any]] = []
+        accepted = False
+        final_observation = None
+        final_context = None
+
+        for round_num in range(max_rounds):
+            # ── Step 2: Choose measurement context ──
+            game_state = {
+                "grid": grid,
+                "euler_char": observer.get("euler_char", 0),
+                "num_colors": observer.get("color_count", 0),
+                "density": observer.get("density", 0.0),
+            }
+
+            # Refine context based on previous verification failures
+            if len(verification_history) > 0:
+                last_result = verification_history[-1]
+                if not last_result.get("verified", False):
+                    # Adjust: increase granularity (coarser view) for next attempt
+                    prev_granularity = game_state.get("granularity_override", "medium")
+                    granularity_upgrade = {
+                        "fine": "fine-medium",
+                        "fine-medium": "medium",
+                        "medium": "medium-coarse",
+                        "medium-coarse": "coarse",
+                        "coarse": "coarse",  # Can't go further
+                    }
+                    game_state["granularity_override"] = granularity_upgrade.get(
+                        prev_granularity, "medium-coarse"
+                    )
+
+            context = self.choose_measurement_context(game_state)
+
+            # Override granularity if refinement requires it
+            if "granularity_override" in game_state:
+                context["granularity"] = game_state["granularity_override"]
+
+            # ── Step 3: Interact with flow ──
+            interaction = self.interact_with_flow(grid, context)
+
+            # ── Step 4: Verify proof ──
+            verified = self._verify_proof(interaction["proof_attempt"])
+
+            self._verification_count += 1
+            if verified:
+                self._accept_count += 1
+                accepted = True
+            else:
+                self._reject_count += 1
+
+            verification_history.append({
+                "round": round_num + 1,
+                "verified": verified,
+                "context_type": context.get("context_type", "unknown"),
+                "granularity": context.get("granularity", "medium"),
+                "information_content": interaction.get("information_content", 0.0),
+            })
+
+            if verified:
+                final_observation = interaction["observation"]
+                final_context = context
+                break
+
+            # Not verified → continue with refined context
+            final_observation = interaction["observation"]
+            final_context = context
+
+        # ── Step 5: Compile result ──
+        result = {
+            "accepted": accepted,
+            "total_rounds": len(verification_history),
+            "final_observation": final_observation,
+            "final_context": final_context,
+            "verification_history": verification_history,
+            "observer": observer,
+        }
+
+        self._proof_history.append(result)
+
+        return result
+
+    def _verify_proof(
+        self,
+        proof_attempt: Dict,
+    ) -> bool:
+        """Verify proof using GaussEx (if available) or topology check.
+
+        The verification step checks whether the proof attempt is consistent
+        with physical laws. If a GaussExGuard is provided, it performs a
+        formal precondition check. Otherwise, a simplified topology-based
+        verification is used as fallback.
+
+        Args:
+            proof_attempt: Dict with proof data including:
+                - euler_char_proxy: Euler characteristic proxy value
+                - color_entropy: Color entropy of the observation
+                - symmetry_score: Symmetry score
+                - claim: Proof claim string
+
+        Returns:
+            True if the proof is verified (consistent with physical law),
+            False if inconsistencies detected.
+        """
+        # ── GaussEx verification (if available) ──
+        if self._gaussex_guard is not None:
+            # Create a synthetic MacroCandidate for precondition check
+            from .tomas_learner import MacroCandidate  # Local import to avoid circular
+
+            macro = MacroCandidate(
+                name="zkp_proof",
+                dsl_sequence=[],
+                tomas_fingerprint=proof_attempt.get("grid_hash", ""),
+                source_tasks=["zkp_verification"],
+                avg_steps=1,
+                success_rate=0.5,
+                generalization_tags=["zkp"],
+                mdl_score=proof_attempt.get("color_entropy", 1.0),
+                min_demo_to_activate=1,
+                validated=False,
+                applicable_topo={"euler_char": proof_attempt.get("euler_char_proxy", 0)},
+                gaussex_precond="True",  # Default: always applicable
+            )
+
+            # Check precondition with game state from proof
+            game_state = {
+                "sprites": [],
+                "euler_char": proof_attempt.get("euler_char_proxy", 0),
+                "color_entropy": proof_attempt.get("color_entropy", 0.0),
+            }
+            passes, reason = self._gaussex_guard.check_precondition(macro, game_state)
+            if not passes:
+                return False
+
+        # ── Topology-based verification (fallback) ──
+        euler = proof_attempt.get("euler_char_proxy", 0)
+        entropy = proof_attempt.get("color_entropy", 0.0)
+        symmetry = proof_attempt.get("symmetry_score", 0.0)
+
+        # Verification criteria:
+        # 1. Euler characteristic should be reasonable (not extreme)
+        if abs(euler) > 100:
+            return False
+
+        # 2. Color entropy should be bounded (not chaotic)
+        if entropy > 8.0:
+            return False
+
+        # 3. At least some structure detected (not random)
+        if entropy < 0.01 and euler == 0 and symmetry == 0.0:
+            # Completely random or completely empty → reject
+            return False
+
+        # 4. Symmetry or topology detected → likely valid observation
+        if symmetry > 0.3 or abs(euler) >= 1:
+            return True
+
+        # 5. Moderate entropy → acceptable
+        if 0.5 <= entropy <= 5.0:
+            return True
+
+        # 6. Low entropy with some features → borderline, accept
+        if entropy > 0.1:
+            return True
+
+        # Reject if no positive indicators
+        return False

@@ -1,8 +1,8 @@
 {
-  "_schema_version": "3.9.0",
-  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (泛函宏统一场论 + 流贯归约 + Sleep-Step Algorithm 1 + Abductive Lift + MoonshineProver)",
+  "_schema_version": "3.10.0",
+  "_description": "TOMAS DSL Macro Library for ARC-AGI-3 Solver (\u6cdb\u51fd\u5b8f\u7edf\u4e00\u573a\u8bba + \u535a\u5f08\u5373\u964d\u7ef4 + GibbsEnsemble + IDO + QuantumContextual + CHL + UniverseZKP)",
   "_tomas_framework": {
-    "version": "3.9.0-dev",
+    "version": "3.10.0-dev",
     "core_modules": [
       "kappa_snap_searcher",
       "nar_conv",
@@ -18,7 +18,12 @@
       "persistent_kv_cache",
       "interactive_zkp_loop",
       "thinker_performer_pipeline",
-      "moonshine_prover"
+      "moonshine_prover",
+      "gibbs_ensemble",
+      "ido_framework",
+      "quantum_contextual_evaluator",
+      "chl_isomorphism",
+      "universe_zkp"
     ],
     "asym_index_enabled": true,
     "narla_integration": true,
@@ -35,9 +40,15 @@
     "kv_cache_persistent_state": true,
     "clean_latent_writeback": true,
     "topology_invariant_guided_ranking": true,
-    "moonshine_prover": true
+    "moonshine_prover": true,
+    "gibbs_ensemble": true,
+    "ido_framework": true,
+    "quantum_contextual_evaluator": true,
+    "chl_isomorphism": true,
+    "interactive_dimension_reduction": true,
+    "universe_zkp": true
   },
-  "_note": "v3.9.0 - Sleep-Step Algorithm 1 (SUCCESS LOG → Functional Macro) + κ-Snap反向 (Abductive Lift from solved games) + Ω_topo Breakthrough Trigger + NP_C_likely Boundary (requires_new_primitives) + MoonshineProver (Numerical Oracle Game)",
+  "_note": "v3.10.0 - GibbsEnsemble (\u5409\u5e03\u65af\u7cfb\u7efc) + IDOFramework (Information-Description-Observer) + QuantumContextualEvaluator (Kochen-Specker\u4e92\u6587\u6027) + CHLIsomorphism (Curry-Howard-Lambek) + Interactive Dimension Reduction (\u4ea4\u4e92\u5f0f\u964d\u7ef4\u5b9a\u7406) + UniverseZKP (\u81ea\u6307\u4ea4\u4e92\u5f0f\u8bc1\u660e\u7cfb\u7edf)",
   "abstractions": [
     {
       "name": "macro_push_sprite_to_target",
@@ -3510,6 +3521,148 @@
         "period_rank": 1
       },
       "gaussex_precond": "True"
+    },
+    {
+      "name": "macro_gibbs_ensemble_sample",
+      "dsl_sequence": [
+        {
+          "action": "OBSERVE"
+        },
+        {
+          "action": "COARSE_GRAIN",
+          "level": 3
+        },
+        {
+          "action": "SAMPLE_STATE"
+        },
+        {
+          "action": "EVALUATE_ENTROPY"
+        }
+      ],
+      "applicable_topo": [
+        "ensemble_estimation",
+        "multi_demo"
+      ],
+      "gaussex_precond": "entropy < threshold AND ensemble_size > 0",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_ido_observer_entropy",
+      "dsl_sequence": [
+        {
+          "action": "CHOOSE_GRANULARITY"
+        },
+        {
+          "action": "COARSE_GRAIN_GRID"
+        },
+        {
+          "action": "COMPUTE_ENTROPY"
+        },
+        {
+          "action": "INFORMATION_GAIN"
+        }
+      ],
+      "applicable_topo": [
+        "observer_dependent",
+        "coarse_grained"
+      ],
+      "gaussex_precond": "observer_level == 'L4' AND granularity in ['fine', 'medium', 'coarse']",
+      "complexity_class": "P"
+    },
+    {
+      "name": "macro_quantum_contextual_eval",
+      "dsl_sequence": [
+        {
+          "action": "REGISTER_CONTEXT"
+        },
+        {
+          "action": "EVALUATE_IN_CONTEXT"
+        },
+        {
+          "action": "SCORE_ACTION"
+        },
+        {
+          "action": "COMPARE_CONTEXTS"
+        }
+      ],
+      "applicable_topo": [
+        "context_dependent",
+        "kochen_specker"
+      ],
+      "gaussex_precond": "context_key_valid AND registry_size > 0",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_chl_invariant_proof",
+      "dsl_sequence": [
+        {
+          "action": "PROPOSITION_TO_INVARIANT"
+        },
+        {
+          "action": "PROOF_TO_KAPPA_SNAP"
+        },
+        {
+          "action": "REDUCTION_TO_BETA_CUT"
+        },
+        {
+          "action": "VERIFY_ISOMORPHISM"
+        }
+      ],
+      "applicable_topo": [
+        "chl_isomorphism",
+        "causal_invariant"
+      ],
+      "gaussex_precond": "euler_char_stable AND symmetry_detected",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_interactive_dimension_reduction",
+      "dsl_sequence": [
+        {
+          "action": "COMPUTE_INFORMATION_GAIN"
+        },
+        {
+          "action": "ESTIMATE_EFFECTIVE_DEPTH"
+        },
+        {
+          "action": "CLASSIFY_P_VS_NP"
+        },
+        {
+          "action": "OPTIMIZE_SEARCH_STRATEGY"
+        }
+      ],
+      "applicable_topo": [
+        "interactive_reduction",
+        "zkp_loop"
+      ],
+      "gaussex_precond": "I_avg > 0.1 AND episode_history_length >= 3",
+      "complexity_class": "P_in_phys"
+    },
+    {
+      "name": "macro_universe_zkp_loop",
+      "dsl_sequence": [
+        {
+          "action": "SPAWN_OBSERVER"
+        },
+        {
+          "action": "CHOOSE_MEASUREMENT_CONTEXT"
+        },
+        {
+          "action": "INTERACT_WITH_FLOW"
+        },
+        {
+          "action": "VERIFY_PROOF"
+        },
+        {
+          "action": "ACCEPT_OR_REJECT"
+        }
+      ],
+      "applicable_topo": [
+        "self_referential_zkp",
+        "universe_model"
+      ],
+      "gaussex_precond": "gaussex_available AND nar_conv_available",
+      "complexity_class": "NP_Hard"
     }
   ]
 }

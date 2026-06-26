@@ -1,4 +1,4 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.9.0.
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.10.0.
 
 Strategy:
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
@@ -21,6 +21,12 @@ Strategy:
   18. Ω_topo Breakthrough Trigger: Δ_Bκ > Ω_topo → trigger Bκ evolution
   19. NP_C_likely Boundary: requires_new_primitives flag (哥德尔余留 acknowledgment)
   20. MoonshineProver: Numerical Oracle Game — Prover-Oracle feedback loop
+  21. GibbsEnsemble: 吉布斯系综 — ensemble probability distribution for game state estimation
+  22. IDOFramework: Information-Description-Observer — observer-dependent entropy/coarse-graining
+  23. QuantumContextualEvaluator: Kochen-Specker互文性 — context-dependent action evaluation
+  24. CHLIsomorphism: Curry-Howard-Lambek — proposition=invariant, proof=κ-Snap, reduction=β-Cut
+  25. Interactive Dimension Reduction: 交互式降维定理 — effective depth = n/I_avg
+  26. UniverseZKP: 自指交互式证明系统 — spawn_observer + choose_context + interact_with_flow
 
 This file is self-contained — no imports from local project files.
 All replay data and logic is included inline.
@@ -170,7 +176,7 @@ ACTION_NAME_TO_ID: Dict[str, int] = {
 
 
 class MyAgent(Agent):
-    """TOMAS ARC-AGI-3 Solver v3.9.0 — Replay Oracle + Φ_phys + Sleep-Step Algorithm 1 + Abductive Lift.
+    """TOMAS ARC-AGI-3 Solver v3.10.0 — Replay Oracle + Φ_phys + GibbsEnsemble + IDO + QuantumContextual + CHL + UniverseZKP.
 
     Strategy priority:
       1. ARC3 Replay Oracle (precomputed human-optimal sequences)
@@ -272,7 +278,7 @@ class MyAgent(Agent):
 
     @property
     def name(self) -> str:
-        return f"tomas.v3.9.0.{self.MAX_ACTIONS}"
+        return f"tomas.v3.10.0.{self.MAX_ACTIONS}"
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         """Stop when all levels completed or action budget exhausted."""
