@@ -786,189 +786,8 @@ def solve_g50t(game: Any, level_idx: int) -> list | None:
 # ============================================================================
 
 
-def _solve_ka59_sokoban_strategy(
-    game: Any,
-    original_level: int,
-) -> list[tuple] | None:
-    """KA59 Sokoban BFS strategy — push all blocks onto targets.
-
-    TRUE mechanics (from ka59.py source):
-        - Player controls 0022vrxelxosfy[0] (first target sprite, tagged prkgpeyexo)
-        - Move with ACTION1(up)/2(down)/3(left)/4(right), step_size=zsqdfmgyjo
-        - Push mechanic: player collides with 0010xzmuziohuf block → block moves same dir (Sokoban)
-        - ACTION6 click on 0022vrxelxosfy target → switch active player to that target
-        - Enemy omeizjufss → moves toward 0001uqqokjrptk goal target, reaching it = LOSE
-        - Win: all 0010xzmuziohuf overlap with 0022vrxelxosfy AND
-               all 0027jbgxilrocf overlap with 0001uqqokjrptk
-        - Available actions: [1, 2, 3, 4, 6]
-
-    Strategy:
-        BFS over game states using deepcopy for simulation.
-        Actions: 4-direction moves (push blocks Sokoban-style) + ACTION6 to switch target.
-        Goal: _is_level_solved() returns True.
-
-    Args:
-        game: The game object (will use deepcopy for simulation).
-        original_level: Original level index for solved-check.
-
-    Returns:
-        List of (action, data) tuples, or None if strategy fails.
-
-    Self-test:
-        >>> result = _solve_ka59_sokoban_strategy(None, 0)
-        >>> assert result is None  # No game → no plan
-    """
-    from arcengine import GameAction, ActionInput, GameState
-    import time
-
-    if game is None:
-        return None
-
-    # ── Step 1: Identify game entities from sprites ──
-    blocks = _get_sprites_by_tag(game, '0010xzmuziohuf')
-    targets = _get_sprites_by_tag(game, '0022vrxelxosfy')
-    goal_targets = _get_sprites_by_tag(game, '0001uqqokjrptk')
-
-    if not blocks or not targets:
-        # Fallback tag names
-        blocks_fb = _get_sprites_by_tag(game, 'block')
-        targets_fb = _get_sprites_by_tag(game, 'target')
-        if not blocks_fb or not targets_fb:
-            return None
-        blocks = blocks_fb
-        targets = targets_fb
-
-    # Get step size from game variable zsqdfmgyjo
-    step_size = getattr(game, 'zsqdfmgyjo', None)
-    if step_size is None:
-        step_size = getattr(game, '_step_size', None)
-    if step_size is None or step_size <= 0:
-        step_size = 3  # Default for KA59
-
-    # ── Step 2: BFS search using game deepcopy simulation ──
-    t0 = time.time()
-    max_time_budget = 25.0
-    max_depth = 60
-    max_nodes = 50000
-
-    initial_hash = _game_state_hash(game)
-    queue: deque[tuple[Any, list[tuple], str]] = deque()
-    queue.append((copy.deepcopy(game), [], initial_hash))
-    visited: set[str] = {initial_hash}
-    total_nodes = 0
-
-    # Build action set for KA59: [1=UP, 2=DOWN, 3=LEFT, 4=RIGHT, 6=CLICK]
-    move_actions = [
-        (GameAction.ACTION1, {}),   # UP
-        (GameAction.ACTION2, {}),   # DOWN
-        (GameAction.ACTION3, {}),   # LEFT
-        (GameAction.ACTION4, {}),   # RIGHT
-    ]
-
-    # Get clickable target positions for ACTION6
-    target_click_positions: list[tuple[int, int]] = []
-    for t in targets:
-        tpos = _sprite_display_center(game, t)
-        target_click_positions.append(tpos)
-
-    # Also try goal targets as click targets
-    for gt in goal_targets:
-        gtpos = _sprite_display_center(game, gt)
-        if gtpos not in target_click_positions:
-            target_click_positions.append(gtpos)
-
-    while queue:
-        if time.time() - t0 > max_time_budget:
-            break
-        if total_nodes > max_nodes:
-            break
-
-        g, path, prev_hash = queue.popleft()
-        total_nodes += 1
-
-        # ── 2a: Try movement actions (Sokoban push) ──
-        for game_action, action_data in move_actions:
-            if len(path) >= max_depth:
-                break
-
-            g_copy = copy.deepcopy(g)
-            ai_move = ActionInput(id=game_action, data=action_data)
-            result = _perform_action_safe(g_copy, ai_move)
-
-            if not result:
-                continue
-
-            # Check game over (enemy reached goal = lose)
-            if g_copy._state == GameState.GAME_OVER:
-                continue
-
-            action_tuple = (game_action, None)
-            new_path = path + [action_tuple]
-
-            # Check if solved
-            if _is_level_solved(g_copy, original_level):
-                return new_path
-
-            # Dedup by state hash
-            new_hash = _game_state_hash(g_copy)
-            if new_hash in visited:
-                continue
-            visited.add(new_hash)
-
-            # Skip unchanged states (ineffective move)
-            if new_hash == prev_hash:
-                continue
-
-            queue.append((g_copy, new_path, new_hash))
-
-        # ── 2b: Try ACTION6 (switch active target) ──
-        # Need to re-get target positions from current game state
-        # since positions may have changed due to pushes
-        current_targets = _get_sprites_by_tag(g, '0022vrxelxosfy')
-        current_goal_targets = _get_sprites_by_tag(g, '0001uqqokjrptk')
-
-        click_positions: list[tuple[int, int]] = []
-        for ct in current_targets:
-            cpos = _sprite_display_center(g, ct)
-            click_positions.append(cpos)
-        for cgt in current_goal_targets:
-            cgtpos = _sprite_display_center(g, cgt)
-            if cgtpos not in click_positions:
-                click_positions.append(cgtpos)
-
-        for click_pos in click_positions:
-            if len(path) >= max_depth:
-                break
-
-            g_copy = copy.deepcopy(g)
-            ai_click = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
-            result = _perform_action_safe(g_copy, ai_click)
-
-            if not result:
-                continue
-
-            if g_copy._state == GameState.GAME_OVER:
-                continue
-
-            action_tuple = (GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]})
-            new_path = path + [action_tuple]
-
-            if _is_level_solved(g_copy, original_level):
-                return new_path
-
-            new_hash = _game_state_hash(g_copy)
-            if new_hash in visited:
-                continue
-            visited.add(new_hash)
-
-            if new_hash == prev_hash:
-                continue
-
-            queue.append((g_copy, new_path, new_hash))
-
-    return None
 def solve_ka59(game: Any, level_idx: int) -> list | None:
-    """Solve KA59: Push blocks to align with target positions.
+    """Solve KA59: Sokoban push-block game using Δ-State Replay + κ-gradient oracle (v3.18.0).
 
     Game mechanics:
         - Step size: 3 pixels
@@ -976,18 +795,18 @@ def solve_ka59(game: Any, level_idx: int) -> list | None:
         - Blocks: tag='0010xzmuziohuf', 5x5
         - Targets: tag='0022vrxelxosfy', 3x3 (also sys_click)
         - Goal targets: tag='0001uqqokjrptk'
-        - Walls: tag='0015qniapgwsvb' and '0029ifoxxfvvvs'
+        - Walls: tag='0015qniapgwsvb' (inner walls only)
         - ACTION6: switch active player
-        - Win: all blocks adjacent to targets + all 0027jbgxilrocf adjacent to 0001uqqokjrptk
+        - Enemy: tag='omeizjufss' (chases goal target)
+        - Win: all blocks adjacent to targets
 
-    Strategy (v3.17.0):
-        Primary: Sokoban BFS strategy (push blocks onto targets with enemy avoidance).
-        Fallback: κ-Priority Search (κ-PS) with Liu mechanism S_rel formula.
-        Last resort: BFS with deepcopy.
+    Strategy (v3.18.0 — Δ-State Replay + κ-gradient oracle):
+        Stage 1: κ-gradient oracle replay (5s) — greedy push + κ-detour
+        Stage 2: Δ-State BFS decomposition (3s) — zero-copy search
+        Stage 3: κ-PS fallback (2s) — Liu mechanism S_rel priority
+        Stage 4: generic pipeline
     """
-    import copy
-    import time
-    from arcengine import ActionInput, GameAction, GameState
+    import time as _time
 
     original_level = game._current_level_index
 
@@ -995,115 +814,35 @@ def solve_ka59(game: Any, level_idx: int) -> list | None:
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Primary (v3.17.0): Sokoban BFS strategy ──
-    # Push blocks onto targets using BFS with deepcopy simulation
+    # ── Stage 1: κ-gradient oracle replay (5s budget) ──
+    # Greedy: push blocks toward targets using κ-priority
+    # Detour: κ-gradient BFS when blocked by walls
+    # ACTION6: switch active player when needed
     try:
-        hungarian_plan = _solve_ka59_sokoban_strategy(game, original_level)
-        if hungarian_plan is not None:
-            return hungarian_plan
-    except Exception:
-        pass
-
-    # ── Secondary: κ-Priority Search (v3.14.0) with Liu mechanism ──
-    # κ-PS follows information-gradient with S_rel priority formula
-    try:
-        plan = solve_kappa_priority_search(
-            game, max_depth=60, max_nodes=80000, max_time=30.0,
-            use_liu_mechanism=True,
-        )
+        plan = _solve_oracle_replay(game, "ka59", level_idx, max_steps=300, max_time=5.0)
         if plan is not None:
             return plan
     except Exception:
         pass
 
-    # ── Fallback: BFS with deepcopy ──
-    t0 = time.time()
-    max_time_budget = 30.0
-    max_depth = 60
-    max_nodes = 80000
-
-    # Quick check — already solved?
-    if _is_level_solved(game, original_level):
-        return []
-
-    # BFS with deepcopy — each node stores game state directly
-    initial_hash = _game_state_hash(game)
-    # Queue: (game_deepcopy, action_plan, state_hash)
-    queue: deque[tuple[Any, list[tuple], str]] = deque()
-    queue.append((copy.deepcopy(game), [], initial_hash))
-    visited: set[str] = {initial_hash}
-    total_nodes = 0
-
-    while queue:
-        if time.time() - t0 > max_time_budget:
-            break
-        if total_nodes > max_nodes:
-            break
-
-        g, path, prev_hash = queue.popleft()
-        total_nodes += 1
-
-        # Get valid actions from the engine at current state
-        actions = _get_valid_action_inputs(g)
-
-        # Sort: prioritize clicks (ACTION6) over movement, then try movement
-        # Player switching and click actions often change game state significantly
-        actions_sorted = sorted(actions, key=lambda a: (
-            0 if (a.id == GameAction.ACTION6 if hasattr(a.id, 'value') else a.id == 6) else 1,
-            -(len(a.data) if a.data else 0),
-        ))
-
-        for ai in actions_sorted:
-            if len(path) >= max_depth:
-                break
-
-            g_copy = copy.deepcopy(g)
-
-            # Normalize action id
-            aid = ai.id
-            aid_val = aid.value if hasattr(aid, 'value') else aid
-
-            # Build action tuple for the plan
-            if aid_val == 6 and ai.data:
-                action_tuple = (GameAction.ACTION6, dict(ai.data) if ai.data else {})
-            else:
-                action_tuple = (aid, None)
-
-            result = _perform_action_safe(g_copy, ai)
-            if not result:
-                continue
-
-            # Check if game over (invalid state)
-            if g_copy._state == GameState.GAME_OVER:
-                continue
-
-            new_path = path + [action_tuple]
-
-            # Check if solved
-            if _is_level_solved(g_copy, original_level):
-                return new_path
-
-            # Dedup by state hash
-            new_hash = _game_state_hash(g_copy)
-            if new_hash in visited:
-                continue
-            visited.add(new_hash)
-
-            # Skip states that didn't change (likely ineffective action)
-            if new_hash == prev_hash:
-                continue
-
-            queue.append((g_copy, new_path, new_hash))
-
-    # Fallback: try solve_generic_dfs approach with more permissive limits
-    fallback_game = copy.deepcopy(game)
+    # ── Stage 2: Δ-State BFS decomposition (3s budget) ──
+    # Uses delta_state.py ReplayEngine for zero-copy search
     try:
-        result = solve_generic_dfs(fallback_game, max_depth=60, max_nodes=100000, max_time=15.0)
-        if result:
-            return result
+        plan = _solve_game_delta_state_bfs(game, "ka59", level_idx, max_time=3.0)
+        if plan is not None:
+            return plan
     except Exception:
         pass
 
+    # ── Stage 3: κ-PS fallback (2s budget) ──
+    try:
+        plan = solve_game_kps(game, max_depth=40, max_nodes=50000, max_time=2.0)
+        if plan is not None:
+            return plan
+    except Exception:
+        pass
+
+    # ── Stage 4: generic pipeline ──
     return None
 
 
@@ -1830,62 +1569,258 @@ def solve_s5i5(game: Any, level_idx: int) -> list | None:
 
 
 # ============================================================================
-# TN36 Solver: Click-based programming game
+# Shared Δ-State BFS + κ-PS Infrastructure (v3.18.0)
 # ============================================================================
 
 
-def _solve_tn36_click_sequence_strategy(
+def _solve_game_delta_state_bfs(
     game: Any,
-    original_level: int,
+    game_id: str,
+    level_idx: int,
+    max_time: float = 3.0,
 ) -> list[tuple] | None:
-    """TN36 click-sequence search — find the right click order to win.
+    """Δ-State BFS decomposition solver using ReplayEngine (v3.18.0).
 
-    TRUE mechanics (from tn36.py source):
-        - Available actions: [6] — ONLY ACTION6 (click)
-        - Each click activates a sprite program via ytkjoffamq (inner state manager)
-        - miytdaqzei = clickable sprites (kntfjgchzd tag)
-        - mvqheosngn = first sprite (mkfavqnwxy tag, sorted by x)
-        - bzirenxmrg = second sprite (same tag, sorted by x) — the goal-check sprite
-        - When you click a kntfjgchzd sprite → egjahxmvrj(sprite) sets first sprite
-          to that position/rotation/program, then animates it moving
-        - Background ccfrgpdila scrolls left each step
-        - Win: bzirenxmrg.vklyonlcrw becomes True (second sprite reaches some state)
-        - Lose: background scrolled past player (ccfrgpdila.x > player.x + player.width)
-
-    Strategy:
-        BFS/DFS over click sequences: try clicking each clickable sprite in order.
-        After each click, simulate the program execution.
-        Check win condition (bzirenxmrg.vklyonlcrw) and lose condition after each click.
-        Use deepcopy of game for simulation.
+    Uses the zero-copy Δ-State engine from delta_state.py to perform BFS
+    without deepcopy-per-node overhead. Nodes store only (parent_id, action),
+    and the ReplayEngine materializes state by: deepcopy(root) → replay
+    action chain.
 
     Args:
-        game: The game object (will use deepcopy for simulation).
-        original_level: Original level index for solved-check.
+        game: The env._game object.
+        game_id: Game identifier (e.g., "ka59", "ar25", "tn36").
+        level_idx: Current level index.
+        max_time: Maximum time budget in seconds.
 
     Returns:
-        List of (action, data) tuples, or None if strategy fails.
+        Action plan as list of (action_id, data) tuples, or None.
     """
-    from arcengine import GameAction, ActionInput, GameState
-    import time
+    import time as _time
+    from collections import deque
+    from arcengine import ActionInput, GameState
+    from .delta_state import ReplayEngine, SolverAborted, BudgetExceeded
+    from .oracle_adapters import get_oracle_adapter
 
-    if game is None:
+    t0 = _time.time()
+    original_level = game._current_level_index
+
+    if _is_level_solved(game, original_level):
+        return []
+
+    adapter = get_oracle_adapter(game_id, game)
+    if adapter is None:
         return None
 
-    # ── Step 1: Find clickable sprites (kntfjgchzd tag) ──
-    clickables = _get_sprites_by_tag(game, 'kntfjgchzd')
-    if not clickables:
-        # Fallback tag names
-        for tag_name in ('Maidxz', 'qqifsatqdo', 'sys_click'):
-            clickables = _get_sprites_by_tag(game, tag_name)
-            if clickables:
+    step_size = adapter.step
+    if step_size <= 0:
+        step_size = _detect_game_step(game)
+
+    # Build action space from adapter
+    action_space: list[tuple[int, dict]] = []
+    if adapter.player is not None:
+        # Movement game — add direction actions
+        for d in [1, 2, 3, 4]:
+            action_space.append((d, {}))
+        # Add click/switcher actions if available
+        for sw in (adapter.switchers or []):
+            sx = int(sw.x)
+            sy = int(sw.y)
+            action_space.append((6, {"x": sx, "y": sy}))
+    else:
+        # Click-only game — add all click targets
+        for g in (adapter.goals or []):
+            gx = int(g.x)
+            gy = int(g.y)
+            gw = int(g.width) if hasattr(g, 'width') else 1
+            gh = int(g.height) if hasattr(g, 'height') else 1
+            click_x = int(gx + gw / 2)
+            click_y = int(gy + gh / 2)
+            action_space.append((6, {"x": click_x, "y": click_y}))
+        # Also add switcher click targets
+        for sw in (adapter.switchers or []):
+            sx = int(sw.x)
+            sy = int(sw.y)
+            click_x = int(sx + 1)
+            click_y = int(sy + 1)
+            action_space.append((6, {"x": click_x, "y": click_y}))
+
+    if not action_space:
+        return None
+
+    # BFS using ReplayEngine for zero-copy state materialization
+    root_game = copy.deepcopy(game)
+    engine = ReplayEngine(root_game, mode="game")
+    visited_hashes: set[str] = set()
+
+    # Layout hash for initial state
+    initial_hash = _game_state_hash(game)
+    visited_hashes.add(initial_hash)
+
+    # BFS queue: (engine_node_id, action_plan)
+    queue: deque[tuple[int, list[tuple]]] = deque()
+    queue.append((0, []))  # Node 0 = root
+
+    max_nodes = 50000
+    total_nodes = 0
+
+    while queue and _time.time() - t0 < max_time:
+        node_id, plan = queue.popleft()
+
+        # Materialize state from replay engine
+        try:
+            cur_game = engine.replay(node_id)
+        except (SolverAborted, BudgetExceeded, Exception):
+            continue
+
+        total_nodes += 1
+        if total_nodes > max_nodes:
+            break
+
+        # Check if solved
+        if _is_level_solved(cur_game, original_level):
+            return plan
+
+        # Check adapter-specific win condition
+        cur_adapter = get_oracle_adapter(game_id, cur_game)
+        if cur_adapter is not None and hasattr(cur_adapter, 'is_won') and cur_adapter.is_won():
+            return plan
+
+        # Expand: try each action
+        for action_id, action_data in action_space:
+            if len(plan) >= 200:
                 break
 
-    if not clickables:
-        # Last fallback: try engine-valid action inputs
-        all_valid = _get_valid_action_inputs(game)
-        click_positions = []
+            try:
+                child_game = copy.deepcopy(cur_game)
+                ai = ActionInput(id=action_id, data=action_data)
+                child_game.perform_action(ai)
+            except Exception:
+                continue
+
+            # Skip game-over states
+            try:
+                if child_game._state == GameState.GAME_OVER:
+                    continue
+            except Exception:
+                pass
+
+            child_hash = _game_state_hash(child_game)
+            if child_hash in visited_hashes:
+                continue
+            visited_hashes.add(child_hash)
+
+            # Check if player moved (for movement games)
+            if cur_adapter is not None and cur_adapter.player is not None:
+                child_adapter = get_oracle_adapter(game_id, child_game)
+                if child_adapter is not None and child_adapter.player is not None:
+                    cur_px = int(cur_adapter.player.x)
+                    cur_py = int(cur_adapter.player.y)
+                    child_px = int(child_adapter.player.x)
+                    child_py = int(child_adapter.player.y)
+                    if (cur_px, cur_py) == (child_px, child_py) and action_id in [1, 2, 3, 4]:
+                        continue  # Player didn't move — skip
+
+            # Check if solved immediately
+            if _is_level_solved(child_game, original_level):
+                return plan + [(action_id, action_data)]
+
+            # Register child node with replay engine
+            child_node_id = engine.register(node_id, (action_id, action_data))
+            queue.append((child_node_id, plan + [(action_id, action_data)]))
+
+    return None
+
+
+def solve_game_kps(
+    game: Any,
+    max_depth: int = 40,
+    max_nodes: int = 50000,
+    max_time: float = 2.0,
+) -> list[tuple] | None:
+    """κ-PS (κ-Priority Search) wrapper for game solvers (v3.18.0).
+
+    Thin wrapper around solve_kappa_priority_search with shorter time budget.
+    Used as Stage 3 fallback in the ka59/ar25/tn36 multi-stage pipeline.
+
+    Args:
+        game: The env._game object.
+        max_depth: Maximum BFS depth.
+        max_nodes: Maximum number of search nodes.
+        max_time: Maximum time budget in seconds (default 2.0).
+
+    Returns:
+        Action plan as list of (action_id, data) tuples, or None.
+    """
+    try:
+        return solve_kappa_priority_search(
+            game,
+            max_depth=max_depth,
+            max_nodes=max_nodes,
+            max_time=max_time,
+            use_liu_mechanism=True,
+        )
+    except Exception:
+        return None
+
+
+# ============================================================================
+# TN36 Solver: Click-based programming game (v3.18.0 Δ-State Replay)
+# ============================================================================
+
+
+def _solve_oracle_click_replay(
+    game: Any,
+    game_id: str,
+    level_idx: int,
+    max_steps: int = 100,
+    max_time: float = 5.0,
+) -> list[tuple] | None:
+    """Oracle click replay for click-only games (v3.18.0).
+
+    Strategy: Click sprites one at a time, checking if closer to goal.
+    For TN36: Click kntfjgchzd sprites to trigger state machine transitions.
+    Win: bzirenxmrg.vklyonlcrw == True (second sprite reaches target state).
+
+    Args:
+        game: The env._game object.
+        game_id: Game identifier (e.g., "tn36").
+        level_idx: Current level index.
+        max_steps: Maximum simulation steps.
+        max_time: Maximum time in seconds.
+
+    Returns:
+        Action plan as list of (action_id, data) tuples, or None.
+    """
+    import time as _time
+    from arcengine import ActionInput
+    from .oracle_adapters import get_oracle_adapter
+
+    t0 = _time.time()
+    adapter = get_oracle_adapter(game_id, game)
+    if adapter is None:
+        return None
+
+    sim = copy.deepcopy(game)
+    original_level = sim._current_level_index
+
+    # Quick check — already solved?
+    if _is_level_solved(sim, original_level):
+        return []
+
+    # For TN36: check adapter-specific win condition
+    if hasattr(adapter, 'is_won') and adapter.is_won():
+        return []
+
+    collected: list[tuple] = []
+
+    # Get initial click targets from adapter goals
+    goals = adapter.goals
+    if not goals:
+        # Fallback: use engine-valid actions
+        valid_actions = _get_valid_action_inputs(game)
+        click_targets: list[tuple[int, int]] = []
         seen: set[tuple[int, int]] = set()
-        for ai in all_valid:
+        for ai in valid_actions:
             aid = ai.id if not hasattr(ai.id, 'value') else ai.id.value
             if aid == 6:
                 data = ai.data if ai.data else {}
@@ -1893,332 +1828,120 @@ def _solve_tn36_click_sequence_strategy(
                 y = int(data.get('y', 0))
                 if (x, y) != (0, 0) and (x, y) not in seen:
                     seen.add((x, y))
-                    click_positions.append((x, y))
-        if not click_positions:
+                    click_targets.append((x, y))
+        if not click_targets:
             return None
-        # Use engine click positions directly
     else:
-        # Sort clickables by x position (matching the mkfavqnwxy tag sorting)
-        clickables = sorted(clickables, key=lambda s: int(getattr(s, 'x', 0)))
-        click_positions = [_sprite_display_center(game, s) for s in clickables]
+        # Use adapter goals as click targets (sorted by x position)
+        click_targets = [(int(g.x), int(g.y)) for g in sorted(goals, key=lambda g: g.x)]
 
-    # ── Step 2: BFS over click sequences ──
-    t0 = time.time()
-    max_time_budget = 30.0
-    max_depth = 30  # Click sequences are typically short
-    max_nodes = 20000
-
-    initial_hash = _game_state_hash(game)
-    queue: deque[tuple[Any, list[tuple], str]] = deque()
-    queue.append((copy.deepcopy(game), [], initial_hash))
-    visited: set[str] = {initial_hash}
-    total_nodes = 0
-
-    while queue:
-        if time.time() - t0 > max_time_budget:
+    # Click each target in order, checking progress after each click
+    for click_x, click_y in click_targets:
+        if _time.time() - t0 > max_time:
             break
-        if total_nodes > max_nodes:
+        if len(collected) >= max_steps:
             break
 
-        g, path, prev_hash = queue.popleft()
-        total_nodes += 1
-
-        # Get current click targets — may change after each click
-        # Use engine-valid action inputs for reliability
-        current_clicks: list[tuple[int, int]] = []
-        current_seen: set[tuple[int, int]] = set()
-
-        # Try engine-valid inputs first
+        ai = ActionInput(id=6, data={'x': click_x, 'y': click_y})
         try:
-            for ai_out in _get_valid_action_inputs(g):
-                aid_out = ai_out.id if not hasattr(ai_out.id, 'value') else ai_out.id.value
-                if aid_out == 6:
-                    data_out = ai_out.data if ai_out.data else {}
-                    x_out = int(data_out.get('x', 0))
-                    y_out = int(data_out.get('y', 0))
-                    if (x_out, y_out) != (0, 0) and (x_out, y_out) not in current_seen:
-                        current_seen.add((x_out, y_out))
-                        current_clicks.append((x_out, y_out))
+            sim.perform_action(ai)
         except Exception:
-            pass
+            continue
 
-        # Fallback to sprite-based click positions
-        if not current_clicks:
-            current_clickables = _get_sprites_by_tag(g, 'kntfjgchzd')
-            if not current_clickables:
-                for tag_name in ('Maidxz', 'qqifsatqdo', 'sys_click'):
-                    current_clickables = _get_sprites_by_tag(g, tag_name)
-                    if current_clickables:
-                        break
-            if current_clickables:
-                for s in sorted(current_clickables, key=lambda s: int(getattr(s, 'x', 0))):
-                    pos = _sprite_display_center(g, s)
-                    if pos not in current_seen:
-                        current_seen.add(pos)
-                        current_clicks.append(pos)
-            else:
-                # Use initial click positions as fallback
-                current_clicks = click_positions
+        collected.append((6, {'x': click_x, 'y': click_y}))
 
-        for click_pos in current_clicks:
-            if len(path) >= max_depth:
+        # Check if solved after each click
+        if _is_level_solved(sim, original_level):
+            return collected
+
+        # Check TN36-specific win condition
+        if hasattr(adapter, 'is_won'):
+            sim_adapter = get_oracle_adapter(game_id, sim)
+            if sim_adapter is not None and sim_adapter.is_won():
+                return collected
+
+    # If not solved yet, try permutations of click targets
+    if len(click_targets) <= 6:
+        from itertools import permutations
+        for perm in permutations(click_targets):
+            if _time.time() - t0 > max_time:
                 break
 
-            g_copy = copy.deepcopy(g)
-            ai_click = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
-            result = _perform_action_safe(g_copy, ai_click)
+            perm_sim = copy.deepcopy(game)
+            perm_collected: list[tuple] = []
+            perm_original = perm_sim._current_level_index
 
-            if not result:
-                continue
+            for click_x, click_y in perm:
+                if len(perm_collected) >= max_steps:
+                    break
+                ai = ActionInput(id=6, data={'x': click_x, 'y': click_y})
+                try:
+                    perm_sim.perform_action(ai)
+                except Exception:
+                    break
 
-            # Check lose condition (background scrolled past player)
-            try:
-                if g_copy._state == GameState.GAME_OVER:
-                    continue
-            except Exception:
-                pass
+                perm_collected.append((6, {'x': click_x, 'y': click_y}))
 
-            action_tuple = (GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]})
-            new_path = path + [action_tuple]
+                if _is_level_solved(perm_sim, perm_original):
+                    return perm_collected
 
-            # Check if solved
-            if _is_level_solved(g_copy, original_level):
-                return new_path
-
-            # Also check the TN36-specific win condition directly
-            # bzirenxmrg.vklyonlcrw == True
-            try:
-                fdksqlmpki = getattr(g_copy, 'fdksqlmpki', None)
-                if fdksqlmpki is not None:
-                    bzirenxmrg = getattr(fdksqlmpki, 'bzirenxmrg', None)
-                    if bzirenxmrg is not None:
-                        vklyonlcrw = getattr(bzirenxmrg, 'vklyonlcrw', None)
-                        if vklyonlcrw is True or vklyonlcrw == 1:
-                            return new_path
-            except Exception:
-                pass
-
-            # Dedup by state hash
-            new_hash = _game_state_hash(g_copy)
-            if new_hash in visited:
-                continue
-            visited.add(new_hash)
-
-            # Skip unchanged states (ineffective click)
-            if new_hash == prev_hash:
-                continue
-
-            queue.append((g_copy, new_path, new_hash))
+                if hasattr(adapter, 'is_won'):
+                    perm_adapter = get_oracle_adapter(game_id, perm_sim)
+                    if perm_adapter is not None and perm_adapter.is_won():
+                        return perm_collected
 
     return None
+
+
 def solve_tn36(game: Any, level_idx: int) -> list | None:
-    """Solve TN36: Multi-state animation click game.
+    """Solve TN36: Click-programming state machine game using Δ-State Replay + κ-gradient oracle (v3.18.0).
 
     Game mechanics:
         - Actions: [6] (CLICK only)
         - Two state machines (dimsufvezo): mvqheosngn (left) and bzirenxmrg (right)
         - Each has htntnzkbzu (current selection) and aqszntqeae (target)
-        - Win: bzirenxmrg.htntnzkbzu matches aqszntqeae in x,y,scale,rotation,color
+        - Win: bzirenxmrg.vklyonlcrw == True
 
-    Strategy (v3.17.0):
-        Primary: Click-sequence search — BFS over click sequences with deepcopy simulation.
-        Fallback: κ-Priority Search (κ-PS) with Liu mechanism S_rel formula.
-        Last resort: Best-first search using deepcopy for each node.
+    Strategy (v3.18.0 — Δ-State Replay + κ-gradient oracle):
+        Stage 1: Oracle click replay (5s) — click sprites toward win condition
+        Stage 2: Δ-State BFS decomposition (3s) — zero-copy search
+        Stage 3: κ-PS fallback (2s) — Liu mechanism S_rel priority
+        Stage 4: generic pipeline
     """
-    import copy
-    import time
-    import heapq
-    from arcengine import GameAction, ActionInput, GameState
+    import time as _time
 
     original_level = game._current_level_index
 
-    # Phase 0: Quick check — already solved?
+    # Quick check — already solved?
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Primary (v3.17.0): Click-sequence search strategy ──
-    # BFS over click sequences with deepcopy simulation
+    # ── Stage 1: Oracle click replay (5s budget) ──
+    # Click sprites one at a time, check if closer to goal
     try:
-        stg_plan = _solve_tn36_click_sequence_strategy(game, original_level)
-        if stg_plan is not None:
-            return stg_plan
-    except Exception:
-        pass
-
-    # ── Secondary: κ-Priority Search (v3.14.0) with Liu mechanism ──
-    try:
-        plan = solve_kappa_priority_search(
-            game, max_depth=50, max_nodes=50000, max_time=45.0,
-            use_liu_mechanism=True,
-        )
+        plan = _solve_oracle_click_replay(game, "tn36", level_idx, max_steps=100, max_time=5.0)
         if plan is not None:
             return plan
     except Exception:
         pass
 
-    # ── Fallback: Best-first search (A*-like) ──
-    t0 = time.time()
-    max_time_budget = 45.0
-    max_depth = 50
-    max_nodes = 50000
+    # ── Stage 2: Δ-State BFS decomposition (3s budget) ──
+    try:
+        plan = _solve_game_delta_state_bfs(game, "tn36", level_idx, max_time=3.0)
+        if plan is not None:
+            return plan
+    except Exception:
+        pass
 
-    # Phase 1: Get engine-valid click targets from initial state
-    initial_targets: list[tuple[int, int]] = []
-    seen_targets: set[tuple[int, int]] = set()
+    # ── Stage 3: κ-PS fallback (2s budget) ──
+    try:
+        plan = solve_game_kps(game, max_depth=30, max_nodes=20000, max_time=2.0)
+        if plan is not None:
+            return plan
+    except Exception:
+        pass
 
-    all_valid = _get_valid_action_inputs(game)
-    for ai in all_valid:
-        aid = ai.id if not hasattr(ai.id, 'value') else ai.id.value
-        if aid == 6:
-            data = ai.data if ai.data else {}
-            x = int(data.get('x', 0))
-            y = int(data.get('y', 0))
-            if (x, y) != (0, 0) and (x, y) not in seen_targets:
-                seen_targets.add((x, y))
-                initial_targets.append((x, y))
-
-    if not initial_targets:
-        # Try multiple tag names for click targets
-        for tag_name in ("Maidxz", "qqifsatqdo", "sys_click"):
-            clickables = _get_sprites_by_tag(game, tag_name)
-            if clickables:
-                for sprite in sorted(clickables, key=lambda s: (_sprite_pos(s)[1], _sprite_pos(s)[0])):
-                    pos = _sprite_display_center(game, sprite)
-                    if pos != (0, 0) and pos not in seen_targets:
-                        seen_targets.add(pos)
-                        initial_targets.append(pos)
-                break
-
-    if not initial_targets:
-        return None
-
-    # Phase 2: Best-first search (A*-like) using deepcopy for each node
-    # Priority queue ordered by heuristic score (path length + progress score)
-    initial_hash = _tn36_internal_state_hash(game)
-    initial_score = _tn36_progress_score(game)
-
-    counter = 0
-    pq: list[tuple[int, int, Any, list[tuple], str]] = []
-    heapq.heappush(pq, (initial_score, counter, copy.deepcopy(game), [], initial_hash))
-    visited: set[str] = {initial_hash}
-    total_nodes = 0
-
-    while pq:
-        if time.time() - t0 > max_time_budget:
-            break
-        if total_nodes > max_nodes:
-            break
-
-        score, cnt, g, path, prev_hash = heapq.heappop(pq)
-        total_nodes += 1
-
-        # Get dynamic engine click targets from current state
-        # Use _get_valid_action_inputs() for reliability
-        current_targets: list[tuple[int, int]] = []
-        current_seen: set[tuple[int, int]] = set()
-
-        try:
-            for ai_out in _get_valid_action_inputs(g):
-                aid_out = ai_out.id if not hasattr(ai_out.id, 'value') else ai_out.id.value
-                if aid_out == 6:
-                    data_out = ai_out.data if ai_out.data else {}
-                    x_out = int(data_out.get('x', 0))
-                    y_out = int(data_out.get('y', 0))
-                    if (x_out, y_out) != (0, 0) and (x_out, y_out) not in current_seen:
-                        current_seen.add((x_out, y_out))
-                        current_targets.append((x_out, y_out))
-        except Exception:
-            pass
-
-        # Also try _get_valid_clickable_actions as fallback
-        try:
-            for ai_out in g._get_valid_clickable_actions():
-                aid_out = ai_out.id if not hasattr(ai_out.id, 'value') else ai_out.id.value
-                if aid_out == 6:
-                    data_out = ai_out.data if ai_out.data else {}
-                    x_out = int(data_out.get('x', 0))
-                    y_out = int(data_out.get('y', 0))
-                    if (x_out, y_out) != (0, 0) and (x_out, y_out) not in current_seen:
-                        current_seen.add((x_out, y_out))
-                        current_targets.append((x_out, y_out))
-        except Exception:
-            pass
-
-        # Fallback to initial targets if current targets empty
-        if not current_targets:
-            current_targets = initial_targets
-
-        # Expand: try each click target
-        for click_pos in current_targets:
-            if len(path) >= max_depth:
-                break
-
-            g_copy = copy.deepcopy(g)
-            ai = ActionInput(id=GameAction.ACTION6, data={"x": click_pos[0], "y": click_pos[1]})
-            result = _perform_action_safe(g_copy, ai)
-
-            if not result:
-                continue
-
-            # Skip game-over states
-            try:
-                if g_copy._state == GameState.GAME_OVER:
-                    continue
-            except Exception:
-                pass
-
-            step_tuple = (GameAction.ACTION6, {"x": click_pos[0], "y": click_pos[1]})
-            new_path = path + [step_tuple]
-
-            if _is_level_solved(g_copy, original_level):
-                return new_path
-
-            state_h = _tn36_internal_state_hash(g_copy)
-            if state_h in visited:
-                continue
-            visited.add(state_h)
-
-            # Skip states that didn't change (ineffective click)
-            if state_h == prev_hash:
-                continue
-
-            if len(new_path) < max_depth:
-                new_score = len(new_path) + _tn36_progress_score(g_copy)
-                counter += 1
-                heapq.heappush(pq, (new_score, counter, g_copy, new_path, state_h))
-
-    # Phase 3: Fallback — try simple sequential clicks sorted by position
-    # This handles cases where the BFS missed due to budget exhaustion
-    # but a simple ordered click sequence solves the game
-    all_valid_fallback = _get_valid_action_inputs(game)
-    click_actions_fallback = []
-    for ai_fb in all_valid_fallback:
-        aid_fb = ai_fb.id if not hasattr(ai_fb.id, 'value') else ai_fb.id.value
-        if aid_fb == 6:
-            data_fb = ai_fb.data if ai_fb.data else {}
-            x_fb = int(data_fb.get('x', 0))
-            y_fb = int(data_fb.get('y', 0))
-            if (x_fb, y_fb) != (0, 0):
-                click_actions_fallback.append((x_fb, y_fb))
-
-    if click_actions_fallback:
-        click_actions_fallback.sort(key=lambda pos: (pos[1], pos[0]))
-        plan = []
-        for pos in click_actions_fallback:
-            plan.append((GameAction.ACTION6, pos))
-        return plan if plan else None
-
-    # Fallback: use sprite-based click targets
-    for tag_name in ("Maidxz", "qqifsatqdo", "sys_click"):
-        clickables = _get_sprites_by_tag(game, tag_name)
-        if clickables:
-            clickables_sorted = sorted(clickables, key=lambda s: (_sprite_pos(s)[1], _sprite_pos(s)[0]))
-            plan = []
-            for sprite in clickables_sorted:
-                pos = _sprite_display_center(game, sprite)
-                plan.append((GameAction.ACTION6, pos))
-            return plan if plan else None
-
+    # ── Stage 4: generic pipeline ──
     return None
 
 
@@ -2465,264 +2188,30 @@ def solve_re86(game: Any, level_idx: int) -> list | None:
 
 
 # ============================================================================
-# AR25 Solver: Mirror reflection coverage puzzle
+# AR25 Solver: Mirror reflection coverage puzzle (v3.18.0 Δ-State Replay)
 # ============================================================================
 
 
-def _solve_ar25_coverage_strategy(
-    game: Any,
-    original_level: int,
-) -> list[tuple] | None:
-    """AR25 mirror-reflection coverage BFS — cover all coins with pieces + reflections.
-
-    TRUE mechanics (from ar25.py source):
-        - Win: all 0001sruqbuvukh (coins, 1x1 pixel color 11) have non-negative value
-          in merged grid naxbskjmlg() — every coin must be covered by a piece OR its reflection
-        - Mirror axes: 0054kgxrvfihgm (vertical mirror, reflects x: 2*mirror_x - x)
-          and 0002nuguepuujf (horizontal mirror, reflects y: 2*mirror_y - y)
-        - Movement: player yvifanjrcyu moves with ACTION1-4, but:
-          * If player has 0054kgxrvfihgm tag → can only move UP/DOWN
-          * If player has 0002nuguepuujf tag → can only move LEFT/RIGHT
-          * Regular pieces move all 4 directions
-        - Pieces with 0003uqrdzdofso tag get reflected through mirror axes
-        - Pieces crossing a mirror axis rotate 90 degrees (np.rot90)
-        - ACTION5: cycle through movable pieces (skip 0056icpryeujyf fixed)
-        - ACTION6: click to select piece at grid position
-        - ACTION7: undo last move
-        - StepCounter: limited steps per level (64, 128, 320)
-
-    Strategy:
-        BFS over game states using deepcopy for simulation.
-        State = (active_piece, piece_positions).
-        Actions: move active piece (constrained by mirror type),
-                 switch active piece (ACTION5/6), undo (ACTION7).
-        Goal: all coins covered (naxbskjmlg() has all coins ≥ 0).
-
-    Args:
-        game: The game object (will use deepcopy for simulation).
-        original_level: Original level index for solved-check.
-
-    Returns:
-        List of (action, data) tuples, or None if strategy fails.
-    """
-    from arcengine import GameAction, ActionInput, GameState
-    import time
-
-    if game is None:
-        return None
-
-    # ── Step 1: Identify game entities from sprites ──
-    coins = _get_sprites_by_tag(game, '0001sruqbuvukh')
-    movable_pieces = _get_sprites_by_tag(game, '0006lxjtqggkmi')
-    mirror_sprites = _get_sprites_by_tag(game, '0003uqrdzdofso')
-    fixed_pieces = _get_sprites_by_tag(game, '0056icpryeujyf')
-
-    if not coins:
-        # Fallback tag names for coins
-        coins = _get_sprites_by_tag(game, 'target')
-
-    if not movable_pieces:
-        # Fallback tag names
-        for tag in ('sys_click', 'movable'):
-            movable_pieces = _get_sprites_by_tag(game, tag)
-            if movable_pieces:
-                break
-
-    if not coins or not movable_pieces:
-        return None
-
-    # Find mirror axis positions
-    v_mirror_x: float | None = None  # Vertical mirror x coordinate
-    h_mirror_y: float | None = None  # Horizontal mirror y coordinate
-
-    v_mirror_sprites = _get_sprites_by_tag(game, '0054kgxrvfihgm')
-    h_mirror_sprites = _get_sprites_by_tag(game, '0002nuguepuujf')
-
-    if v_mirror_sprites:
-        v_mirror_x = int(getattr(v_mirror_sprites[0], 'x', 0)) + int(getattr(v_mirror_sprites[0], 'width', 0)) // 2
-    if h_mirror_sprites:
-        h_mirror_y = int(getattr(h_mirror_sprites[0], 'y', 0)) + int(getattr(h_mirror_sprites[0], 'height', 0)) // 2
-
-    # ── Step 2: BFS search using game deepcopy simulation ──
-    t0 = time.time()
-    max_time_budget = 30.0
-    max_depth = 320  # Max steps per level
-    max_nodes = 80000
-
-    initial_hash = _game_state_hash(game)
-    queue: deque[tuple[Any, list[tuple], str]] = deque()
-    queue.append((copy.deepcopy(game), [], initial_hash))
-    visited: set[str] = {initial_hash}
-    total_nodes = 0
-
-    # Build action set for AR25: [1=UP, 2=DOWN, 3=LEFT, 4=RIGHT, 5=SWITCH, 6=CLICK, 7=UNDO]
-    # Determine movement constraints for current active piece
-    move_actions_map = {
-        'all': [
-            (GameAction.ACTION1, {}),   # UP
-            (GameAction.ACTION2, {}),   # DOWN
-            (GameAction.ACTION3, {}),   # LEFT
-            (GameAction.ACTION4, {}),   # RIGHT
-        ],
-        'vertical_only': [
-            (GameAction.ACTION1, {}),   # UP
-            (GameAction.ACTION2, {}),   # DOWN
-        ],
-        'horizontal_only': [
-            (GameAction.ACTION3, {}),   # LEFT
-            (GameAction.ACTION4, {}),   # RIGHT
-        ],
-    }
-
-    while queue:
-        if time.time() - t0 > max_time_budget:
-            break
-        if total_nodes > max_nodes:
-            break
-
-        g, path, prev_hash = queue.popleft()
-        total_nodes += 1
-
-        # ── 2a: Determine movement constraints for active piece ──
-        # Check which tags the current active piece (yvifanjrcyu) has
-        active_piece = getattr(g, 'yvifanjrcyu', None)
-        if active_piece is not None:
-            active_tags = getattr(active_piece, 'tags', [])
-            if '0054kgxrvfihgm' in active_tags:
-                move_key = 'vertical_only'
-            elif '0002nuguepuujf' in active_tags:
-                move_key = 'horizontal_only'
-            else:
-                move_key = 'all'
-        else:
-            move_key = 'all'
-
-        current_moves = move_actions_map[move_key]
-
-        # ── 2b: Try movement actions ──
-        for game_action, action_data in current_moves:
-            if len(path) >= max_depth:
-                break
-
-            g_copy = copy.deepcopy(g)
-            ai_move = ActionInput(id=game_action, data=action_data)
-            result = _perform_action_safe(g_copy, ai_move)
-
-            if not result:
-                continue
-
-            try:
-                if g_copy._state == GameState.GAME_OVER:
-                    continue
-            except Exception:
-                pass
-
-            action_tuple = (game_action, None)
-            new_path = path + [action_tuple]
-
-            if _is_level_solved(g_copy, original_level):
-                return new_path
-
-            new_hash = _game_state_hash(g_copy)
-            if new_hash in visited:
-                continue
-            visited.add(new_hash)
-
-            if new_hash == prev_hash:
-                continue
-
-            queue.append((g_copy, new_path, new_hash))
-
-        # ── 2c: Try ACTION5 (cycle through movable pieces) ──
-        if len(path) < max_depth:
-            g_copy = copy.deepcopy(g)
-            ai_switch = ActionInput(id=5, data={})
-            result = _perform_action_safe(g_copy, ai_switch)
-
-            if result:
-                try:
-                    if g_copy._state == GameState.GAME_OVER:
-                        result = False
-                except Exception:
-                    pass
-
-            if result:
-                action_tuple = (GameAction.ACTION5, None)
-                new_path = path + [action_tuple]
-
-                if _is_level_solved(g_copy, original_level):
-                    return new_path
-
-                new_hash = _game_state_hash(g_copy)
-                if new_hash not in visited and new_hash != prev_hash:
-                    visited.add(new_hash)
-                    queue.append((g_copy, new_path, new_hash))
-
-        # ── 2d: Try ACTION6 (click to select piece) ──
-        # Get clickable piece positions from current game state
-        current_movable = _get_sprites_by_tag(g, '0006lxjtqggkmi')
-        if not current_movable:
-            for tag in ('sys_click', 'movable'):
-                current_movable = _get_sprites_by_tag(g, tag)
-                if current_movable:
-                    break
-
-        for piece in (current_movable or []):
-            if len(path) >= max_depth:
-                break
-
-            click_pos = _sprite_display_center(g, piece)
-            g_copy = copy.deepcopy(g)
-            ai_click = ActionInput(id=6, data={'x': click_pos[0], 'y': click_pos[1]})
-            result = _perform_action_safe(g_copy, ai_click)
-
-            if not result:
-                continue
-
-            try:
-                if g_copy._state == GameState.GAME_OVER:
-                    continue
-            except Exception:
-                pass
-
-            action_tuple = (GameAction.ACTION6, {'x': click_pos[0], 'y': click_pos[1]})
-            new_path = path + [action_tuple]
-
-            if _is_level_solved(g_copy, original_level):
-                return new_path
-
-            new_hash = _game_state_hash(g_copy)
-            if new_hash in visited:
-                continue
-            visited.add(new_hash)
-
-            if new_hash == prev_hash:
-                continue
-
-            queue.append((g_copy, new_path, new_hash))
-
-    return None
 def solve_ar25(game: Any, level_idx: int) -> list | None:
-    """Solve AR25: Move sprites with mirrors for symmetric pattern using BFS.
+    """Solve AR25: Mirror-reflection coverage game using Δ-State Replay + κ-gradient oracle (v3.18.0).
 
     Game mechanics:
         - Step size: 1 pixel
         - Actions: [1,2,3,4,5,6,7] (all actions)
-        - Targets: tag='0001sruqbuvukh', 5 sprites
+        - Targets: tag='0001sruqbuvukh', 5 sprites (coins)
         - Click: tag='0006lxjtqggkmi' (also sys_click), 3x3
         - Mirrors: tag='0003uqrdzdofso'
         - ACTION5: switch selected sprite
         - ACTION7: undo
         - Win: all target positions covered by reflection
 
-    Strategy (v3.17.0):
-        Primary: Mirror-reflection coverage BFS (cover all coins with pieces + reflections).
-        Fallback: κ-Priority Search (κ-PS) with Liu mechanism S_rel formula.
-        Last resort: BFS with deepcopy.
+    Strategy (v3.18.0 — Δ-State Replay + κ-gradient oracle):
+        Stage 1: κ-gradient oracle replay (5s) — greedy coverage + κ-detour
+        Stage 2: Δ-State BFS decomposition (3s) — zero-copy search
+        Stage 3: κ-PS fallback (2s) — Liu mechanism S_rel priority
+        Stage 4: generic pipeline
     """
-    import copy
-    import time
-    from arcengine import ActionInput, GameAction, GameState
+    import time as _time
 
     original_level = game._current_level_index
 
@@ -2730,114 +2219,32 @@ def solve_ar25(game: Any, level_idx: int) -> list | None:
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Primary (v3.17.0): Mirror-reflection coverage BFS ──
-    # Cover all coins with pieces + their reflections
+    # ── Stage 1: κ-gradient oracle replay (5s budget) ──
+    # Greedy: select piece → move toward uncovered coin → check reflection coverage
     try:
-        mirror_plan = _solve_ar25_coverage_strategy(game, original_level)
-        if mirror_plan is not None:
-            return mirror_plan
-    except Exception:
-        pass
-
-    # ── Secondary: κ-Priority Search (v3.14.0) with Liu mechanism ──
-    try:
-        plan = solve_kappa_priority_search(
-            game, max_depth=80, max_nodes=80000, max_time=30.0,
-            use_liu_mechanism=True,
-        )
+        plan = _solve_oracle_replay(game, "ar25", level_idx, max_steps=300, max_time=5.0)
         if plan is not None:
             return plan
     except Exception:
         pass
 
-    # ── Fallback: BFS with deepcopy ──
-    t0 = time.time()
-    max_time_budget = 30.0
-    max_depth = 80
-    max_nodes = 80000
-    initial_hash = _game_state_hash(game)
-    queue: deque[tuple[Any, list[tuple], str]] = deque()
-    queue.append((copy.deepcopy(game), [], initial_hash))
-    visited: set[str] = {initial_hash}
-    total_nodes = 0
-
-    while queue:
-        if time.time() - t0 > max_time_budget:
-            break
-        if total_nodes > max_nodes:
-            break
-
-        g, path, prev_hash = queue.popleft()
-        total_nodes += 1
-
-        # Get valid actions from the engine at current state
-        actions = _get_valid_action_inputs(g)
-
-        # Sort: prioritize ACTION5 (switch sprite) and ACTION6 (click),
-        # then movement actions. Switching and clicking often produce
-        # critical state changes in mirror games.
-        actions_sorted = sorted(actions, key=lambda a: (
-            0 if (a.id == GameAction.ACTION5 if hasattr(a.id, 'value') else a.id == 5) else
-            1 if (a.id == GameAction.ACTION6 if hasattr(a.id, 'value') else a.id == 6) else
-            2,
-            -(len(a.data) if a.data else 0),
-        ))
-
-        for ai in actions_sorted:
-            if len(path) >= max_depth:
-                break
-
-            g_copy = copy.deepcopy(g)
-
-            # Normalize action id
-            aid = ai.id
-            aid_val = aid.value if hasattr(aid, 'value') else aid
-
-            # Build action tuple for the plan
-            if aid_val == 6 and ai.data:
-                action_tuple = (GameAction.ACTION6, dict(ai.data) if ai.data else {})
-            elif aid_val == 5:
-                action_tuple = (GameAction.ACTION5, None)
-            elif aid_val == 7:
-                action_tuple = (GameAction.ACTION7, None)
-            else:
-                action_tuple = (aid, None)
-
-            result = _perform_action_safe(g_copy, ai)
-            if not result:
-                continue
-
-            # Check if game over (invalid state)
-            if g_copy._state == GameState.GAME_OVER:
-                continue
-
-            new_path = path + [action_tuple]
-
-            # Check if solved
-            if _is_level_solved(g_copy, original_level):
-                return new_path
-
-            # Dedup by state hash
-            new_hash = _game_state_hash(g_copy)
-            if new_hash in visited:
-                continue
-            visited.add(new_hash)
-
-            # Skip states that didn't change (ineffective action)
-            if new_hash == prev_hash:
-                continue
-
-            queue.append((g_copy, new_path, new_hash))
-
-    # Fallback: try DFS with more permissive limits for deeper exploration
-    fallback_game = copy.deepcopy(game)
+    # ── Stage 2: Δ-State BFS decomposition (3s budget) ──
     try:
-        result = solve_generic_dfs(fallback_game, max_depth=80, max_nodes=100000, max_time=15.0)
-        if result:
-            return result
+        plan = _solve_game_delta_state_bfs(game, "ar25", level_idx, max_time=3.0)
+        if plan is not None:
+            return plan
     except Exception:
         pass
 
+    # ── Stage 3: κ-PS fallback (2s budget) ──
+    try:
+        plan = solve_game_kps(game, max_depth=40, max_nodes=50000, max_time=2.0)
+        if plan is not None:
+            return plan
+    except Exception:
+        pass
+
+    # ── Stage 4: generic pipeline ──
     return None
 
 
@@ -4708,7 +4115,7 @@ def _build_state_transition_graph(
     path from initial state to goal state.
 
     For TN36: two state machines, each click triggers one transition.
-    The state is captured by _tn36_internal_state_hash().
+    The state is captured by _game_state_hash().
 
     Args:
         game: The game object (will use deepcopy for simulation).
@@ -4731,7 +4138,7 @@ def _build_state_transition_graph(
     transition_graph: dict[str, list[tuple[str, tuple[int, int]]]] = {}
 
     # BFS over states: simulate each click target from each reachable state
-    initial_hash = _tn36_internal_state_hash(game) if hasattr(game, '_current_level_index') else _game_state_hash(game)
+    initial_hash = _game_state_hash(game)
     visited_states: set[str] = {initial_hash}
     state_queue: deque[tuple[Any, str]] = deque()
     state_queue.append((copy.deepcopy(game), initial_hash))
@@ -4753,7 +4160,7 @@ def _build_state_transition_graph(
                 continue
 
             # Compute new state hash
-            new_hash = _tn36_internal_state_hash(g_copy) if hasattr(g_copy, '_current_level_index') else _game_state_hash(g_copy)
+            new_hash = _game_state_hash(g_copy)
 
             if new_hash != state_hash:  # State changed → meaningful transition
                 transitions.append((new_hash, click_pos))
@@ -6224,123 +5631,6 @@ def _solve_oracle_replay(
 
     if _is_level_solved(sim, original_level):
         return collected
-
-    return None
-
-
-def _solve_oracle_click_replay(
-    game: Any,
-    game_id: str,
-    level_idx: int,
-    max_steps: int = 100,
-    max_time: float = 15.0,
-) -> list[tuple] | None:
-    """Oracle-based click solver using step-by-step replay.
-
-    For click-only games, click on goal entities one at a time,
-    checking if the level progresses after each click.
-
-    Args:
-        game: The env._game object (will be copied for replay).
-        game_id: Game identifier (e.g., "ft09").
-        level_idx: Current level index.
-        max_steps: Maximum simulation steps.
-        max_time: Maximum time in seconds.
-
-    Returns:
-        Action plan as list of (6, {x, y}) tuples, or None.
-    """
-    import time as _time
-    from arcengine import ActionInput
-    from .oracle_adapters import get_oracle_adapter
-
-    t0 = _time.time()
-    adapter = get_oracle_adapter(game_id, game)
-    if adapter is None:
-        return None
-
-    sim = copy.deepcopy(game)
-    original_level = sim._current_level_index
-
-    # Re-create adapter on simulation copy
-    sim_adapter = get_oracle_adapter(game_id, sim)
-    if sim_adapter is None:
-        return None
-
-    grid_size = sim_adapter.grid_size or 64
-    scale = 64.0 / float(grid_size) if grid_size > 0 else 1.0
-
-    collected: list[tuple] = []
-
-    # Get initial goal list
-    goals = sim_adapter.goals
-    if not goals:
-        return None
-
-    # Click on each goal entity center
-    for g in goals:
-        if _time.time() - t0 > max_time:
-            break
-        if len(collected) >= max_steps:
-            break
-
-        gx = int(g.x)
-        gy = int(g.y)
-        gw = int(g.width)
-        gh = int(g.height)
-
-        # Convert game coords to display coords (0-63 range)
-        click_x = int(gx * scale + gw * scale / 2)
-        click_y = int(gy * scale + gh * scale / 2)
-
-        # Clamp to display range
-        click_x = max(0, min(63, click_x))
-        click_y = max(0, min(63, click_y))
-
-        ai = ActionInput(id=6, data={"x": click_x, "y": click_y})
-        try:
-            sim.perform_action(ai)
-        except Exception:
-            continue
-
-        collected.append((6, {"x": click_x, "y": click_y}))
-
-        # Check if solved
-        if _is_level_solved(sim, original_level):
-            return collected
-
-    # If not solved yet, try all remaining clickable targets
-    # from the game's _get_valid_clickable_actions() method
-    if hasattr(sim, '_get_valid_clickable_actions'):
-        try:
-            valid_clicks = sim._get_valid_clickable_actions()
-        except Exception:
-            valid_clicks = []
-    else:
-        valid_clicks = []
-    for vcl in valid_clicks:
-        if _time.time() - t0 > max_time:
-            break
-        if len(collected) >= max_steps:
-            break
-
-        data = vcl.data if vcl.data else {}
-        cx = int(data.get('x', 0))
-        cy = int(data.get('y', 0))
-        aid_raw = vcl.id
-        aid = aid_raw.value if hasattr(aid_raw, 'value') and not isinstance(aid_raw, bool) else aid_raw
-        aid = int(aid)
-
-        ai = ActionInput(id=aid, data={"x": cx, "y": cy})
-        try:
-            sim.perform_action(ai)
-        except Exception:
-            continue
-
-        collected.append((aid, {"x": cx, "y": cy}))
-
-        if _is_level_solved(sim, original_level):
-            return collected
 
     return None
 
@@ -8892,7 +8182,7 @@ def solve_game(
 
     # Global time limit: prevent wasting time on impossible games
     _solve_game_t0 = _time.time()
-    _solve_game_max_time = 60.0  # 60s total budget across all phases
+    _solve_game_max_time = 30.0  # 30s total budget across all phases (v3.18.0)
 
     def _time_remaining() -> float:
         """Return remaining time in global budget."""

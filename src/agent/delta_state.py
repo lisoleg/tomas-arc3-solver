@@ -1,4 +1,4 @@
-"""TOMAS-ARC3 Δ-State Engine (v3.15.0)
+"""TOMAS-ARC3 Δ-State Engine (v3.18.0)
 
 IDO/TOMAS Framework: 流贯演化 = 不可变基态 + 可变 Δ(Diff)
 Zero DeepCopy · Multi-Stage BFS · Lazy Materialization · RHAE Budget Control
@@ -15,7 +15,7 @@ Core design principles:
   5. 双模式 ActionSpace: game mode (UP/DOWN/LEFT/RIGHT/ACTION6) 和
      grid mode (rotate/mirror/translate/recolor/noop) 共享统一接口。
 
-Version: v3.15.0
+Version: v3.18.0
 TOMAS Correspondence: TOMAS Phase II → Δ-State IDO Agent
 IDO Correspondence: IDO 流贯 = Immutable Base + Observable Delta
 """

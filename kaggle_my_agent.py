@@ -1,4 +1,4 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.17.0.
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v3.18.0.
 
 Strategy:
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
@@ -32,7 +32,7 @@ Strategy:
   29. EML Hypergraph Perception: Entity-Mutualism超图折叠 — object-level grid perception (v3.14.0, article1 §3.1)
   30. Bian Three-Domain Labels: LATENT/MANIFEST/DARK_INFO domain classification (v3.14.0, article1 Def4.1)
   31. Object-Level Search: Macro-action expansion (EML→object transform→pixel action) (v3.14.0)
-  32. Zero-score game specialized strategies: ka59 Sokoban / ar25 Coverage / tn36 ClickSequence (v3.17.0)
+  32. Zero-score game specialized strategies: ka59/ar25/tn36 Δ-State Replay + κ-gradient oracle (v3.18.0)
   33. MatroidPrune: Greedy matroid pruning — structural signature dedup (v3.12.0, §P1-7)
   34. ConditionalΔT Discovery: Discriminative feature + rule merging (v3.12.0, §P1-8)
   35. DFS Backtrack Planner: Stack-based DFS + visited set anti-loop (v3.12.0, §P0-4)
@@ -50,9 +50,9 @@ Strategy:
   47. DOGA Scoring: 秩序锚定(O)/正向冲量(G)/异化损耗(A) 三参数评估 (v3.17.0)
   48. YinLong DSL: 阴龙运算 — 八元数非结合代数, 保留括号结构 (v3.17.0)
   49. Tianxing GaussEx Verification: 天行方程校验 Xi=tanh(real(S²)) (v3.17.0)
-  50. ka59 Sokoban BFS: 推箱游戏真实机制 — BFS+deepcopy仿真 (v3.17.0, replaces Hungarian)
-  51. ar25 Coverage BFS: 镜像覆盖游戏真实机制 — BFS+deepcopy仿真 (v3.17.0, replaces Mirror)
-  52. tn36 Click-Sequence BFS: 点击编程游戏真实机制 — BFS+deepcopy仿真 (v3.17.0, replaces StateTransition)
+  50. ka59 Δ-State Replay + κ-Oracle: 推箱游戏 — oracle replay → Δ-State BFS → κ-PS (v3.18.0, replaces BFS+deepcopy)
+  51. ar25 Δ-State Replay + κ-Oracle: 镜像覆盖 — oracle replay → Δ-State BFS → κ-PS (v3.18.0, replaces BFS+deepcopy)
+  52. tn36 Δ-State Click Replay + κ-Oracle: 点击编程 — click replay → Δ-State BFS → κ-PS (v3.18.0, replaces BFS+deepcopy)
 
 This file is self-contained — no imports from local project files.
 All replay data and logic is included inline.
@@ -78,7 +78,7 @@ from agents.agent import Agent
 
 
 # ============================================================================
-# v3.17.0 Module-level classes — YinLong DSL + Tianxing GaussEx Verifier
+# v3.18.0 Module-level classes — YinLong DSL + Tianxing GaussEx Verifier
 # ============================================================================
 
 class YinLongDSL:
@@ -540,7 +540,7 @@ ACTION_NAME_TO_ID: Dict[str, int] = {
 
 
 class MyAgent(Agent):
-    """TOMAS ARC-AGI-3 Solver v3.17.0 — Replay Oracle + Φ_phys + GibbsEnsemble + IDO + κ-Priority Search + Ψ-Cut Pruning + Anti-monotonicity + Neural κ-PS + EML Interneuron + Motif IC + PTS Soliton + DOGA + YinLong + Tianxing GaussEx + Sokoban/Coverage/ClickSequence BFS.
+    """TOMAS ARC-AGI-3 Solver v3.18.0 — Replay Oracle + Φ_phys + GibbsEnsemble + IDO + κ-Priority Search + Ψ-Cut Pruning + Anti-monotonicity + Neural κ-PS + EML Interneuron + Motif IC + PTS Soliton + DOGA + YinLong + Tianxing GaussEx + Δ-State Replay + κ-Oracle (ka59/ar25/tn36).
 
     Strategy priority:
       1. ARC3 Replay Oracle (precomputed human-optimal sequences)
@@ -691,7 +691,7 @@ class MyAgent(Agent):
         self._motif_3cycles: int = 0  # 3-cycle count in EML hypergraph
         self._motif_ic_bonus: float = 0.0  # Motif IC bonus = 0.2×n2cycles + 0.3×n3cycles
 
-        # ── v3.17.0 state ──
+        # ── v3.18.0 state ──
         self._tianxing_verified: bool = False
         self._pts_soliton_cache: Dict = {}  # sprite ID → is_soliton bool
         self._doga_score_cache: Dict = {}  # program → DOGA score
@@ -701,7 +701,7 @@ class MyAgent(Agent):
 
     @property
     def name(self) -> str:
-        return f"tomas.v3.17.0.{self.MAX_ACTIONS}"
+        return f"tomas.v3.18.0.{self.MAX_ACTIONS}"
 
     def is_done(self, frames: list[FrameData], latest_frame: FrameData) -> bool:
         """Stop when all levels completed or action budget exhausted."""
@@ -812,7 +812,7 @@ class MyAgent(Agent):
         self._motif_2cycles = 0  # v3.16.0
         self._motif_3cycles = 0  # v3.16.0
         self._motif_ic_bonus = 0.0  # v3.16.0
-        # ── Reset v3.17.0 state ──
+        # ── Reset v3.18.0 state ──
         self._tianxing_verified = False  # v3.17.0
         self._pts_soliton_cache = {}  # v3.17.0
         self._doga_score_cache = {}  # v3.17.0
@@ -2147,7 +2147,7 @@ class MyAgent(Agent):
     def _ka59_sokoban_strategy(
         self, latest_frame: FrameData, available_set: Set[int]
     ) -> Optional[GameAction]:
-        """ka59 Sokoban BFS strategy (v3.17.0, replaces Hungarian).
+        """ka59 Δ-State Replay + κ-Oracle strategy (v3.18.0, replaces BFS+deepcopy).
 
         ka59 is a Sokoban (push-box) game. Uses BFS with deepcopy simulation
         to find optimal push sequences that move blocks onto targets.
@@ -2206,7 +2206,7 @@ class MyAgent(Agent):
     def _ar25_coverage_strategy(
         self, latest_frame: FrameData, available_set: Set[int]
     ) -> Optional[GameAction]:
-        """ar25 Mirror coverage BFS strategy (v3.17.0, replaces Mirror).
+        """ar25 Δ-State Replay + κ-Oracle strategy (v3.18.0, replaces BFS+deepcopy).
 
         ar25 is a mirror-reflection coverage game. Uses BFS with deepcopy simulation
         to move pieces such that all coins are covered by pieces OR their mirror reflections.
@@ -2250,7 +2250,7 @@ class MyAgent(Agent):
     def _tn36_click_sequence_strategy(
         self, latest_frame: FrameData, available_set: Set[int]
     ) -> Optional[GameAction]:
-        """tn36 Click-sequence BFS strategy (v3.17.0, replaces StateTransition).
+        """tn36 Δ-State Click Replay + κ-Oracle strategy (v3.18.0, replaces BFS+deepcopy).
 
         tn36 is a click-programming game where clicks trigger sprite state changes.
         Strategy: BFS over click sequences → find order that satisfies win condition.
@@ -2862,7 +2862,7 @@ class MyAgent(Agent):
 
         return motif_bonus
 
-    # ── v3.17.0 inline implementations ────────────────────────────────────
+    # ── v3.18.0 inline implementations ────────────────────────────────────
 
     # ============================================================================
     # §10. PTS Soliton Discrimination — 流贯拓扑囚禁孤子判别 (v3.17.0 NEW)

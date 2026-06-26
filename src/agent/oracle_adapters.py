@@ -757,6 +757,367 @@ class FT09Adapter(OracleAdapter):
 
 
 # ============================================================================
+# KA59Adapter: Oracle adapter for KA59 game (Sokoban push-block game)
+# ============================================================================
+
+class KA59Adapter(OracleAdapter):
+    """Oracle adapter for KA59 game (v3.18.0).
+
+    KA59 is a Sokoban (push-block) game with:
+    - Player: first sprite from 0022vrxelxosfy (target sprites, 3x3)
+    - Walls: sprites from 0015qniapgwsvb (inner walls, NOT boundary 0029ifoxxfvvvs)
+    - Goals: sprites from 0001uqqokjrptk (goal targets for special blocks)
+    - Blocks: sprites from 0010xzmuziohuf (pushable blocks, 5x5) — Sokoban blocks
+    - Switchers: 0022vrxelxosfy (ACTION6 switches active target) — all target sprites
+    - Enemy: sprite from omeizjufss (chases goal target)
+    - Step: 3 (pixel step size for KA59)
+
+    Win condition: all 0010xzmuziohuf overlap with 0022vrxelxosfy AND
+                   all 0027jbgxilrocf overlap with 0001uqqokjrptk.
+    """
+
+    def __init__(self, game: Any, step: int = 3) -> None:
+        """Initialize KA59Adapter with step=3 for Sokoban grid."""
+        super().__init__(game, step)
+
+    @property
+    def player(self) -> Optional[GameEntity]:
+        """Get the player entity from KA59's 0022vrxelxosfy (first target sprite).
+
+        Returns:
+            GameEntity for the player, or None if not found.
+        """
+        sprites = self._get_sprite_list('0022vrxelxosfy')
+        if sprites:
+            p = sprites[0]
+            return self._to_entity(p)
+        return None
+
+    @property
+    def walls(self) -> list[GameEntity]:
+        """Get wall entities from KA59's 0015qniapgwsvb (inner walls only).
+
+        NOTE: Does NOT include 0029ifoxxfvvvs (51×51 boundary walls).
+        Inner walls are the ones that affect pathfinding.
+
+        Returns:
+            List of wall GameEntity objects (inner walls only).
+        """
+        sprites = self._get_sprite_list('0015qniapgwsvb')
+        return [self._to_entity(s) for s in sprites]
+
+    @property
+    def goals(self) -> list[GameEntity]:
+        """Get goal entities from KA59's 0001uqqokjrptk.
+
+        Returns:
+            List of goal GameEntity objects.
+        """
+        sprites = self._get_sprite_list('0001uqqokjrptk')
+        return [self._to_entity(s) for s in sprites]
+
+    @property
+    def blocks(self) -> list[GameEntity]:
+        """Get pushable block entities from KA59's 0010xzmuziohuf (Sokoban blocks).
+
+        Returns:
+            List of block GameEntity objects (5x5 pushable blocks).
+        """
+        sprites = self._get_sprite_list('0010xzmuziohuf')
+        return [self._to_entity(s) for s in sprites]
+
+    @property
+    def switchers(self) -> list[GameEntity]:
+        """Get all switcher entities from KA59's 0022vrxelxosfy.
+
+        ACTION6 click on any 0022vrxelxosfy sprite switches active player.
+
+        Returns:
+            List of all target switcher GameEntity objects.
+        """
+        sprites = self._get_sprite_list('0022vrxelxosfy')
+        return [self._to_entity(s) for s in sprites]
+
+    @property
+    def enemy(self) -> Optional[GameEntity]:
+        """Get the enemy entity from KA59's omeizjufss.
+
+        The enemy sprite chases the goal target. If enemy reaches goal,
+        the game is lost.
+
+        Returns:
+            GameEntity for the enemy, or None if not found.
+        """
+        sprites = self._get_sprite_list('omeizjufss')
+        if sprites:
+            return self._to_entity(sprites[0])
+        return None
+
+    @property
+    def grid_size(self) -> int:
+        """Get grid size for KA59 (typically 153 = 51×3 step_size).
+
+        Returns:
+            Grid dimension from game attribute, or 153 as default.
+        """
+        return getattr(self.game, 'upmkivwyrxz', 153)
+
+
+# ============================================================================
+# AR25Adapter: Oracle adapter for AR25 game (mirror-reflection coverage)
+# ============================================================================
+
+class AR25Adapter(OracleAdapter):
+    """Oracle adapter for AR25 game (v3.18.0).
+
+    AR25 is a mirror-reflection coverage game:
+    - Player: first sprite from 0006lxjtqggkmi (click/select, 3x3)
+    - Walls: empty (no walls in coverage game)
+    - Goals: sprites from 0001sruqbuvukh (coins to cover, 5 sprites)
+    - Mirrors: sprites from 0003uqrdzdofso
+    - pieces_vertical: 0054kgxrvfihgm — only moves UP/DOWN
+    - pieces_horizontal: 0002nuguepuujf — only moves LEFT/RIGHT
+    - Switchers: sprites with ACTION5/ACTION6/ACTION7 capability
+    - Step: 1
+
+    Win condition: all 0001sruqbuvukh (coins) have non-negative value
+    in merged grid naxbskjmlg().
+    """
+
+    def __init__(self, game: Any, step: int = 1) -> None:
+        """Initialize AR25Adapter with step=1 for fine-grained movement."""
+        super().__init__(game, step)
+
+    @property
+    def player(self) -> Optional[GameEntity]:
+        """Get the player/cursor entity from AR25's 0006lxjtqggkmi.
+
+        Returns:
+            GameEntity for the player/cursor, or None if not found.
+        """
+        sprites = self._get_sprite_list('0006lxjtqggkmi')
+        if sprites:
+            p = sprites[0]
+            return self._to_entity(p)
+        return None
+
+    @property
+    def walls(self) -> list[GameEntity]:
+        """Get wall entities for AR25 (coverage game has no walls).
+
+        Returns:
+            Empty list (no walls in coverage game).
+        """
+        return []
+
+    @property
+    def goals(self) -> list[GameEntity]:
+        """Get goal entities from AR25's 0001sruqbuvukh (coins to cover).
+
+        Returns:
+            List of coin GameEntity objects.
+        """
+        sprites = self._get_sprite_list('0001sruqbuvukh')
+        return [self._to_entity(s) for s in sprites]
+
+    @property
+    def mirrors(self) -> list[GameEntity]:
+        """Get mirror entities from AR25's 0003uqrdzdofso.
+
+        Pieces with this tag get reflected through mirror axes when moved.
+
+        Returns:
+            List of mirror GameEntity objects.
+        """
+        sprites = self._get_sprite_list('0003uqrdzdofso')
+        return [self._to_entity(s) for s in sprites]
+
+    @property
+    def pieces_vertical(self) -> list[GameEntity]:
+        """Get vertical-only piece entities from AR25's 0054kgxrvfihgm.
+
+        These pieces can only move UP/DOWN (constrained by vertical mirror tag).
+
+        Returns:
+            List of vertical-only piece GameEntity objects.
+        """
+        sprites = self._get_sprite_list('0054kgxrvfihgm')
+        return [self._to_entity(s) for s in sprites]
+
+    @property
+    def pieces_horizontal(self) -> list[GameEntity]:
+        """Get horizontal-only piece entities from AR25's 0002nuguepuujf.
+
+        These pieces can only move LEFT/RIGHT (constrained by horizontal mirror tag).
+
+        Returns:
+            List of horizontal-only piece GameEntity objects.
+        """
+        sprites = self._get_sprite_list('0002nuguepuujf')
+        return [self._to_entity(s) for s in sprites]
+
+    @property
+    def switchers(self) -> list[GameEntity]:
+        """Get switcher entities from AR25 (sprites with ACTION5/6/7 capability).
+
+        ACTION5: cycle through movable pieces.
+        ACTION6: click to select piece at grid position.
+        ACTION7: undo last move.
+
+        Returns:
+            List of switcher GameEntity objects.
+        """
+        result: list[GameEntity] = []
+        # Try common attribute names for switchers
+        for attr in ['0006lxjtqggkmi', 'sys_click']:
+            sprites = self._get_sprite_list(attr)
+            if sprites:
+                result.extend([self._to_entity(s) for s in sprites])
+        # Deduplicate by position
+        seen: set[tuple[int, int]] = set()
+        unique: list[GameEntity] = []
+        for e in result:
+            pos = (int(e.x), int(e.y))
+            if pos not in seen:
+                seen.add(pos)
+                unique.append(e)
+        return unique
+
+    @property
+    def grid_size(self) -> int:
+        """Get grid size for AR25 (typically 64).
+
+        Returns:
+            Grid dimension from game attribute, or 64 as default.
+        """
+        return getattr(self.game, 'upmkivwyrxz', 64)
+
+
+# ============================================================================
+# TN36Adapter: Oracle adapter for TN36 game (click-programming state machine)
+# ============================================================================
+
+class TN36Adapter(OracleAdapter):
+    """Oracle adapter for TN36 game (v3.18.0).
+
+    TN36 is a click-programming game with state machines:
+    - Player: None (click-only game, no player entity)
+    - Walls: None (no walls in click game)
+    - Goals: sprites from kntfjgchzd (clickable sprites) — also has sys_click tag
+    - Switchers: empty (no switcher entities)
+    - Step: 1
+    - state_machines: mvqheosngn (left) and bzirenxmrg (right)
+    - Win check: bzirenxmrg.vklyonlcrw == True
+
+    When you click a kntfjgchzd sprite → egjahxmvrj(sprite) sets first
+    sprite to that position/rotation/program, then animates it moving.
+    Win: bzirenxmrg.vklyonlcrw becomes True (second sprite reaches state).
+    """
+
+    def __init__(self, game: Any, step: int = 1) -> None:
+        """Initialize TN36Adapter with step=1 for click positions."""
+        super().__init__(game, step)
+
+    @property
+    def player(self) -> Optional[GameEntity]:
+        """Get the player entity for TN36 (None — click-only game).
+
+        Returns:
+            None (TN36 has no player entity — only click actions).
+        """
+        return None
+
+    @property
+    def walls(self) -> list[GameEntity]:
+        """Get wall entities for TN36 (None — click-only game).
+
+        Returns:
+            Empty list (no walls in click game).
+        """
+        return []
+
+    @property
+    def goals(self) -> list[GameEntity]:
+        """Get goal/clickable entities from TN36's kntfjgchzd.
+
+        These are the clickable sprites that trigger state machine transitions.
+
+        Returns:
+            List of clickable goal GameEntity objects.
+        """
+        sprites = self._get_sprite_list('kntfjgchzd')
+        if sprites:
+            return [self._to_entity(s) for s in sprites]
+        # Fallback tag names
+        for tag_name in ('Maidxz', 'qqifsatqdo', 'sys_click'):
+            sprites = self._get_sprite_list(tag_name)
+            if sprites:
+                return [self._to_entity(s) for s in sprites]
+        return []
+
+    @property
+    def switchers(self) -> list[GameEntity]:
+        """Get switcher entities for TN36 (empty — no switchers).
+
+        Returns:
+            Empty list (TN36 uses only click actions, no switchers).
+        """
+        return []
+
+    @property
+    def state_machines(self) -> dict[str, Optional[GameEntity]]:
+        """Get state machine entities for TN36.
+
+        mvqheosngn: left state machine (first sprite, mkfavqnwxy tag).
+        bzirenxmrg: right state machine (goal-check sprite, second sprite).
+
+        Returns:
+            Dict with keys 'left' and 'right' mapping to GameEntity or None.
+        """
+        left_sm = None
+        right_sm = None
+
+        # Try to get state machines from game attributes
+        mkfav_sprites = self._get_sprite_list('mkfavqnwxy')
+        if mkfav_sprites and len(mkfav_sprites) >= 1:
+            left_sm = self._to_entity(mkfav_sprites[0])
+        if mkfav_sprites and len(mkfav_sprites) >= 2:
+            right_sm = self._to_entity(mkfav_sprites[1])
+
+        return {'left': left_sm, 'right': right_sm}
+
+    def is_won(self) -> bool:
+        """Check TN36-specific win condition: bzirenxmrg.vklyonlcrw == True.
+
+        Accesses the game's internal state machine to check if the
+        right sprite has reached its target state.
+
+        Returns:
+            True if bzirenxmrg.vklyonlcrw is True, False otherwise.
+        """
+        try:
+            fdksqlmpki = getattr(self.game, 'fdksqlmpki', None)
+            if fdksqlmpki is not None:
+                bzirenxmrg = getattr(fdksqlmpki, 'bzirenxmrg', None)
+                if bzirenxmrg is not None:
+                    vklyonlcrw = getattr(bzirenxmrg, 'vklyonlcrw', None)
+                    if vklyonlcrw is True or vklyonlcrw == 1:
+                        return True
+        except (AttributeError, TypeError):
+            pass
+        return False
+
+    @property
+    def grid_size(self) -> int:
+        """Get grid size for TN36 (typically 64).
+
+        Returns:
+            Grid dimension from game attribute, or 64 as default.
+        """
+        return getattr(self.game, 'upmkivwyrxz', 64)
+
+
+# ============================================================================
 # Registry and factory functions
 # ============================================================================
 
@@ -765,6 +1126,9 @@ ADAPTER_REGISTRY: dict[str, type[OracleAdapter]] = {
     'ls20': LS20Adapter,
     'tr87': TR87Adapter,
     'ft09': FT09Adapter,
+    'ka59': KA59Adapter,
+    'ar25': AR25Adapter,
+    'tn36': TN36Adapter,
 }
 
 
@@ -830,6 +1194,40 @@ def auto_detect_adapter(game: Any, game_id: Optional[str] = None) -> Optional[Or
     # Check FT09
     if hasattr(game, 'zth') and hasattr(game, 'fhc'):
         return FT09Adapter(game)
+
+    # Check KA59 — Sokoban game has pushable blocks (0010xzmuziohuf tag)
+    # and target sprites (0022vrxelxosfy tag)
+    try:
+        cl = getattr(game, 'current_level', None)
+        if cl is not None and hasattr(cl, 'get_sprites_by_tag'):
+            ka59_blocks = cl.get_sprites_by_tag('0010xzmuziohuf')
+            ka59_targets = cl.get_sprites_by_tag('0022vrxelxosfy')
+            if ka59_blocks and ka59_targets:
+                return KA59Adapter(game)
+    except (AttributeError, TypeError):
+        pass
+
+    # Check AR25 — Coverage game has coins (0001sruqbuvukh tag)
+    # and selectable pieces (0006lxjtqggkmi tag)
+    try:
+        cl = getattr(game, 'current_level', None)
+        if cl is not None and hasattr(cl, 'get_sprites_by_tag'):
+            ar25_coins = cl.get_sprites_by_tag('0001sruqbuvukh')
+            ar25_select = cl.get_sprites_by_tag('0006lxjtqggkmi')
+            if ar25_coins and ar25_select:
+                return AR25Adapter(game)
+    except (AttributeError, TypeError):
+        pass
+
+    # Check TN36 — Click-programming game has kntfjgchzd tag sprites
+    try:
+        cl = getattr(game, 'current_level', None)
+        if cl is not None and hasattr(cl, 'get_sprites_by_tag'):
+            tn36_clickables = cl.get_sprites_by_tag('kntfjgchzd')
+            if tn36_clickables:
+                return TN36Adapter(game)
+    except (AttributeError, TypeError):
+        pass
 
     # Fallback: Universal adapter for any game with env._game access.
     # The UniversalOracleAdapter auto-discovers entities by scanning
