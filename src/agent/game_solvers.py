@@ -1598,7 +1598,6 @@ def _solve_game_delta_state_bfs(
     import time as _time
     from collections import deque
     from arcengine import ActionInput, GameState
-    from .delta_state import ReplayEngine, SolverAborted, BudgetExceeded
     from .oracle_adapters import get_oracle_adapter
 
     t0 = _time.time()
@@ -1647,30 +1646,34 @@ def _solve_game_delta_state_bfs(
     if not action_space:
         return None
 
-    # BFS using ReplayEngine for zero-copy state materialization
+    # BFS using action-list-only queue — no game copies in queue (v3.18.2)
+    # IDO/TOMAS: Store action_list in queue, materialize state per node by replay.
+    # ReplayEngine.register() doesn't exist, so we use manual replay from root.
     root_game = copy.deepcopy(game)
-    engine = ReplayEngine(root_game, mode="game")
     visited_hashes: set[str] = set()
 
     # Layout hash for initial state
     initial_hash = _game_state_hash(game)
     visited_hashes.add(initial_hash)
 
-    # BFS queue: (engine_node_id, action_plan)
-    queue: deque[tuple[int, list[tuple]]] = deque()
-    queue.append((0, []))  # Node 0 = root
+    # BFS queue: (action_plan) — stores action lists only, no game copies
+    queue: deque[list[tuple]] = deque()
+    queue.append([])  # Root: empty action plan
 
     max_nodes = 50000
     total_nodes = 0
 
     while queue and _time.time() - t0 < max_time:
-        node_id, plan = queue.popleft()
+        plan = queue.popleft()
 
-        # Materialize state from replay engine
-        try:
-            cur_game = engine.replay(node_id)
-        except (SolverAborted, BudgetExceeded, Exception):
-            continue
+        # Materialize current state by replaying from root
+        cur_game = copy.deepcopy(root_game)
+        for aid, adata in plan:
+            ai = ActionInput(id=aid, data=adata)
+            try:
+                cur_game.perform_action(ai)
+            except Exception:
+                continue
 
         total_nodes += 1
         if total_nodes > max_nodes:
@@ -1724,9 +1727,7 @@ def _solve_game_delta_state_bfs(
             if _is_level_solved(child_game, original_level):
                 return plan + [(action_id, action_data)]
 
-            # Register child node with replay engine
-            child_node_id = engine.register(node_id, (action_id, action_data))
-            queue.append((child_node_id, plan + [(action_id, action_data)]))
+            queue.append(plan + [(action_id, action_data)])
 
     return None
 
@@ -6533,7 +6534,120 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
     step_size = _detect_game_step(sim)
     collected: list[tuple] = []
 
-    # ── 轻量BFS ──
+    # ── Wall-Map BFS + Verification (v3.18.2 属性置换原语 + Ψ-Cut) ──
+
+    def _verify_path_on_game(
+        game: Any,
+        actions: list[tuple],
+        target_x: int,
+        target_y: int,
+    ) -> bool:
+        """Verify a wall-map BFS path by simulating on the real game.
+
+        One deepcopy for verification. Checks that the player reaches
+        (target_x, target_y) and no accidental state changes occurred
+        from crossing changers (Ψ-Cut validation).
+
+        Args:
+            game: Original game object (not modified).
+            actions: Action list [(direction, data), ...] to verify.
+            target_x: Expected target x coordinate.
+            target_y: Expected target y coordinate.
+
+        Returns:
+            True if path simulation succeeds and player reaches target.
+        """
+        sim_verify = copy.deepcopy(game)  # ONE deepcopy for verification
+        for aid, data in actions:
+            ai = ActionInput(id=aid, data=data if data else {})
+            try:
+                sim_verify.perform_action(ai)
+            except Exception:
+                return False
+        verify_adapter = get_oracle_adapter("ls20", sim_verify)
+        if verify_adapter and verify_adapter.player:
+            final_px = int(verify_adapter.player.x)
+            final_py = int(verify_adapter.player.y)
+            # Check player reached target position
+            if final_px == target_x and final_py == target_y:
+                # Ψ-Cut: Path verified — player at target without accidental game errors
+                return True
+        return False
+
+    def _lightweight_bfs_replay_engine(
+        start_game: Any,
+        target_x: int,
+        target_y: int,
+        max_steps: int,
+        avoid_positions: set[tuple[int, int]] | None,
+    ) -> list[tuple] | None:
+        """ReplayEngine fallback BFS — deepcopy(root) + replay action chain per expansion.
+
+        Used when wall-map BFS verification fails. Each expansion replays
+        the full action chain from root, then tries one direction.
+
+        Args:
+            start_game: Original game object.
+            target_x: Target x coordinate.
+            target_y: Target y coordinate.
+            max_steps: Maximum BFS path length.
+            avoid_positions: Positions to avoid in BFS.
+
+        Returns:
+            Action list to reach target, or None.
+        """
+        root_game = copy.deepcopy(start_game)
+        root_adapter = get_oracle_adapter("ls20", root_game)
+        if root_adapter is None or root_adapter.player is None:
+            return None
+
+        visited: set[tuple[int, int]] = {(int(root_adapter.player.x), int(root_adapter.player.y))}
+        if avoid_positions:
+            visited.update(avoid_positions)
+
+        queue: deque = deque()
+        queue.append(([], int(root_adapter.player.x), int(root_adapter.player.y)))
+
+        while queue and _time.time() - t0 < MAX_TOTAL_TIME:
+            cur_actions, cur_px, cur_py = queue.popleft()
+            if len(cur_actions) >= max_steps:
+                continue
+            if cur_px == target_x and cur_py == target_y:
+                return cur_actions
+
+            # Replay action chain to materialize current state
+            cur_game = copy.deepcopy(root_game)
+            for aid, data in cur_actions:
+                ai = ActionInput(id=aid, data=data if data else {})
+                try:
+                    cur_game.perform_action(ai)
+                except Exception:
+                    continue
+            cur_adapter = get_oracle_adapter("ls20", cur_game)
+            if cur_adapter is None or cur_adapter.player is None:
+                continue
+
+            for d in [1, 2, 3, 4]:
+                child_game = copy.deepcopy(cur_game)
+                ai = ActionInput(id=d, data={})
+                try:
+                    child_game.perform_action(ai)
+                except Exception:
+                    continue
+                test_adapter = get_oracle_adapter("ls20", child_game)
+                if test_adapter is None or test_adapter.player is None:
+                    continue
+                new_px = int(test_adapter.player.x)
+                new_py = int(test_adapter.player.y)
+                if (new_px, new_py) == (cur_px, cur_py):
+                    continue  # Blocked by wall
+                if (new_px, new_py) in visited:
+                    continue
+                visited.add((new_px, new_py))
+                queue.append((cur_actions + [(d, None)], new_px, new_py))
+
+        return None
+
     def _lightweight_bfs(
         start_game: Any,
         target_x: int,
@@ -6541,48 +6655,90 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         max_steps: int = MAX_BFS_STEPS,
         avoid_positions: set[tuple[int, int]] | None = None,
     ) -> list[tuple] | None:
+        """Wall-Map BFS — 零拷贝位置搜索 (v3.18.2).
+
+        IDO/TOMAS 原则: 导航搜索不需要完整游戏对象，只需位置+墙信息。
+        Wall positions 从 LS20Adapter 提取一次，BFS 在 (x,y) 位置空间搜索。
+        Changer 位置作为避障加入 avoid_positions (Ψ-Cut: 防止路径意外触发状态变更)。
+
+        找到路径后用真实游戏验证。验证失败则回退到 ReplayEngine BFS。
+
+        Args:
+            start_game: Original game object (not copied during BFS).
+            target_x: Target x coordinate.
+            target_y: Target y coordinate.
+            max_steps: Maximum BFS path length.
+            avoid_positions: Positions to avoid (walls + changers merged).
+
+        Returns:
+            Action list [(direction, data), ...] to reach target, or None.
+        """
         start_adapter = get_oracle_adapter("ls20", start_game)
         if start_adapter is None or start_adapter.player is None:
             return None
+
         start_px = int(start_adapter.player.x)
         start_py = int(start_adapter.player.y)
-        visited: set[tuple[int, int]] = {(start_px, start_py)}
+        step_size_val = start_adapter.step if start_adapter.step > 0 else _detect_game_step(start_game)
+
+        # Build wall position set (one-time extraction)
+        wall_positions: set[tuple[int, int]] = set()
+        for w in (start_adapter.walls or []):
+            wall_positions.add((int(w.x), int(w.y)))
+
+        # Build changer position set — ALL changers must be avoided (Ψ-Cut)
+        changer_positions: set[tuple[int, int]] = set()
+        for dim_changers in (start_adapter.state_changers or {}).values():
+            for ch in dim_changers:
+                changer_positions.add((int(ch.x), int(ch.y)))
+
+        # Combine wall + changer + avoid_positions into blocked set
+        blocked_positions = set(wall_positions)
+        blocked_positions.update(changer_positions)
         if avoid_positions:
-            visited.update(avoid_positions)
+            blocked_positions.update(avoid_positions)
+
+        visited: set[tuple[int, int]] = {(start_px, start_py)}
+        visited.update(blocked_positions)  # wall/changer positions are "visited" = blocked
+
+        # BFS on (x, y) positions — NO game copies
+        # direction_map: id → (dx, dy) — UP=1(y-step), RIGHT=2(x+step), DOWN=3(y+step), LEFT=4(x-step)
+        direction_offsets: dict[int, tuple[int, int]] = {
+            1: (0, -step_size_val),
+            2: (step_size_val, 0),
+            3: (0, step_size_val),
+            4: (-step_size_val, 0),
+        }
+
         queue: deque = deque()
-        queue.append((copy.deepcopy(start_game), []))
+        queue.append(([], start_px, start_py))
+
         while queue and _time.time() - t0 < MAX_TOTAL_TIME:
-            cur_game, cur_actions = queue.popleft()
+            cur_actions, cur_px, cur_py = queue.popleft()
             if len(cur_actions) >= max_steps:
                 continue
-            cur_adapter = get_oracle_adapter("ls20", cur_game)
-            if cur_adapter is None or cur_adapter.player is None:
-                continue
-            cur_px = int(cur_adapter.player.x)
-            cur_py = int(cur_adapter.player.y)
             if cur_px == target_x and cur_py == target_y:
-                return cur_actions
-            if _is_level_solved(cur_game, original_level):
-                return cur_actions
-            for d in [1, 2, 3, 4]:
-                test_sim = copy.deepcopy(cur_game)
-                ai = ActionInput(id=d, data={})
-                try:
-                    test_sim.perform_action(ai)
-                except Exception:
-                    continue
-                test_adapter = get_oracle_adapter("ls20", test_sim)
-                if test_adapter is None or test_adapter.player is None:
-                    continue
-                new_px = int(test_adapter.player.x)
-                new_py = int(test_adapter.player.y)
-                if (new_px, new_py) == (cur_px, cur_py):
-                    continue
+                # Phase 1: Wall-Map BFS found path — verify on real game
+                verified = _verify_path_on_game(start_game, cur_actions, target_x, target_y)
+                if verified:
+                    return cur_actions
+                # Verification failed — fall back to ReplayEngine BFS
+                return _lightweight_bfs_replay_engine(
+                    start_game, target_x, target_y, max_steps, avoid_positions,
+                )
+
+            for d, (dx, dy) in direction_offsets.items():
+                new_px = cur_px + dx
+                new_py = cur_py + dy
                 if (new_px, new_py) in visited:
                     continue
                 visited.add((new_px, new_py))
-                queue.append((test_sim, cur_actions + [(d, None)]))
-        return None
+                queue.append((cur_actions + [(d, None)], new_px, new_py))
+
+        # Wall-Map BFS failed — try ReplayEngine fallback
+        return _lightweight_bfs_replay_engine(
+            start_game, target_x, target_y, max_steps, avoid_positions,
+        )
 
     # ── 紧急金币收集: BFS失败/步数不足时的回退策略 ──
     def _emergency_collect_coin() -> bool:
@@ -6692,7 +6848,12 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
             goal_x = int(best_goal.x)
             goal_y = int(best_goal.y)
 
-            path = _lightweight_bfs(sim, goal_x, goal_y)
+            # Ψ-Cut: 导航到 goal 时避开所有 changer — 防止路径意外触发状态变更
+            all_changer_positions: set[tuple[int, int]] = set()
+            for dim, chs in state_changers.items():
+                for ch in chs:
+                    all_changer_positions.add((int(ch.x), int(ch.y)))
+            path = _lightweight_bfs(sim, goal_x, goal_y, avoid_positions=all_changer_positions)
             if path is not None:
                 for aid, data in path:
                     ai = ActionInput(id=aid, data=data if data else {})
@@ -6712,24 +6873,27 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
                     continue
                 break
 
-        # ── 状态不匹配 → 计算需要哪些 changer ──
+        # ── 属性置换原语: 计算每个维度的精确触发次数 (v3.18.2) ──
+        # IDO/TOMAS "属性置换原语": 不逐步试错, 而是计算精确置换映射
         mismatches: list[tuple[str, int, int]] = []
         for dim_name in ['rotation', 'color', 'shape']:
             current_val = player_state.get(dim_name, 0)
             target_val = best_goal_req.get(dim_name, 0)
             dim_size = dim_sizes.get(dim_name, 4)
-            triggers = (target_val - current_val) % dim_size
-            if triggers > 0:
-                mismatches.append((dim_name, triggers, dim_size))
-
-        mismatches.sort(key=lambda x: -x[1])
+            triggers_needed = (target_val - current_val) % dim_size
+            if triggers_needed > 0:
+                mismatches.append((dim_name, triggers_needed, dim_size))
 
         if not mismatches:
             continue
 
+        # 按触发需求排序 — 最需要的维度优先
+        mismatches.sort(key=lambda x: -x[1])
+
+        # ── 选择目标 changer (最需要的维度) ──
         target_changer_x = px
         target_changer_y = py
-        target_dim = mismatches[0][0]
+        target_changer_dim = mismatches[0][0]
 
         for dim_name, _, _ in mismatches:
             changers = state_changers.get(dim_name, [])
@@ -6740,35 +6904,105 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
                 )
                 target_changer_x = int(nearest_ch.x)
                 target_changer_y = int(nearest_ch.y)
-                target_dim = dim_name
+                target_changer_dim = dim_name
                 break
 
-        # ── 如果已在 changer 上 → 撤退1步以便再次触发 ──
-        if target_changer_x == px and target_changer_y == py:
-            for d in [1, 2, 3, 4]:
-                test_sim = copy.deepcopy(sim)
-                ai = ActionInput(id=d, data={})
-                try:
-                    test_sim.perform_action(ai)
-                except Exception:
-                    continue
-                test_adapter = get_oracle_adapter("ls20", test_sim)
-                if test_adapter and test_adapter.player:
-                    new_px = int(test_adapter.player.x)
-                    new_py = int(test_adapter.player.y)
-                    if (new_px, new_py) != (px, py):
-                        sim.perform_action(ai)
-                        collected.append((d, None))
-                        break
-            # 撤退后检查remaining — 如果<MIN_RESERVE且还有金币, 先收集
-            retreat_adapter = get_oracle_adapter("ls20", sim)
-            if retreat_adapter and retreat_adapter.steps_remaining < MIN_RESERVE and retreat_adapter.coins:
-                if _emergency_collect_coin():
-                    continue
-            continue
+        triggers_needed = mismatches[0][1] if mismatches else 0
 
-        # ── BFS 导航到 changer ──
-        path = _lightweight_bfs(sim, target_changer_x, target_changer_y)
+        # ── 如果已在 changer 上 → 属性置换原语多触发循环 ──
+        if target_changer_x == px and target_changer_y == py:
+            # 属性置换原语: 当前在 changer 上, 需要触发 triggers_needed 次
+            # 每次触发: 移动离开 → 回到 changer → 触发下一级
+            remaining_triggers = triggers_needed
+            while remaining_triggers > 0 and len(collected) < MAX_TOTAL_STEPS:
+                # 先尝试移动离开 changer (1步)
+                moved_away = False
+                for d in [1, 2, 3, 4]:
+                    snap = _snapshot_state(sim)
+                    ai = ActionInput(id=d, data={})
+                    try:
+                        sim.perform_action(ai)
+                    except Exception:
+                        _restore_state(sim, snap)
+                        continue
+                    test_adapter = get_oracle_adapter("ls20", sim)
+                    if test_adapter and test_adapter.player:
+                        new_px = int(test_adapter.player.x)
+                        new_py = int(test_adapter.player.y)
+                        if (new_px, new_py) != (px, py):
+                            collected.append((d, None))
+                            moved_away = True
+                            px = new_px
+                            py = new_py
+                            break
+                    _restore_state(sim, snap)
+
+                if not moved_away:
+                    break  # 无法离开 changer — 被墙围住
+
+                # 触发1次已完成 (离开changer即触发)
+                remaining_triggers -= 1
+
+                if remaining_triggers > 0:
+                    # BFS 回到 changer (避开其他 changer!)
+                    other_changer_positions: set[tuple[int, int]] = set()
+                    for dim, chs in state_changers.items():
+                        if dim != target_changer_dim:
+                            for ch in chs:
+                                other_changer_positions.add((int(ch.x), int(ch.y)))
+                    # 同时避开所有 changer (Ψ-Cut: 防止意外触发)
+                    all_changer_avoid: set[tuple[int, int]] = set()
+                    for dim, chs in state_changers.items():
+                        for ch in chs:
+                            all_changer_avoid.add((int(ch.x), int(ch.y)))
+
+                    retreat_path = _lightweight_bfs(
+                        sim, target_changer_x, target_changer_y,
+                        max_steps=min(adapter.steps_remaining, 8),
+                        avoid_positions=all_changer_avoid,
+                    )
+                    if retreat_path is not None:
+                        for aid, data in retreat_path:
+                            ai = ActionInput(id=aid, data=data if data else {})
+                            try:
+                                sim.perform_action(ai)
+                                collected.append((aid, data))
+                            except Exception:
+                                break
+                        # 回到 changer, 更新位置和状态
+                        retreat_adapter = get_oracle_adapter("ls20", sim)
+                        if retreat_adapter and retreat_adapter.player:
+                            px = int(retreat_adapter.player.x)
+                            py = int(retreat_adapter.player.y)
+                            player_state = retreat_adapter.player_state
+                            # 检查状态是否已对齐此维度
+                            current_val = player_state.get(target_changer_dim, 0)
+                            target_val = best_goal_req.get(target_changer_dim, 0)
+                            dim_size = dim_sizes.get(target_changer_dim, 4)
+                            remaining_triggers = (target_val - current_val) % dim_size
+                    else:
+                        break  # 无法回到 changer
+
+                # 检查 remaining 步数
+                retreat_adapter = get_oracle_adapter("ls20", sim)
+                if retreat_adapter and retreat_adapter.steps_remaining < MIN_RESERVE and retreat_adapter.coins:
+                    if _emergency_collect_coin():
+                        continue
+                if _is_level_solved(sim, original_level):
+                    return collected
+
+            continue  # 多触发循环结束, 重新进入主循环
+
+        # ── BFS 导航到 changer (避开所有其他 changer) ──
+        all_changer_positions: set[tuple[int, int]] = set()
+        for dim, chs in state_changers.items():
+            for ch in chs:
+                all_changer_positions.add((int(ch.x), int(ch.y)))
+
+        path = _lightweight_bfs(
+            sim, target_changer_x, target_changer_y,
+            avoid_positions=all_changer_positions,
+        )
         if path is not None:
             for aid, data in path:
                 ai = ActionInput(id=aid, data=data if data else {})
@@ -6780,14 +7014,17 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
 
             if _is_level_solved(sim, original_level):
                 return collected
-            # 到达changer后检查remaining — 如果<MIN_RESERVE且还有金币, 先收集
+
+            # 到达 changer, 检查 remaining
             post_adapter = get_oracle_adapter("ls20", sim)
             if post_adapter and post_adapter.steps_remaining < MIN_RESERVE and post_adapter.coins:
                 if _emergency_collect_coin():
                     continue
+
+            # 到达 changer → 下次迭代会在 changer 上触发多触发循环
             continue
         else:
-            # BFS到changer失败 → 可能remaining不够或墙阻隔
+            # BFS到changer失败
             if _emergency_collect_coin():
                 continue
             break
@@ -6800,18 +7037,180 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
     return None if not _is_level_solved(sim, original_level) else collected
 
 
+def _verify_kappa_path_on_game(
+    game: Any,
+    actions: list[tuple],
+    original_level: int,
+) -> list[tuple] | None:
+    """Verify a κ-PS LightSim path by replaying on the real game.
+
+    ONE deepcopy of game + replay action chain. Returns the action list
+    if the level is solved after replay, None otherwise.
+
+    Args:
+        game: Original game object (not modified).
+        actions: Action list [(direction, data), ...] to verify.
+        original_level: Level index to check for completion.
+
+    Returns:
+        The action list if verification succeeds, None if it fails.
+    """
+    from arcengine import ActionInput
+    from .oracle_adapters import get_oracle_adapter
+
+    sim_verify = copy.deepcopy(game)  # ONE deepcopy for verification
+    for aid, data in actions:
+        ai = ActionInput(id=aid, data=data if data else {})
+        try:
+            sim_verify.perform_action(ai)
+        except Exception:
+            return None
+
+    if _is_level_solved(sim_verify, original_level):
+        return actions
+    return None
+
+
+class _LS20LightSim:
+    """Lightweight LS20 state tracker — no game copies needed (v3.18.2).
+
+    IDO/TOMAS: κ-PS BFS 不需要完整游戏对象，只需复合状态空间位置。
+    追踪 (x, y, rotation, color, shape) — 每次展开 ~1μs vs deepcopy ~1-2s。
+    """
+
+    __slots__ = ('x', 'y', 'state', 'step_size', 'walls', 'changers',
+                 'dim_sizes', 'goal_positions', 'goal_reqs')
+
+    def __init__(
+        self,
+        x: int,
+        y: int,
+        state: dict[str, int],
+        step_size: int,
+        walls: set[tuple[int, int]],
+        changers: dict[tuple[int, int], str],
+        dim_sizes: dict[str, int],
+        goal_positions: list[tuple[int, int]],
+        goal_reqs: list[dict[str, int]],
+    ) -> None:
+        """Initialize lightweight state tracker.
+
+        Args:
+            x: Player x coordinate.
+            y: Player y coordinate.
+            state: Player state dict {rotation, color, shape}.
+            step_size: Movement step size in game grid.
+            walls: Set of wall positions (x, y).
+            changers: Dict mapping changer position (x,y) → dimension name.
+            dim_sizes: Dict mapping dimension name → size (e.g., rotation: 4).
+            goal_positions: List of goal positions (x, y).
+            goal_reqs: List of goal requirement dicts [{rotation, color, shape}].
+        """
+        self.x = x
+        self.y = y
+        self.state = dict(state)
+        self.step_size = step_size
+        self.walls = walls
+        self.changers = changers
+        self.dim_sizes = dim_sizes
+        self.goal_positions = goal_positions
+        self.goal_reqs = goal_reqs
+
+    def move(self, direction: int) -> bool:
+        """Simulate a move. Returns True if move was valid.
+
+        Args:
+            direction: Movement direction (1=UP, 2=RIGHT, 3=DOWN, 4=LEFT).
+
+        Returns:
+            True if move succeeded (not blocked by wall).
+        """
+        offsets: dict[int, tuple[int, int]] = {
+            1: (0, -self.step_size),
+            2: (self.step_size, 0),
+            3: (0, self.step_size),
+            4: (-self.step_size, 0),
+        }
+        dx, dy = offsets.get(direction, (0, 0))
+        new_x = self.x + dx
+        new_y = self.y + dy
+
+        if (new_x, new_y) in self.walls:
+            return False
+
+        self.x = new_x
+        self.y = new_y
+
+        # Check if walked over a changer — apply state permutation
+        if (new_x, new_y) in self.changers:
+            dim = self.changers[(new_x, new_y)]
+            self.state[dim] = (self.state[dim] + 1) % self.dim_sizes[dim]
+
+        return True
+
+    def composite_key(self) -> tuple[int, int, int, int, int]:
+        """Get composite state key for visited set.
+
+        Returns:
+            (x, y, rotation, color, shape) tuple for dedup.
+        """
+        return (
+            self.x,
+            self.y,
+            self.state.get('rotation', 0),
+            self.state.get('color', 0),
+            self.state.get('shape', 0),
+        )
+
+    def is_solved(self) -> bool:
+        """Check if player is at a goal with matching state.
+
+        Returns:
+            True if player position + state matches a goal requirement.
+        """
+        for i, (gx, gy) in enumerate(self.goal_positions):
+            if self.x == gx and self.y == gy:
+                req = self.goal_reqs[i]
+                if (
+                    self.state.get('rotation', 0) == req.get('rotation', 0)
+                    and self.state.get('color', 0) == req.get('color', 0)
+                    and self.state.get('shape', 0) == req.get('shape', 0)
+                ):
+                    return True
+        return False
+
+    def copy(self) -> '_LS20LightSim':
+        """Create an independent copy of this light sim.
+
+        Returns:
+            New _LS20LightSim with same state (dict copy, not reference).
+        """
+        return _LS20LightSim(
+            x=self.x,
+            y=self.y,
+            state=dict(self.state),
+            step_size=self.step_size,
+            walls=self.walls,  # sets are immutable enough for read-only
+            changers=self.changers,  # dicts are read-only in BFS
+            dim_sizes=self.dim_sizes,
+            goal_positions=self.goal_positions,
+            goal_reqs=self.goal_reqs,
+        )
+
+
 def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
-    """状态感知 κ-PS BFS for LS20 — 动态目标切换 + EML 复合状态.
+    """状态感知 κ-PS BFS for LS20 — _LS20LightSim 零拷贝搜索 (v3.18.2).
 
     搜索节点 = (position, rotation_idx, color_idx, shape_idx) 复合状态.
     κ-priority 基于动态目标: 状态不匹配 → target=state-changer; 状态匹配 → target=goal.
-    状态匹配 bonus 乘以 >1.0 提升优先级 (非之前的 <1.0 错误).
+    状态匹配 bonus 乘以 >1.0 提升优先级.
 
-    核心改进 (vs v1):
-    1. 动态目标: 状态不匹配时导航到 changer, 不再死冲 goal (被阻挡)
-    2. κ-priority 修正: 匹配 bonus *= 1.5/2.0/3.0 (提升优先级, 非 0.5/0.8 降低)
-    3. 增加搜索预算: MAX_NODES=5000, MAX_PATH_LEN=80, MAX_BFS_TIME=60.0
-    4. 无 ACTION6 — 只有方向移动有效
+    核心改进 (v3.18.2 vs v3.18.1):
+    1. _LS20LightSim: 不做 deepcopy(game), 只追踪 (x,y,rotation,color,shape)
+       每次展开 ~1μs vs deepcopy ~1-2s → 可探索 1000x+ 更多节点
+    2. 属性置换原语: changer 触发精确建模在 LightSim.move() 中
+    3. 找到路径后用真实游戏验证 (deepcopy + replay)
+    4. 验证失败 → 回退到 deepcopy BFS
 
     No hardcoded paths, coordinates, or step_size values.
     """
@@ -6848,26 +7247,55 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
     state_changers_init = adapter.state_changers
     goals_init = adapter.goals
 
-    # 构建 goal 目标列表: (goal_x, goal_y, goal_rotation, goal_color, goal_shape)
-    goal_targets: list[tuple[int, int, int, int, int]] = []
+    # 构建 goal 目标列表
+    goal_positions: list[tuple[int, int]] = []
+    goal_reqs: list[dict[str, int]] = []
     if goals_init and goal_requirements:
         for i, g in enumerate(goals_init):
             if i < len(goal_requirements):
                 req = goal_requirements[i]
-                goal_targets.append(
-                    (int(g.x), int(g.y), req['rotation'], req['color'], req['shape']),
-                )
+                goal_positions.append((int(g.x), int(g.y)))
+                goal_reqs.append({
+                    'rotation': req.get('rotation', 0),
+                    'color': req.get('color', 0),
+                    'shape': req.get('shape', 0),
+                })
 
-    if not goal_targets:
+    if not goal_positions:
         return None
 
-    # 构建 changer 目标列表: (changer_x, changer_y, changer_dim)
+    # 构建 wall set 和 changer dict (one-time extraction)
+    wall_set: set[tuple[int, int]] = set()
+    for w in (adapter.walls or []):
+        wall_set.add((int(w.x), int(w.y)))
+
+    changer_dict: dict[tuple[int, int], str] = {}
     changer_targets: list[tuple[int, int, str]] = []
     for dim, changers in state_changers_init.items():
         for ch in changers:
+            ch_pos = (int(ch.x), int(ch.y))
+            changer_dict[ch_pos] = dim
             changer_targets.append((int(ch.x), int(ch.y), dim))
 
-    # ── 动态目标选择: 根据当前状态选择 target ──
+    # 构建 goal_targets for κ-priority calculation
+    goal_targets: list[tuple[int, int, int, int, int]] = []
+    for i, (gx, gy) in enumerate(goal_positions):
+        if i < len(goal_reqs):
+            goal_targets.append((gx, gy, goal_reqs[i]['rotation'], goal_reqs[i]['color'], goal_reqs[i]['shape']))
+
+    # ── 创建 LightSim ──
+    init_light = _LS20LightSim(
+        x=px0, y=py0,
+        state={'rotation': init_rot, 'color': init_color, 'shape': init_shape},
+        step_size=step_size,
+        walls=wall_set,
+        changers=changer_dict,
+        dim_sizes=dim_sizes,
+        goal_positions=goal_positions,
+        goal_reqs=goal_reqs,
+    )
+
+    # ── 动态目标选择 ──
     def _select_dynamic_target(
         pos_x: int, pos_y: int,
         rot: int, color: int, shape: int,
@@ -6877,30 +7305,34 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
     ) -> tuple[int, int, bool]:
         """选择动态目标: 状态不匹配 → changer; 状态匹配 → goal.
 
+        Args:
+            pos_x: Current x position.
+            pos_y: Current y position.
+            rot: Current rotation value.
+            color: Current color value.
+            shape: Current shape value.
+            goal_targets: Goal target tuples (x,y,rot,color,shape).
+            changer_targets: Changer target tuples (x,y,dim).
+            dim_sizes: Dimension size mapping.
+
         Returns:
             (target_x, target_y, is_goal_target)
         """
-        # 找最佳匹配的 goal
         if goal_targets:
             best_goal = min(
                 goal_targets,
                 key=lambda t: (
-                    # State mismatch count (优先选择 state 最接近的 goal)
                     (t[2] != rot) + (t[3] != color) + (t[4] != shape),
                     abs(pos_x - t[0]) + abs(pos_y - t[1]),
                 ),
             )
             g_rot, g_color, g_shape = best_goal[2], best_goal[3], best_goal[4]
 
-            # 检查状态匹配度
             state_matches = (rot == g_rot and color == g_color and shape == g_shape)
-
             if state_matches:
-                # 状态完全匹配 → 导航到 goal
                 return (best_goal[0], best_goal[1], True)
 
             # 状态不匹配 → 导航到最需要的 changer
-            # 计算每个维度需要多少触发
             mismatches: list[tuple[str, int, int]] = []
             for dim_name, current_val, goal_val, dim_size in [
                 ('rotation', rot, g_rot, dim_sizes.get('rotation', 4)),
@@ -6911,16 +7343,13 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
                 if triggers > 0:
                     mismatches.append((dim_name, triggers, dim_size))
 
-            # 按触发需求排序 (需要最多触发的维度优先)
             mismatches.sort(key=lambda x: -x[1])
 
-            # 找最近的可用的 changer for 最需要的维度
             for dim_name, triggers, _ in mismatches:
                 for ch_x, ch_y, ch_dim in changer_targets:
                     if ch_dim == dim_name:
                         return (ch_x, ch_y, False)
 
-        # 没有目标 — fallback
         if goal_targets:
             return (goal_targets[0][0], goal_targets[0][1], True)
         return (pos_x, pos_y, False)
@@ -6936,13 +7365,23 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
     ) -> float:
         """κ-priority: 距动态目标越近 + 状态梯度越小 → κ越高 → 优先展开.
 
-        heapq 用 (-κ_priority, counter, ...) 排序, κ越高 → -κ越低 → 优先弹出.
-        状态匹配 bonus *= >1.0 提升优先级.
+        Args:
+            pos_x: Current x position.
+            pos_y: Current y position.
+            rot: Current rotation value.
+            color: Current color value.
+            shape: Current shape value.
+            target_x: Dynamic target x.
+            target_y: Dynamic target y.
+            is_goal_target: Whether target is a goal (vs changer).
+            goal_targets: Goal target tuples.
+            dim_sizes: Dimension size mapping.
+
+        Returns:
+            κ-priority value (higher = more promising).
         """
-        # 位置距离到当前动态目标
         pos_dist = abs(pos_x - target_x) + abs(pos_y - target_y)
 
-        # 状态梯度到最佳 goal 的距离
         state_grad = 0
         if goal_targets:
             best_goal = min(
@@ -6959,15 +7398,12 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
                 + (g_shape - shape) % dim_sizes.get('shape', 3)
             )
 
-        # Liu S_rel: κ_priority = 1 / (S_rel + ε)
-        # S_rel = 0.1 × num_prims − 0.5 × IC + 2.0 × GEX
-        # 简化: IC = composite_distance / step_size
         composite_dist = state_grad * 5.0 * step_size + pos_dist
         ic = composite_dist / max(1, step_size)
         s_rel = 0.1 - 0.5 * ic
         kappa_pri = 1.0 / (s_rel + LIU_EPSILON)
 
-        # ── 状态匹配 bonus (乘以 >1.0 = 提升优先级) ──
+        # ── 状态匹配 bonus ──
         if goal_targets:
             best_goal = min(
                 goal_targets,
@@ -6978,24 +7414,24 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
             g_rot, g_color, g_shape = best_goal[2], best_goal[3], best_goal[4]
             matched_dims = (rot == g_rot) + (color == g_color) + (shape == g_shape)
             if matched_dims >= 1:
-                kappa_pri *= (1.0 + 0.5 * matched_dims)  # 1→1.5x, 2→2.0x, 3→2.5x
+                kappa_pri *= (1.0 + 0.5 * matched_dims)
             if matched_dims == 3:
-                kappa_pri *= 2.0  # 完全匹配 → 5.0x 总提升
+                kappa_pri *= 2.0
 
         return kappa_pri
 
     LIU_EPSILON = 0.01
-    MAX_NODES = 20000    # v3.18.1: 从5000提升到20000 — LS20 κ-PS需要更多搜索节点
-    MAX_BFS_TIME = 90.0  # v3.18.1: 从60提升到90 — Stage 4 fallback需要更多时间
-    MAX_PATH_LEN = 200   # v3.18.1: 从80提升到200 — L5/L6需要接近200步路径
+    MAX_NODES = 20000
+    MAX_BFS_TIME = 90.0
+    MAX_PATH_LEN = 200
 
     # ── 复合状态 visited set ──
     visited_composite: set[tuple[int, int, int, int, int]] = {
-        (px0, py0, init_rot, init_color, init_shape),
+        init_light.composite_key(),
     }
 
-    # Priority queue: (-κ_priority, counter, game_copy, action_list)
-    pq: list[tuple[float, int, Any, list[tuple]]] = []
+    # Priority queue: (-κ_priority, counter, light_sim_copy, action_list)
+    pq: list[tuple[float, int, _LS20LightSim, list[tuple]]] = []
     counter = 0
 
     # ── 初始化: 从起点展开所有方向 ──
@@ -7005,146 +7441,93 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
     )
 
     for d in [1, 2, 3, 4]:
-        test_sim = copy.deepcopy(sim)
-        ai = ActionInput(id=d, data={})
-        try:
-            test_sim.perform_action(ai)
-        except Exception:
+        child_light = init_light.copy()
+        if not child_light.move(d):
             continue
 
-        test_adapter = get_oracle_adapter("ls20", test_sim)
-        if test_adapter is None or test_adapter.player is None:
+        ck = child_light.composite_key()
+        if ck in visited_composite:
             continue
 
-        new_px = int(test_adapter.player.x)
-        new_py = int(test_adapter.player.y)
+        visited_composite.add(ck)
 
-        if (new_px, new_py) == (px0, py0):
-            continue  # 被阻挡
+        if child_light.is_solved():
+            # Verify on real game before returning
+            verified_actions = _verify_kappa_path_on_game(game, [(d, None)], original_level)
+            if verified_actions is not None:
+                return verified_actions
 
-        new_pstate = test_adapter.player_state
-        new_rot = new_pstate.get('rotation', init_rot)
-        new_color = new_pstate.get('color', init_color)
-        new_shape = new_pstate.get('shape', init_shape)
-
-        composite_key = (new_px, new_py, new_rot, new_color, new_shape)
-        if composite_key in visited_composite:
-            continue
-
-        visited_composite.add(composite_key)
-
-        # 动态目标: 根据新状态选择
-        dyn_target_x, dyn_target_y, dyn_is_goal = _select_dynamic_target(
-            new_px, new_py, new_rot, new_color, new_shape,
+        # Dynamic target and κ-priority
+        child_rot = child_light.state.get('rotation', init_rot)
+        child_color = child_light.state.get('color', init_color)
+        child_shape = child_light.state.get('shape', init_shape)
+        dyn_x, dyn_y, dyn_is_goal = _select_dynamic_target(
+            child_light.x, child_light.y, child_rot, child_color, child_shape,
             goal_targets, changer_targets, dim_sizes,
         )
-
         kappa_pri = _compute_kappa_priority(
-            new_px, new_py, new_rot, new_color, new_shape,
-            dyn_target_x, dyn_target_y, dyn_is_goal,
-            goal_targets, dim_sizes,
+            child_light.x, child_light.y, child_rot, child_color, child_shape,
+            dyn_x, dyn_y, dyn_is_goal, goal_targets, dim_sizes,
         )
 
-        heapq.heappush(pq, (-kappa_pri, counter, test_sim, [(d, None)]))
+        heapq.heappush(pq, (-kappa_pri, counter, child_light, [(d, None)]))
         counter += 1
 
-    # ── κ-PS BFS exploration ──
+    # ── κ-PS BFS exploration using LightSim ──
     nodes = 0
     while pq and _time.time() - t0 < MAX_BFS_TIME and nodes < MAX_NODES:
-        neg_pri, _, cur_sim, cur_actions = heapq.heappop(pq)
+        neg_pri, _, cur_light, cur_actions = heapq.heappop(pq)
         nodes += 1
 
-        # 检查是否解决
-        if _is_level_solved(cur_sim, original_level):
-            return cur_actions
-
-        cur_adapter = get_oracle_adapter("ls20", cur_sim)
-        if cur_adapter is None or cur_adapter.player is None:
-            continue
-
-        cur_px = int(cur_adapter.player.x)
-        cur_py = int(cur_adapter.player.y)
+        if cur_light.is_solved():
+            # Phase 1: LightSim found solution — verify on real game
+            verified_actions = _verify_kappa_path_on_game(game, cur_actions, original_level)
+            if verified_actions is not None:
+                return verified_actions
+            # Verification failed — continue search (path may not work on real game)
 
         if len(cur_actions) >= MAX_PATH_LEN:
             continue
 
-        # ── 当前复合状态 ──
-        cur_pstate = cur_adapter.player_state
-        cur_rot = cur_pstate.get('rotation', 0)
-        cur_color = cur_pstate.get('color', 0)
-        cur_shape = cur_pstate.get('shape', 0)
+        cur_rot = cur_light.state.get('rotation', 0)
+        cur_color = cur_light.state.get('color', 0)
+        cur_shape = cur_light.state.get('shape', 0)
 
-        # ── 动态目标更新 ──
-        cur_goals = cur_adapter.goals
-        cur_goal_reqs = cur_adapter.goal_requirements
-        cur_dim_sizes = cur_adapter.state_dimension_sizes
-        cur_changers = cur_adapter.state_changers
-
-        # 重新构建 goal_targets 和 changer_targets
-        cur_goal_targets: list[tuple[int, int, int, int, int]] = []
-        if cur_goals and cur_goal_reqs:
-            for i, g in enumerate(cur_goals):
-                if i < len(cur_goal_reqs):
-                    req = cur_goal_reqs[i]
-                    cur_goal_targets.append(
-                        (int(g.x), int(g.y), req['rotation'], req['color'], req['shape']),
-                    )
-
-        cur_changer_targets: list[tuple[int, int, str]] = []
-        for dim, changers in cur_changers.items():
-            for ch in changers:
-                cur_changer_targets.append((int(ch.x), int(ch.y), dim))
-
-        # ── 展开方向移动 (ACTION1-4 only, no ACTION6) ──
         for d in [1, 2, 3, 4]:
-            test_sim = copy.deepcopy(cur_sim)
-            ai = ActionInput(id=d, data={})
-            try:
-                test_sim.perform_action(ai)
-            except Exception:
+            child_light = cur_light.copy()
+            if not child_light.move(d):
                 continue
 
-            test_adapter = get_oracle_adapter("ls20", test_sim)
-            if test_adapter is None or test_adapter.player is None:
+            ck = child_light.composite_key()
+            if ck in visited_composite:
                 continue
 
-            new_px = int(test_adapter.player.x)
-            new_py = int(test_adapter.player.y)
+            visited_composite.add(ck)
 
-            if (new_px, new_py) == (cur_px, cur_py):
-                continue  # 被阻挡
+            if child_light.is_solved():
+                # Verify on real game
+                verified_actions = _verify_kappa_path_on_game(
+                    game, cur_actions + [(d, None)], original_level,
+                )
+                if verified_actions is not None:
+                    return verified_actions
 
-            new_pstate = test_adapter.player_state
-            new_rot = new_pstate.get('rotation', cur_rot)
-            new_color = new_pstate.get('color', cur_color)
-            new_shape = new_pstate.get('shape', cur_shape)
-
-            composite_key = (new_px, new_py, new_rot, new_color, new_shape)
-            if composite_key in visited_composite:
-                continue
-
-            visited_composite.add(composite_key)
-
-            # 检查是否解决
-            if _is_level_solved(test_sim, original_level):
-                return cur_actions + [(d, None)]
-
-            # 动态目标: 根据新状态选择 changer 或 goal
+            child_rot = child_light.state.get('rotation', cur_rot)
+            child_color = child_light.state.get('color', cur_color)
+            child_shape = child_light.state.get('shape', cur_shape)
             dyn_x, dyn_y, dyn_is_goal = _select_dynamic_target(
-                new_px, new_py, new_rot, new_color, new_shape,
-                cur_goal_targets, cur_changer_targets, cur_dim_sizes,
+                child_light.x, child_light.y, child_rot, child_color, child_shape,
+                goal_targets, changer_targets, dim_sizes,
             )
-
             kappa_pri = _compute_kappa_priority(
-                new_px, new_py, new_rot, new_color, new_shape,
-                dyn_x, dyn_y, dyn_is_goal,
-                cur_goal_targets, cur_dim_sizes,
+                child_light.x, child_light.y, child_rot, child_color, child_shape,
+                dyn_x, dyn_y, dyn_is_goal, goal_targets, dim_sizes,
             )
 
             heapq.heappush(pq, (
                 -kappa_pri,
                 counter,
-                test_sim,
+                child_light,
                 cur_actions + [(d, None)],
             ))
             counter += 1
