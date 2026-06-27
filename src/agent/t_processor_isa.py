@@ -133,14 +133,16 @@ class ISAResult(Enum):
 # =============================================================================
 
 class MacroISAOpcode(Enum):
-    """Macro ISA instruction opcode identifiers (v1.2).
+    """Macro ISA instruction opcode identifiers (v1.3).
 
     宏指令 (6条): 每条 = 多个物理原语打包成一个 Python function call.
     辅助指令 (9条): κ-Snap pipeline sub-steps + 时间窗 + 熔断 + 回溯 + 停机.
+    κ-变换原语 (6条): OMUL, MIR_X, MIR_Y, ST_EML, FILL_CC, COUNT_NODES.
 
     Categories:
         - Macro game-specific (0xA0-0xA5): KA59, AR25, TN36, SB26, CN04, KSAP
         - κ-Snap pipeline (0x20-0x24): KS_START, KS_PROJ, KS_GX, KS_COMMIT, KS_ABORT
+        - κ-Transformation primitives (0x40-0x45): OMUL, MIR_X, MIR_Y, ST_EML, FILL_CC, COUNT_NODES
         - Physical primitives (0x70-0x72): GXCHK, DZFUSE, REINF
         - Infrastructure (0x37, 0x7F): CHK_TIMEW, HALT
     """
@@ -1261,6 +1263,201 @@ def _update_eml_anchor(eml_graph: EMLGraph, anchor: Octonion) -> None:
 
 
 # =============================================================================
+# §9b. κ-Transformation Opcode Implementations — κ-Tsirelson article §4
+# =============================================================================
+
+def _op_omul(state: Dict[str, Any]) -> ISAResult:
+    """OMUL (0x40): Rotate EML nodes by Octonion imaginary axis multiplication.
+
+    Each EMLNode.pos is interpreted as a 2-component Octonion (a, b) and
+    multiplied (Cayley-Dickson product) by the rotation axis Octonion.
+    Default axis = Octonion(0,1,0,0,0,0,0,0) → 90° rotation (i-axis).
+
+    The Cayley-Dickson multiplication preserves the non-associative algebra
+    structure: (pos_oct × axis) yields a rotated position consistent with
+    κ-algebra coset constraints. Positions are stored back as 2-tuples
+    (rotated.a, rotated.b), which correspond to (x, y) in the grid.
+
+    Args:
+        state: Dict containing:
+            eml: EMLGraph instance (required).
+            axis: Octonion rotation axis (default: i-axis for 90° rotation).
+
+    Returns:
+        ISAResult.PASS if rotation applied successfully.
+        ISAResult.DEAD_ZERO if EML is empty or invalid.
+    """
+    eml = state.get("eml")
+    axis = state.get("axis", Octonion(0, 1, 0, 0, 0, 0, 0, 0))  # Default: i-axis = 90° rotation
+    if eml is None or not hasattr(eml, 'nodes') or len(eml.nodes) == 0:
+        return ISAResult.DEAD_ZERO
+    # Apply Octonion rotation to each node's position
+    for node in eml.nodes:
+        if node.pos is not None:
+            if isinstance(node.pos, (tuple, list)) and len(node.pos) >= 2:
+                pos_oct = Octonion(node.pos[0], node.pos[1], 0, 0, 0, 0, 0, 0)
+            else:
+                pos_oct = Octonion(node.pos, 0, 0, 0, 0, 0, 0, 0)
+            rotated = pos_oct * axis  # Cayley-Dickson multiplication
+            # Store rotated position back as (x, y) tuple
+            node.pos = (int(round(rotated.a)), int(round(rotated.b)))
+    return ISAResult.PASS
+
+
+def _op_mir_x(state: Dict[str, Any]) -> ISAResult:
+    """MIR_X (0x41): Mirror EML nodes on X-axis (x → -x).
+
+    Applies coordinate negation on the x-component of each EMLNode.pos.
+    This is the κ-algebra mirror primitive: a reflection through the y-axis
+    that preserves the topological structure of the EML hypergraph.
+
+    Args:
+        state: Dict containing:
+            eml: EMLGraph instance (required).
+
+    Returns:
+        ISAResult.PASS if mirror applied successfully.
+        ISAResult.DEAD_ZERO if EML is empty or invalid.
+    """
+    eml = state.get("eml")
+    if eml is None or not hasattr(eml, 'nodes') or len(eml.nodes) == 0:
+        return ISAResult.DEAD_ZERO
+    for node in eml.nodes:
+        if node.pos is not None and isinstance(node.pos, (tuple, list)) and len(node.pos) >= 2:
+            node.pos = (-node.pos[0], node.pos[1])
+    return ISAResult.PASS
+
+
+def _op_mir_y(state: Dict[str, Any]) -> ISAResult:
+    """MIR_Y (0x42): Mirror EML nodes on Y-axis (y → -y).
+
+    Applies coordinate negation on the y-component of each EMLNode.pos.
+    This is the κ-algebra mirror primitive: a reflection through the x-axis
+    that preserves the topological structure of the EML hypergraph.
+
+    Args:
+        state: Dict containing:
+            eml: EMLGraph instance (required).
+
+    Returns:
+        ISAResult.PASS if mirror applied successfully.
+        ISAResult.DEAD_ZERO if EML is empty or invalid.
+    """
+    eml = state.get("eml")
+    if eml is None or not hasattr(eml, 'nodes') or len(eml.nodes) == 0:
+        return ISAResult.DEAD_ZERO
+    for node in eml.nodes:
+        if node.pos is not None and isinstance(node.pos, (tuple, list)) and len(node.pos) >= 2:
+            node.pos = (node.pos[0], -node.pos[1])
+    return ISAResult.PASS
+
+
+def _op_st_eml(state: Dict[str, Any]) -> ISAResult:
+    """ST_EML (0x43): Update EML node attributes (color swap, type change).
+
+    Applies an attribute mapping to each EMLNode.kind. This is the κ-algebra
+    attribute permutation primitive: swapping node types (e.g., color swap
+    in ARC grids) while preserving the EML topology structure.
+
+    Args:
+        state: Dict containing:
+            eml: EMLGraph instance (required).
+            attr_map: Dict mapping old kind → new kind (default: empty).
+
+    Returns:
+        ISAResult.PASS if attribute update applied successfully.
+        ISAResult.DEAD_ZERO if EML is empty or invalid.
+    """
+    eml = state.get("eml")
+    attr_map = state.get("attr_map", {})  # {old_kind: new_kind}
+    if eml is None or not hasattr(eml, 'nodes') or len(eml.nodes) == 0:
+        return ISAResult.DEAD_ZERO
+    for node in eml.nodes:
+        if node.kind in attr_map:
+            node.kind = attr_map[node.kind]
+    return ISAResult.PASS
+
+
+def _op_fill_cc(state: Dict[str, Any]) -> ISAResult:
+    """FILL_CC (0x44): Fill connected component in EML graph from seed position.
+
+    Performs BFS from a seed node through the EML adjacency graph, changing
+    each visited node's kind to fill_kind. This is the κ-algebra topology
+    expansion primitive: connected component flood-fill that respects the
+    EML hypergraph neighbor structure.
+
+    Args:
+        state: Dict containing:
+            eml: EMLGraph instance (required).
+            seed_pos: Seed position tuple (x, y) (required).
+            fill_kind: Target kind to fill nodes with (default: "filled").
+
+    Returns:
+        ISAResult.PASS if fill applied successfully.
+        ISAResult.DEAD_ZERO if EML or seed_pos is invalid.
+    """
+    eml = state.get("eml")
+    seed_pos = state.get("seed_pos")
+    fill_kind = state.get("fill_kind", "filled")
+    if eml is None or seed_pos is None:
+        return ISAResult.DEAD_ZERO
+    # BFS from seed position through neighbors
+    # find_by_pos takes (x, y) as separate arguments
+    if isinstance(seed_pos, (tuple, list)) and len(seed_pos) >= 2:
+        seed_node = eml.find_by_pos(seed_pos[0], seed_pos[1])
+    else:
+        seed_node = None
+    if seed_node is None:
+        return ISAResult.DEAD_ZERO
+    visited: Set[int] = set()
+    frontier: List[EMLNode] = [seed_node]
+    while frontier:
+        node = frontier.pop(0)
+        if node.id in visited:
+            continue
+        visited.add(node.id)
+        node.kind = fill_kind  # Fill this node
+        # Expand to neighbors
+        for neighbor_id in (node.neighbors or []):
+            neighbor = next((n for n in eml.nodes if n.id == neighbor_id), None)
+            if neighbor and neighbor.id not in visited:
+                frontier.append(neighbor)
+    return ISAResult.PASS
+
+
+def _op_count_nodes(state: Dict[str, Any]) -> ISAResult:
+    """COUNT_NODES (0x45): Count EML nodes matching a filter.
+
+    Counts EML nodes by kind (if kind_filter is provided) or total nodes
+    (if kind_filter is None). The count is stored in state["node_count"]
+    for downstream κ-Snap pipeline use.
+
+    This is the κ-algebra aggregation primitive: node counting provides
+    the cardinality constraint for GaussEx residual computation in the
+    κ-Causal Reduction Solver.
+
+    Args:
+        state: Dict containing:
+            eml: EMLGraph instance (required).
+            kind_filter: Kind string to filter nodes (default: None = count all).
+
+    Returns:
+        ISAResult.PASS if count computed successfully.
+        ISAResult.DEAD_ZERO if EML is invalid.
+    """
+    eml = state.get("eml")
+    kind_filter = state.get("kind_filter", None)
+    if eml is None or not hasattr(eml, 'nodes'):
+        return ISAResult.DEAD_ZERO
+    if kind_filter is not None:
+        count: int = sum(1 for n in eml.nodes if n.kind == kind_filter)
+    else:
+        count = len(eml.nodes)
+    state["node_count"] = count
+    return ISAResult.PASS
+
+
+# =============================================================================
 # §10. ISA Registry — Game ID → Macro instruction sequence
 # =============================================================================
 
@@ -1310,13 +1507,13 @@ MACRO_INSTRUCTION_TABLE: Dict[MacroISAOpcode, Callable[[Dict[str, Any]], ISAResu
     # ===== 停机 =====
     MacroISAOpcode.HALT: lambda s: ISAResult.PASS,  # Normal termination
 
-    # ===== κ-Algebra Transformation Primitives =====
-    MacroISAOpcode.OMUL: lambda s: ISAResult.PASS,   # Octonion multiplication
-    MacroISAOpcode.MIR_X: lambda s: ISAResult.PASS,  # Mirror X
-    MacroISAOpcode.MIR_Y: lambda s: ISAResult.PASS,  # Mirror Y
-    MacroISAOpcode.ST_EML: lambda s: ISAResult.PASS, # EML attribute swap
-    MacroISAOpcode.FILL_CC: lambda s: ISAResult.PASS, # Fill connected component
-    MacroISAOpcode.COUNT_NODES: lambda s: ISAResult.PASS, # Count nodes
+    # ===== κ-Transformation Primitives =====
+    MacroISAOpcode.OMUL: _op_omul,
+    MacroISAOpcode.MIR_X: _op_mir_x,
+    MacroISAOpcode.MIR_Y: _op_mir_y,
+    MacroISAOpcode.ST_EML: _op_st_eml,
+    MacroISAOpcode.FILL_CC: _op_fill_cc,
+    MacroISAOpcode.COUNT_NODES: _op_count_nodes,
 }
 
 
@@ -1906,6 +2103,173 @@ class ARCSolver:
             EMLGraph with expanded topology (simplified: returns input).
         """
         return eml  # Simplified — topology expansion requires game-specific logic
+
+
+# =============================================================================
+# §14. KappaCausalReductionSolver — κ-Causal Reduction via Tsirelson Bound
+# =============================================================================
+
+class KappaCausalReductionSolver:
+    """κ-Causal Reduction Solver — ARC solving via κ-algebra coset causal reduction.
+
+    Based on the κ-Tsirelson framework: ARC solving = finding minimum GaussEx residual
+    causal transform T in κ-algebra coset space C(11,4).
+
+    Pipeline:
+        1. perceive(grid) → EML hypergraph
+        2. Generate κ-constrained candidate transforms (OMUL, MIR, ST_EML, FILL_CC, COUNT)
+        3. For each candidate:
+            a. KS_PROJ: project onto C(11,4) coset → best_v, residual η
+            b. If η < DELTA_K (0.036) → accept (Tsirelson-legal)
+            c. If η ≥ DELTA_K → DZFUSE (Tsirelson-illegal, PR-Box equivalent)
+        4. Return best transform with confidence = 1 - η/DELTA_K
+
+    Tsirelson Bound Enforcement:
+        - CHSH S ≤ 2√2 for all candidate transforms
+        - S > 2√2 → pseudo-rule (PR-Box equivalent) → Dead-Zero fuse
+
+    Attributes:
+        DELTA_K: GaussEx threshold (same as KSnapEngine, 0.036).
+        TSIRELSON_BOUND: Maximum CHSH correlation value = 2√2 ≈ 2.828.
+        cpu: TProcessorV12 instance for EML perception.
+        ks_engine: KSnapEngine for coset projection.
+        _candidate_transforms: List of (name, opcode, kwargs) for κ-transforms.
+    """
+
+    DELTA_K: float = 0.036  # GaussEx threshold (same as KSnapEngine)
+    TSIRELSON_BOUND: float = 2.0 * math.sqrt(2)  # S_max = 2√2 ≈ 2.828
+
+    def __init__(self, processor: Optional[TProcessorV12] = None) -> None:
+        """Initialize κ-Causal Reduction Solver.
+
+        Args:
+            processor: Optional TProcessorV12 instance for EML perception.
+                If None, creates a default instance.
+        """
+        self.cpu: TProcessorV12 = processor or TProcessorV12()
+        self.ks_engine: KSnapEngine = KSnapEngine()
+        self._candidate_transforms: List[Tuple[str, MacroISAOpcode, Dict[str, Any]]] = [
+            ('ROT90', MacroISAOpcode.OMUL, {'axis': Octonion(0, 1, 0, 0, 0, 0, 0, 0)}),
+            ('ROT180', MacroISAOpcode.OMUL, {'axis': Octonion(-1, 0, 0, 0, 0, 0, 0, 0)}),
+            ('ROT270', MacroISAOpcode.OMUL, {'axis': Octonion(0, -1, 0, 0, 0, 0, 0, 0)}),
+            ('MIRROR_X', MacroISAOpcode.MIR_X, {}),
+            ('MIRROR_Y', MacroISAOpcode.MIR_Y, {}),
+            ('COLOR_SWAP', MacroISAOpcode.ST_EML, {}),
+            ('FILL_CC', MacroISAOpcode.FILL_CC, {}),
+            ('COUNT', MacroISAOpcode.COUNT_NODES, {}),
+        ]
+
+    def solve(
+        self,
+        grid: np.ndarray,
+        prior_grid: Optional[np.ndarray] = None,
+    ) -> Tuple[Any, float, str]:
+        """κ-causal reduction: find minimum residual transform T.
+
+        Executes the full κ-Causal Reduction pipeline:
+            1. perceive(grid) → EML hypergraph
+            2. For each κ-constrained candidate transform:
+                a. Apply transform to EML copy
+                b. KS_PROJ: project onto C(11,4) coset → residual η
+                c. Tsirelson bound check: S = 2 + 2·cos(η) ≤ 2√2
+                d. If η < δ_K → accept immediately
+            3. Return best (transformed_eml, confidence, transform_name)
+
+        Args:
+            grid: 2D numpy array (input ARC grid).
+            prior_grid: Optional prior grid for κ-phase weighting.
+
+        Returns:
+            Tuple of (transformed_eml, confidence, transform_name):
+                transformed_eml: EMLGraph with best transform applied.
+                confidence: 1 - η/δ_K (quantum state purity analogue).
+                transform_name: Name of the best transform, or "DEAD_ZERO".
+        """
+        # Step 1: perceive(grid) → EML hypergraph
+        eml: EMLGraph = self.cpu.perceive(grid)
+        if eml is None or len(eml.nodes) == 0:
+            return (None, 0.0, "DEAD_ZERO")
+
+        # Step 2: load prior
+        prior_eml: Optional[EMLGraph] = None
+        prior_oct: Optional[Octonion] = None
+        if prior_grid is not None:
+            prior_eml = self.cpu.perceive(prior_grid)
+            if prior_eml is not None and len(prior_eml.nodes) > 0:
+                prior_oct = _eml_to_octonion(prior_eml)
+
+        # Step 3: try each κ-constrained transform
+        best_result: Optional[EMLGraph] = None
+        best_eta: float = float('inf')
+        best_name: str = "DEAD_ZERO"
+
+        for t_name, t_opcode, t_kwargs in self._candidate_transforms:
+            # Create a copy of EML for this transform
+            eml_copy: EMLGraph = EMLGraph(
+                nodes=[EMLNode(
+                    id=n.id, pos=n.pos, kind=n.kind,
+                    mass=n.mass, velocity=n.velocity,
+                    neighbors=list(n.neighbors) if n.neighbors else [],
+                ) for n in eml.nodes]
+            )
+
+            # Execute κ-transform
+            state: Dict[str, Any] = {"eml": eml_copy, **t_kwargs}
+            result: ISAResult = MACRO_INSTRUCTION_TABLE[t_opcode](state)
+
+            if result != ISAResult.PASS:
+                continue  # DZFUSE: skip this transform
+
+            # κ-Snap projection: project onto C(11,4) coset
+            eml_oct: Octonion = _eml_to_octonion(eml_copy)
+            best_v, eta = self.ks_engine.project(eml_oct, prior_oct)
+
+            # Tsirelson bound check: compute CHSH from η
+            # S = 2 + 2*cos(η) → must be ≤ 2√2
+            chsh_s: float = 2.0 + 2.0 * math.cos(eta)
+            if chsh_s > self.TSIRELSON_BOUND:
+                # PR-Box equivalent → DZFUSE
+                continue
+
+            # GaussEx residual check
+            if eta < best_eta:
+                best_eta = eta
+                best_name = t_name
+                best_result = eml_copy
+
+            # If residual below threshold → accept immediately
+            if eta < self.DELTA_K:
+                confidence: float = 1.0 - (eta / self.DELTA_K)
+                return (best_result, confidence, best_name)
+
+        # If best residual is above threshold → no valid transform
+        if best_eta > self.DELTA_K:
+            return (None, 0.0, "DEAD_ZERO")
+
+        confidence = 1.0 - (best_eta / self.DELTA_K)
+        return (best_result, confidence, best_name)
+
+    def verify_tsirelson_bound(
+        self,
+        transform_result: Any,
+        eta: float,
+    ) -> bool:
+        """Verify that candidate transform respects Tsirelson bound S ≤ 2√2.
+
+        CHSH correlation: S = 2 + 2·cos(η)
+        Tsirelson bound: S_max = 2√2 ≈ 2.828
+        PR-Box: S = 4 (prohibited)
+
+        Args:
+            transform_result: The transformed EML graph (for context).
+            eta: GaussEx residual from κ-Snap projection.
+
+        Returns:
+            True if CHSH S ≤ 2√2 (Tsirelson-legal).
+            False if S > 2√2 (PR-Box equivalent → prohibited).
+        """
+        chsh_s: float = 2.0 + 2.0 * math.cos(eta)
+        return chsh_s <= self.TSIRELSON_BOUND
 
 
 # =============================================================================
