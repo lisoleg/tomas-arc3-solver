@@ -268,13 +268,16 @@ def m0r0_preamble() -> SBInjector:
     )
 
 def cn04_preamble() -> SBInjector:
-    """cn04: D4对称先验."""
+    """cn04: 旋转+平移对齐 — D4陪集 + rotation_translation对称 + affine_transform原语."""
     return SBInjector(
-        name="cn04_default",
-        symmetry_hint="D4",
+        name='cn04',
+        coset_filter=[3, 7, 11, 15],
+        symmetry_hint='rotation_translation',
         enable_rm=True,
-        time_window=1,
-        eps_factor=1.0,
+        time_window=2,
+        eps_factor=1.5,
+        sporadic_pref=False,
+        physics_primitives=['affine_transform'],
     )
 
 def cd82_preamble() -> SBInjector:

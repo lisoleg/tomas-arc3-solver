@@ -320,6 +320,144 @@ def compute_swap_sequence(current_colors: List[int],
 
 
 # ============================================================
+# CN04: 仿射变换 (κ-Phase: 旋转+平移 = κ-相位偏转+κ-平移)
+# ============================================================
+
+# κ-Phase: 仿射变换 = κ-rotation (相位角度偏转) + κ-translation (空间相位偏移)
+# 在EML超图中, 仿射变换 = D4群旋转 × 位移向量
+# 高斯唯一性定理: 线性可识别性要求残差为高斯白噪声
+
+def rotate_90(grid: Any, k: int = 1) -> Any:
+    """
+    κ-旋转: 将网格旋转90°×k (相位角度偏转)
+    k=1: 90°, k=2: 180°, k=3: 270°
+    κ-Phase: 旋转 = κ-rotation (相位角度偏转)
+    """
+    if hasattr(grid, 'shape'):
+        return np.rot90(np.array(grid), k=k)
+    elif isinstance(grid, list):
+        g = np.array(grid)
+        return np.rot90(g, k=k)
+    return grid
+
+
+def translate_grid(grid: Any, dx: int = 0, dy: int = 0) -> Any:
+    """
+    κ-平移: 将网格平移(dx, dy)像素 (空间相位偏移)
+    κ-Phase: 平移 = κ-translation (空间相位偏移)
+    """
+    if hasattr(grid, 'shape'):
+        g = np.array(grid)
+    elif isinstance(grid, list):
+        g = np.array(grid)
+    else:
+        return grid
+
+    h, w = g.shape
+    result = np.zeros_like(g)
+    for y in range(h):
+        for x in range(w):
+            nx = x + dx
+            ny = y + dy
+            if 0 <= nx < w and 0 <= ny < h:
+                result[ny, nx] = g[y, x]
+    return result
+
+
+def find_affine_transform(source: Any, target: Any, max_translation: int = 10) -> Optional[Dict]:
+    """
+    搜索将source映射到target的最佳仿射变换
+    D4群(8种旋转) × 位移向量 → 最多8×(2*max_translation+1)²种组合
+    κ-Phase: 仿射变换搜索 = κ-Phase一致性检测的离散版本
+
+    Args:
+        source: Source grid (2D)
+        target: Target grid (2D)
+        max_translation: Max translation offset to search
+
+    Returns:
+        Dict with 'rotation' (0-3), 'dx', 'dy', 'match_score' or None
+    """
+    if hasattr(source, 'shape'):
+        s = np.array(source)
+        t = np.array(target)
+    elif isinstance(source, list):
+        s = np.array(source)
+        t = np.array(target)
+    else:
+        return None
+
+    if s.shape != t.shape:
+        # Try padding/cropping to match shapes
+        # For now, only try same-shape transforms
+        return None
+
+    best_score = 0.0
+    best_params = None
+    total_cells = t.size
+
+    for k in range(4):  # 0°, 90°, 180°, 270°
+        rotated = np.rot90(s, k=k)
+        if rotated.shape != t.shape:
+            continue
+
+        # Zero translation first
+        match = np.sum(rotated == t) / total_cells
+        if match > best_score:
+            best_score = match
+            best_params = {'rotation': k, 'dx': 0, 'dy': 0, 'match_score': float(match)}
+
+        # With translations (shift and compare overlapping region)
+        for dx in range(-max_translation, max_translation + 1):
+            for dy in range(-max_translation, max_translation + 1):
+                # Compute overlap match
+                r_h, r_w = rotated.shape
+                t_h, t_w = t.shape
+
+                # Overlapping region
+                r_y_start = max(0, -dy)
+                r_x_start = max(0, -dx)
+                t_y_start = max(0, dy)
+                t_x_start = max(0, dx)
+
+                r_y_end = min(r_h, t_h - dy)
+                r_x_end = min(r_w, t_w - dx)
+                t_y_end = min(t_h, r_h + dy)
+                t_x_end = min(t_w, r_w + dx)
+
+                if r_y_end <= r_y_start or r_x_end <= r_x_start:
+                    continue
+
+                overlap_r = rotated[r_y_start:r_y_end, r_x_start:r_x_end]
+                overlap_t = t[t_y_start:t_y_end, t_x_start:t_x_end]
+
+                if overlap_r.shape != overlap_t.shape or overlap_r.size == 0:
+                    continue
+
+                match = np.sum(overlap_r == overlap_t) / total_cells
+                if match > best_score:
+                    best_score = match
+                    best_params = {'rotation': k, 'dx': dx, 'dy': dy, 'match_score': float(match)}
+
+    if best_params is not None and best_score > 0.5:
+        return best_params
+    return None
+
+
+def align_target(source: Any, target: Any) -> Optional[Any]:
+    """
+    找到仿射变换后直接应用，返回变换后的网格
+    κ-Phase: align = κ-Snap归约的几何路径版本
+    """
+    params = find_affine_transform(source, target)
+    if params is None:
+        return None
+    rotated = rotate_90(source, params['rotation'])
+    translated = translate_grid(rotated, params['dx'], params['dy'])
+    return translated
+
+
+# ============================================================
 # κ-Phase 一致性检测 (核心理论 — 从URL1采纳)
 # ============================================================
 
@@ -465,6 +603,11 @@ PHYSICS_PRIMITIVE_REGISTRY = {
         'functions': [is_valid_poset_order, topological_sort_colors, compute_swap_sequence],
         'description': '偏序颜色排序 — Poset拓扑排序、偏序验证',
         'games': ['sb26'],
+    },
+    'affine_transform': {
+        'functions': [rotate_90, translate_grid, find_affine_transform, align_target],
+        'description': '仿射变换 — κ-旋转+κ-平移 (D4群×位移)',
+        'games': ['cn04'],
     },
 }
 
