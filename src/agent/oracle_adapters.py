@@ -265,18 +265,27 @@ class LS20Adapter(OracleAdapter):
         """Get wall entities from LS20's wall attributes.
 
         LS20 stores walls via get_sprites_by_tag('ihdgageizm') on
-        the current level object.
+        the current level object. v4.0: Also includes push blocks
+        (gbvqrjtaqo) as impassable obstacles.
 
         Returns:
-            List of wall GameEntity objects.
+            List of wall GameEntity objects (walls + push blocks).
         """
         # LS20 walls are accessed via current_level.get_sprites_by_tag
+        result_entities: list[GameEntity] = []
         try:
             current_level = self.game.current_level
             if hasattr(current_level, 'get_sprites_by_tag'):
-                sprites = current_level.get_sprites_by_tag("ihdgageizm")
-                if sprites:
-                    return [self._to_entity(s) for s in sprites]
+                # Static walls (ihdgageizm)
+                wall_sprites = current_level.get_sprites_by_tag("ihdgageizm")
+                if wall_sprites:
+                    result_entities.extend(self._to_entity(s) for s in wall_sprites)
+                # v4.0: Push blocks (gbvqrjtaqo) — impassable obstacles in L3+
+                push_block_sprites = current_level.get_sprites_by_tag("gbvqrjtaqo")
+                if push_block_sprites:
+                    result_entities.extend(self._to_entity(s) for s in push_block_sprites)
+                if result_entities:
+                    return result_entities
         except (AttributeError, Exception):
             pass
         # Fallback: try common attribute names
@@ -533,14 +542,15 @@ class LS20Adapter(OracleAdapter):
         else:
             color_size = 4
         # Shape: len(ijessuuig) — shape pattern count
+        # v4.0: Default changed from 3 to 6 (LS20 actual ijessuuig has 6 indices)
         shape_patterns = getattr(self.game, 'ijessuuig', None)
         if shape_patterns is not None:
             try:
                 shape_size = len(shape_patterns)
             except (TypeError, Exception):
-                shape_size = 3
+                shape_size = 6
         else:
-            shape_size = 3
+            shape_size = 6
         return {
             'rotation': rot_size,
             'color': color_size,

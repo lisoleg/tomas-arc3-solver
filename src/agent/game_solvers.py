@@ -5669,6 +5669,189 @@ def _detect_game_step(game: Any) -> int:
     return 5  # Default
 
 
+def _detect_direction_mapping(game: Any) -> dict[int, tuple[int, int]]:
+    """Empirically detect direction mapping: ACTION ID → (dx, dy) offset.
+
+    Different ARC-AGI-3 games use different coordinate conventions.
+    For example, LS20 maps:
+      ACTION1 → LEFT (y-), ACTION2 → RIGHT (y+), ACTION3 → UP (x-), ACTION4 → DOWN (x+)
+    while the old code assumed:
+      ACTION1 → UP (y-), ACTION2 → RIGHT (x+), ACTION3 → DOWN (y+), ACTION4 → LEFT (x-)
+
+    This function performs deepcopies, tries each ACTION1-4, and measures
+    the actual (dx, dy) change in player position. For directions that
+    are wall-blocked at the initial position, it infers the correct offset
+    from axis grouping: once we know which actions move on x-axis vs y-axis,
+    blocked actions on the same axis as a known action can be inferred.
+
+    Args:
+        game: Any ARC-AGI-3 game object with perform_action and player.
+
+    Returns:
+        Dict mapping ACTION ID → (dx, dy) tuple, e.g.
+        {1: (0, -5), 2: (0, 5), 3: (-5, 0), 4: (5, 0)} for LS20.
+    """
+    from arcengine import ActionInput
+
+    step = _detect_game_step(game)
+
+    # Get initial player position
+    sim0 = copy.deepcopy(game)
+    player_attrs = ['gudziatsk', 'player', 'ndiyvmxxey']
+    player0 = None
+    for attr in player_attrs:
+        player0 = getattr(sim0, attr, None)
+        if player0 is not None:
+            break
+    if player0 is None:
+        # Fallback: assume standard grid convention (UP/DOWN on y, LEFT/RIGHT on x)
+        return {1: (0, -step), 2: (step, 0), 3: (0, step), 4: (-step, 0)}
+
+    start_x = int(player0.x)
+    start_y = int(player0.y)
+
+    # ── Phase 1: Test each action from initial position ──
+    detected: dict[int, tuple[int, int]] = {}
+    blocked: list[int] = []  # Actions that produced delta=(0,0) — wall-blocked
+
+    for action_id in [1, 2, 3, 4]:
+        test_sim = copy.deepcopy(game)
+        ai = ActionInput(id=action_id, data={})
+        try:
+            test_sim.perform_action(ai)
+        except Exception:
+            blocked.append(action_id)
+            continue
+        # Find player after action
+        test_player = None
+        for attr in player_attrs:
+            test_player = getattr(test_sim, attr, None)
+            if test_player is not None:
+                break
+        if test_player is None:
+            blocked.append(action_id)
+            continue
+        new_x = int(test_player.x)
+        new_y = int(test_player.y)
+        dx = new_x - start_x
+        dy = new_y - start_y
+        if dx != 0 or dy != 0:
+            detected[action_id] = (dx, dy)
+        else:
+            blocked.append(action_id)
+
+    # ── Phase 2: For blocked actions, try from an alternate position ──
+    # Move to a position where wall blocking may be different, then re-test blocked actions.
+    if blocked:
+        for unblock_action_id in [1, 2, 3, 4]:
+            if unblock_action_id not in detected:
+                continue
+            # Try moving to a new position using an unblocked direction
+            alt_sim = copy.deepcopy(game)
+            alt_ai = ActionInput(id=unblock_action_id, data={})
+            try:
+                alt_sim.perform_action(alt_ai)
+            except Exception:
+                continue
+            alt_player = None
+            for attr in player_attrs:
+                alt_player = getattr(alt_sim, attr, None)
+                if alt_player is not None:
+                    break
+            if alt_player is None:
+                continue
+            alt_x = int(alt_player.x)
+            alt_y = int(alt_player.y)
+
+            # Re-test blocked actions from this new position
+            for blocked_id in blocked:
+                if blocked_id in detected:
+                    continue  # Already detected in a previous attempt
+                alt_test = copy.deepcopy(alt_sim)
+                alt_test_ai = ActionInput(id=blocked_id, data={})
+                try:
+                    alt_test.perform_action(alt_test_ai)
+                except Exception:
+                    continue
+                alt_test_player = None
+                for attr in player_attrs:
+                    alt_test_player = getattr(alt_test, attr, None)
+                    if alt_test_player is not None:
+                        break
+                if alt_test_player is None:
+                    continue
+                b_new_x = int(alt_test_player.x)
+                b_new_y = int(alt_test_player.y)
+                b_dx = b_new_x - alt_x
+                b_dy = b_new_y - alt_y
+                if b_dx != 0 or b_dy != 0:
+                    detected[blocked_id] = (b_dx, b_dy)
+
+    # ── Phase 3: Infer remaining blocked actions by axis grouping ──
+    # Key insight: in grid-based games, actions pair into two axes.
+    # If we know ACTION1 is on the y-axis (dy≠0, dx=0), then:
+    #   - Its opposite (same axis, opposite sign) is the other y-axis action
+    #   - The remaining two actions must be on the x-axis (dx≠0, dy=0)
+    remaining_blocked = [aid for aid in [1, 2, 3, 4] if aid not in detected]
+    if remaining_blocked and len(detected) >= 2:
+        # Group detected actions by axis
+        y_axis_actions: dict[int, int] = {}  # action_id → sign of dy
+        x_axis_actions: dict[int, int] = {}  # action_id → sign of dx
+        for aid, (dx, dy) in detected.items():
+            if abs(dy) > abs(dx):
+                y_axis_actions[aid] = 1 if dy > 0 else -1
+            elif abs(dx) > abs(dy):
+                x_axis_actions[aid] = 1 if dx > 0 else -1
+
+        for aid in remaining_blocked:
+            # If there's a y-axis action detected but missing its opposite,
+            # and this blocked action could be that opposite:
+            if len(y_axis_actions) == 1 and len(x_axis_actions) >= 1:
+                # The blocked action is likely the opposite y-axis action
+                existing_y_aid = list(y_axis_actions.keys())[0]
+                existing_y_sign = y_axis_actions[existing_y_aid]
+                # Check: does this blocked action pair with a known y-axis action?
+                # Pair by convention: actions 1,2 are often one pair; 3,4 are another
+                pair_groups = [{1, 2}, {3, 4}]
+                for pair in pair_groups:
+                    if existing_y_aid in pair and aid in pair:
+                        detected[aid] = (0, -existing_y_sign * step)
+                        break
+                if aid not in detected:
+                    # Must be on x-axis
+                    if len(x_axis_actions) >= 1:
+                        existing_x_aid = list(x_axis_actions.keys())[0]
+                        existing_x_sign = x_axis_actions[existing_x_aid]
+                        for pair in pair_groups:
+                            if existing_x_aid in pair and aid in pair:
+                                detected[aid] = (-existing_x_sign * step, 0)
+                                break
+            elif len(x_axis_actions) == 1 and len(y_axis_actions) >= 1:
+                # The blocked action is likely the opposite x-axis action
+                existing_x_aid = list(x_axis_actions.keys())[0]
+                existing_x_sign = x_axis_actions[existing_x_aid]
+                pair_groups = [{1, 2}, {3, 4}]
+                for pair in pair_groups:
+                    if existing_x_aid in pair and aid in pair:
+                        detected[aid] = (-existing_x_sign * step, 0)
+                        break
+                if aid not in detected:
+                    if len(y_axis_actions) >= 1:
+                        existing_y_aid = list(y_axis_actions.keys())[0]
+                        existing_y_sign = y_axis_actions[existing_y_aid]
+                        for pair in pair_groups:
+                            if existing_y_aid in pair and aid in pair:
+                                detected[aid] = (0, -existing_y_sign * step)
+                                break
+
+    # ── Phase 4: Final fallback for any still-unknown actions ──
+    for aid in [1, 2, 3, 4]:
+        if aid not in detected:
+            detected[aid] = (0, 0)  # Last resort: treat as blocked/no-op
+
+    return detected
+
+
 
 # ============================================================================
 # TR87 Cipher Solver — deduces variant mapping from game internals
@@ -6026,20 +6209,29 @@ def _solve_ls20_kappa_gradient_direct(game: Any, level_idx: int) -> list[tuple] 
     MAX_STEPS = 300
     MAX_TIME = 30.0
 
-    # 方向常量 (只有 ACTION1-4 有效)
-    DIR_UP = 1
-    DIR_DOWN = 2
-    DIR_LEFT = 3
-    DIR_RIGHT = 4
-    ALL_DIRS = [DIR_UP, DIR_DOWN, DIR_LEFT, DIR_RIGHT]
+    # v3.18.3: Direction mapping detected empirically — no more hardcoded assumptions.
+    # Old code assumed ACTION1=UP, ACTION2=RIGHT, ACTION3=DOWN, ACTION4=LEFT (standard grid).
+    # LS20 reality: ACTION1=LEFT, ACTION2=RIGHT, ACTION3=UP, ACTION4=DOWN (x=vertical).
+    dir_map = _detect_direction_mapping(game)
+    ALL_DIRS = [1, 2, 3, 4]
 
-    # Stall 恢复: 优先尝试垂直方向
-    PERPENDICULAR: dict[int, list[int]] = {
-        DIR_UP: [DIR_LEFT, DIR_RIGHT],
-        DIR_DOWN: [DIR_LEFT, DIR_RIGHT],
-        DIR_LEFT: [DIR_UP, DIR_DOWN],
-        DIR_RIGHT: [DIR_UP, DIR_DOWN],
-    }
+    # Build axis grouping for perpendicular recovery: directions sharing an axis are "parallel",
+    # directions on different axes are "perpendicular". Determine axes from direction offsets.
+    # For LS20: {1:(0,-5), 2:(0,5)} → y-axis (LEFT/RIGHT), {3:(-5,0), 4:(5,0)} → x-axis (UP/DOWN)
+    _axis_map: dict[int, int] = {}
+    for d_id, (dx, dy) in dir_map.items():
+        if abs(dx) > abs(dy):
+            _axis_map[d_id] = 0  # x-axis mover (UP/DOWN in LS20)
+        elif abs(dy) > abs(dx):
+            _axis_map[d_id] = 1  # y-axis mover (LEFT/RIGHT in LS20)
+        else:
+            _axis_map[d_id] = 2  # diagonal or zero
+
+    PERPENDICULAR: dict[int, list[int]] = {}
+    for d_id in ALL_DIRS:
+        my_axis = _axis_map[d_id]
+        perp_dirs = [d for d in ALL_DIRS if _axis_map[d] != my_axis and _axis_map[d] < 2]
+        PERPENDICULAR[d_id] = perp_dirs if perp_dirs else ALL_DIRS
 
     # ── 辅助函数: Kuramoto R 同步度 ──
     def _compute_kuramoto_r(
@@ -6242,7 +6434,11 @@ def _solve_ls20_kappa_gradient_direct(game: Any, level_idx: int) -> list[tuple] 
                 # 优先选择离 goal 较远的方向 (避免与 goal 撞墙)
                 retreat_candidates: list[tuple[int, int, float]] = []
                 for dd in ALL_DIRS:
-                    rdx, rdy = {1: (0, -1), 2: (0, 1), 3: (-1, 0), 4: (1, 0)}[dd]
+                    # v3.18.3: Use detected direction mapping instead of hardcoded unit offsets
+                    ddx, ddy = dir_map.get(dd, (0, 0))
+                    # Normalize to unit vector for retreat calculation
+                    rdx = (1 if ddx > 0 else -1) if ddx != 0 else 0
+                    rdy = (1 if ddy > 0 else -1) if ddy != 0 else 0
                     rx = px + rdx * step_size * 2
                     ry = py + rdy * step_size * 2
                     # 检查是否可到达 (模拟测试)
@@ -6514,6 +6710,7 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
     MAX_TOTAL_TIME = 45.0
     MAX_BFS_STEPS = 200   # v3.18.1: 从100提升到200 — LS20迷宫复杂需要更多搜索
     MAX_TOTAL_STEPS = 200  # v3.18.1: 从80提升到200 — L5/L6 baseline需要192/186步
+    MAX_BFS_TIME = 8.0    # v3.18.5: 单次BFS调用时间上限 — 防止ReplayEngine fallback消耗全部时间
 
     # ── RHAE Budget Controller ──
     human_steps_est = ls20_estimate_human_steps(level_idx)
@@ -6532,6 +6729,8 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         return None
 
     step_size = _detect_game_step(sim)
+    # v3.18.3: Detect direction mapping once at start — avoids repeated deepcopy per BFS call.
+    dir_offsets_cached = _detect_direction_mapping(game)
     collected: list[tuple] = []
 
     # ── Wall-Map BFS + Verification (v3.18.2 属性置换原语 + Ψ-Cut) ──
@@ -6580,11 +6779,18 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         target_y: int,
         max_steps: int,
         avoid_positions: set[tuple[int, int]] | None,
+        conditional_block_positions: set[tuple[int, int]] | None = None,
     ) -> list[tuple] | None:
-        """ReplayEngine fallback BFS — deepcopy(root) + replay action chain per expansion.
+        """ReplayEngine fallback BFS — Δ-State Cache optimization (v4.0).
 
-        Used when wall-map BFS verification fails. Each expansion replays
-        the full action chain from root, then tries one direction.
+        v4.0 optimization: Instead of deepcopy(root) + replay entire action chain
+        for every BFS expansion, cache game states in the queue. Each expansion
+        only needs 1 deepcopy(cached_parent) instead of deepcopy(root) + N-step replay.
+        This reduces per-expansion cost from O(N) to O(1), giving ~10-20x speedup.
+
+        Also supports conditional_block_positions for goal blocking (v4.0).
+        These positions block movement like walls, but the target position itself
+        is always reachable (discarded from blocked set).
 
         Args:
             start_game: Original game object.
@@ -6592,6 +6798,8 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
             target_y: Target y coordinate.
             max_steps: Maximum BFS path length.
             avoid_positions: Positions to avoid in BFS.
+            conditional_block_positions: Positions that block like walls, but
+                target position is excluded (for goal blocking when state mismatches).
 
         Returns:
             Action list to reach target, or None.
@@ -6601,37 +6809,46 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         if root_adapter is None or root_adapter.player is None:
             return None
 
-        visited: set[tuple[int, int]] = {(int(root_adapter.player.x), int(root_adapter.player.y))}
+        start_px = int(root_adapter.player.x)
+        start_py = int(root_adapter.player.y)
+
+        # Build blocked positions: walls from visited + avoid + conditional blocks
+        visited: set[tuple[int, int]] = {(start_px, start_py)}
         if avoid_positions:
             visited.update(avoid_positions)
 
-        queue: deque = deque()
-        queue.append(([], int(root_adapter.player.x), int(root_adapter.player.y)))
+        # v4.0: Conditional block positions (goal positions that block when state mismatches)
+        blocked_positions = set(visited)
+        if conditional_block_positions:
+            blocked_positions.update(conditional_block_positions)
+        # Target position must NEVER be blocked — even if it's a goal/changer
+        blocked_positions.discard((target_x, target_y))
 
-        while queue and _time.time() - t0 < MAX_TOTAL_TIME:
-            cur_actions, cur_px, cur_py = queue.popleft()
+        # v4.0 Δ-Replay: Queue contains cached game states to avoid replaying entire paths
+        # Queue entry: (actions, px, py, cached_game_object)
+        # Each expansion: deepcopy(cached_game) + 1 move attempt = O(1) vs old O(N) replay
+        queue: deque = deque()
+        queue.append(([], start_px, start_py, root_game))
+
+        replay_t0 = _time.time()
+        expansions = 0
+        while queue and _time.time() - t0 < MAX_TOTAL_TIME and _time.time() - replay_t0 < MAX_BFS_TIME:
+            cur_actions, cur_px, cur_py, cached_game = queue.popleft()
             if len(cur_actions) >= max_steps:
                 continue
             if cur_px == target_x and cur_py == target_y:
                 return cur_actions
 
-            # Replay action chain to materialize current state
-            cur_game = copy.deepcopy(root_game)
-            for aid, data in cur_actions:
-                ai = ActionInput(id=aid, data=data if data else {})
-                try:
-                    cur_game.perform_action(ai)
-                except Exception:
-                    continue
+            # Materialize current state from cached game (1 deepcopy from parent)
+            cur_game = copy.deepcopy(cached_game)
             cur_adapter = get_oracle_adapter("ls20", cur_game)
             if cur_adapter is None or cur_adapter.player is None:
                 continue
 
             for d in [1, 2, 3, 4]:
                 child_game = copy.deepcopy(cur_game)
-                ai = ActionInput(id=d, data={})
                 try:
-                    child_game.perform_action(ai)
+                    child_game.perform_action(ActionInput(id=d, data={}))
                 except Exception:
                     continue
                 test_adapter = get_oracle_adapter("ls20", child_game)
@@ -6641,10 +6858,12 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
                 new_py = int(test_adapter.player.y)
                 if (new_px, new_py) == (cur_px, cur_py):
                     continue  # Blocked by wall
-                if (new_px, new_py) in visited:
-                    continue
+                if (new_px, new_py) in blocked_positions:
+                    continue  # Blocked by avoid/conditional
                 visited.add((new_px, new_py))
-                queue.append((cur_actions + [(d, None)], new_px, new_py))
+                # Cache child_game for future expansions from this position
+                queue.append((cur_actions + [(d, None)], new_px, new_py, child_game))
+                expansions += 1
 
         return None
 
@@ -6654,12 +6873,18 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         target_y: int,
         max_steps: int = MAX_BFS_STEPS,
         avoid_positions: set[tuple[int, int]] | None = None,
+        conditional_block_positions: set[tuple[int, int]] | None = None,
     ) -> list[tuple] | None:
-        """Wall-Map BFS — 零拷贝位置搜索 (v3.18.2).
+        """Wall-Map BFS — 零拷贝位置搜索 (v3.18.2) + goal blocking (v4.0).
 
         IDO/TOMAS 原则: 导航搜索不需要完整游戏对象，只需位置+墙信息。
         Wall positions 从 LS20Adapter 提取一次，BFS 在 (x,y) 位置空间搜索。
         Changer 位置作为避障加入 avoid_positions (Ψ-Cut: 防止路径意外触发状态变更)。
+
+        v4.0: conditional_block_positions for goal blocking.
+        rjlbuycveu goals block movement when player state doesn't match.
+        These positions are treated as walls in BFS, but the target position
+        itself is always reachable (discarded from blocked set).
 
         找到路径后用真实游戏验证。验证失败则回退到 ReplayEngine BFS。
 
@@ -6669,6 +6894,8 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
             target_y: Target y coordinate.
             max_steps: Maximum BFS path length.
             avoid_positions: Positions to avoid (walls + changers merged).
+            conditional_block_positions: Positions that block like walls, but
+                target position is excluded (for goal blocking when state mismatches).
 
         Returns:
             Action list [(direction, data), ...] to reach target, or None.
@@ -6686,14 +6913,30 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         for w in (start_adapter.walls or []):
             wall_positions.add((int(w.x), int(w.y)))
 
-        # Combine wall + avoid_positions into blocked set
+        # v4.0: Include push blocks (gbvqrjtaqo) as impassable obstacles
+        # L3 introduces push blocks that block movement like walls.
+        # Without this, wall-map BFS finds false paths through push blocks.
+        try:
+            current_level = start_game.current_level
+            if hasattr(current_level, 'get_sprites_by_tag'):
+                push_block_sprites = current_level.get_sprites_by_tag("gbvqrjtaqo")
+                for pb in (push_block_sprites or []):
+                    wall_positions.add((int(pb.x), int(pb.y)))
+        except (AttributeError, Exception):
+            pass
+
+        # Combine wall + avoid_positions + conditional_block_positions into blocked set
         # Ψ-Cut v3.18.2 fix: changer blocking is controlled by avoid_positions only.
         # Do NOT auto-block all changer positions — target changer must be reachable.
         # When navigating to goal: avoid_positions includes all changers.
         # When navigating to changer: avoid_positions includes OTHER changers only.
+        # v4.0: conditional_block_positions adds goal positions that block movement
+        # when player state doesn't match (rjlbuycveu goal behavior).
         blocked_positions = set(wall_positions)
         if avoid_positions:
             blocked_positions.update(avoid_positions)
+        if conditional_block_positions:
+            blocked_positions.update(conditional_block_positions)
 
         # Target position must NEVER be blocked (even if it's a changer/goal)
         blocked_positions.discard((target_x, target_y))
@@ -6702,18 +6945,16 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         visited.update(blocked_positions)  # wall + specified avoid positions are "visited" = blocked
 
         # BFS on (x, y) positions — NO game copies
-        # direction_map: id → (dx, dy) — UP=1(y-step), RIGHT=2(x+step), DOWN=3(y+step), LEFT=4(x-step)
-        direction_offsets: dict[int, tuple[int, int]] = {
-            1: (0, -step_size_val),
-            2: (step_size_val, 0),
-            3: (0, step_size_val),
-            4: (-step_size_val, 0),
-        }
+        # v3.18.3: Use cached direction mapping (detected once at solver entry).
+        # LS20 uses ACTION1=LEFT(y-), ACTION2=RIGHT(y+), ACTION3=UP(x-), ACTION4=DOWN(x+)
+        # — opposite of the old assumed convention.
+        direction_offsets: dict[int, tuple[int, int]] = dir_offsets_cached
 
         queue: deque = deque()
         queue.append(([], start_px, start_py))
 
-        while queue and _time.time() - t0 < MAX_TOTAL_TIME:
+        bfs_t0 = _time.time()  # v3.18.5: per-call time limit for wall-map BFS
+        while queue and _time.time() - t0 < MAX_TOTAL_TIME and _time.time() - bfs_t0 < MAX_BFS_TIME:
             cur_actions, cur_px, cur_py = queue.popleft()
             if len(cur_actions) >= max_steps:
                 continue
@@ -6722,10 +6963,19 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
                 verified = _verify_path_on_game(start_game, cur_actions, target_x, target_y)
                 if verified:
                     return cur_actions
-                # Verification failed — fall back to ReplayEngine BFS
-                return _lightweight_bfs_replay_engine(
-                    start_game, target_x, target_y, max_steps, avoid_positions,
-                )
+                # v3.18.4: Verification failed — check if it's due to step exhaustion.
+                # If path fits within remaining budget (max_steps), verification failure
+                # means real game obstruction (wall detection mismatch, changer, etc.)
+                # → fall back to ReplayEngine which uses real game for each expansion.
+                # If path exceeds budget (max_steps was large), skip replay engine
+                # (it would also timeout finding an over-budget path).
+                if max_steps <= 50:
+                    return _lightweight_bfs_replay_engine(
+                        start_game, target_x, target_y, max_steps, avoid_positions,
+                        conditional_block_positions=conditional_block_positions,
+                    )
+                # Path too long for practical replay engine search → return None
+                return None
 
             for d, (dx, dy) in direction_offsets.items():
                 new_px = cur_px + dx
@@ -6735,10 +6985,14 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
                 visited.add((new_px, new_py))
                 queue.append((cur_actions + [(d, None)], new_px, new_py))
 
-        # Wall-Map BFS failed — try ReplayEngine fallback
-        return _lightweight_bfs_replay_engine(
-            start_game, target_x, target_y, max_steps, avoid_positions,
-        )
+        # Wall-Map BFS failed — try ReplayEngine fallback (only for small max_steps)
+        # v3.18.4: For large max_steps, replay engine is too slow (deepcopy per node)
+        if max_steps <= 50:
+            return _lightweight_bfs_replay_engine(
+                start_game, target_x, target_y, max_steps, avoid_positions,
+                conditional_block_positions=conditional_block_positions,
+            )
+        return None
 
     # ── 紧急金币收集: BFS失败/步数不足时的回退策略 ──
     def _emergency_collect_coin() -> bool:
@@ -6787,10 +7041,58 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         return False  # 无法收集任何金币
 
     # ── 主循环: changer/goal优先, trigger间紧急coin收集 ──
-    MIN_RESERVE = 8  # v3.18.1: 从5提升到8 — 给BFS到changer/goal留更多余量
+    # v4.0: MIN_RESERVE is now computed dynamically per iteration based on step_decrement.
+    # StepsDecrement=1 → min_reserve=8 (same as before)
+    # StepsDecrement=2 → min_reserve=4 (L4/L5 have 21 actions, 8 was too conservative)
+
+    def _check_game_over(game_obj: Any) -> bool:
+        """Check if game is in GAME_OVER state."""
+        state = getattr(game_obj, '_state', None)
+        state_name = str(state) if state is not None else ''
+        return 'GAME_OVER' in state_name
+
+    def _execute_path_with_checks(
+        game_obj: Any,
+        path: list[tuple],
+        original_level: int,
+        max_actions: int | None = None,
+    ) -> bool:
+        """Execute BFS path with GAME_OVER detection and step limit.
+
+        Args:
+            game_obj: Game to execute actions on.
+            path: Action list [(direction, data), ...].
+            original_level: Original level index for level completion check.
+            max_actions: Optional max actions to execute (None = all).
+
+        Returns:
+            True if all actions executed without GAME_OVER and level not completed early.
+            False if GAME_OVER detected or level completed.
+        """
+        actions_done = 0
+        for aid, data in path:
+            if max_actions is not None and actions_done >= max_actions:
+                break
+            ai = ActionInput(id=aid, data=data if data else {})
+            try:
+                game_obj.perform_action(ai)
+                collected.append((aid, data))
+                actions_done += 1
+            except Exception:
+                break
+            # GAME_OVER detection — stop immediately
+            if _check_game_over(game_obj):
+                return False
+            # Level completed early — stop
+            if _is_level_solved(game_obj, original_level):
+                return False  # Level solved, signal to outer loop
+        return True  # Path executed without issues
+
+    _DEBUG_L2 = False  # v3.18.5: Temporary debug flag for L2 tracing
 
     for iteration in range(30):
         if _time.time() - t0 > MAX_TOTAL_TIME:
+            if _DEBUG_L2: print(f"[L2 DBG] TIMEOUT at iter={iteration}, elapsed={_time.time()-t0:.1f}s")
             break
 
         if _is_level_solved(sim, original_level):
@@ -6800,10 +7102,12 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
             break
 
         if not rhae_ctrl.check_budget(task['id'], human_steps_est, len(collected)):
+            if _DEBUG_L2: print(f"[L2 DBG] RHAE budget exceeded at iter={iteration}, steps={len(collected)}")
             break
 
         adapter = get_oracle_adapter("ls20", sim)
         if adapter is None or adapter.player is None:
+            if _DEBUG_L2: print(f"[L2 DBG] No adapter at iter={iteration}")
             break
 
         px = int(adapter.player.x)
@@ -6812,16 +7116,64 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         goal_reqs = adapter.goal_requirements
         dim_sizes = adapter.state_dimension_sizes
         state_changers = adapter.state_changers
+
+        # v4.0: Read DYNAMIC mover positions from real game (not adapter static positions)
+        # L4/L5/L6 have dboxixicic movers — changers on rails move back and forth.
+        # adapter.state_changers only has initial positions, not current positions.
+        # Read live sprite positions to get mover's actual coordinates.
+        current_level = sim.current_level
+        if hasattr(current_level, 'get_sprites_by_tag'):
+            live_state_changers: dict[str, list] = {}
+            for dim_tag, dim_name in [
+                ("rhsxkxzdjz", "rotation"),
+                ("soyhouuebz", "color"),
+                ("ttfwljgohq", "shape"),
+            ]:
+                live_sprites = current_level.get_sprites_by_tag(dim_tag)
+                if live_sprites:
+                    live_state_changers[dim_name] = list(live_sprites)
+            # Only override if we found live sprites
+            if live_state_changers:
+                # Merge: live positions override static, but keep static for dimensions not found
+                for dim_name, chs in state_changers.items():
+                    if dim_name not in live_state_changers:
+                        live_state_changers[dim_name] = chs
+                state_changers = live_state_changers
+
         goals = adapter.goals
         actions_remaining = adapter.steps_remaining
 
+        # v4.0: Dynamic MIN_RESERVE based on step_decrement.
+        # StepsDecrement=1 → min_reserve=8 (original value, fine for L0-L3 with 42+ actions)
+        # StepsDecrement=2 → min_reserve=4 (L4/L5 have only 21 actions, 8 was too conservative)
+        step_decrement = adapter.step_decrement if adapter.step_decrement > 0 else 1
+        min_reserve = max(4, 8 // step_decrement)
+
+        # v4.0: Build goal conditional block positions — goals that block movement
+        # when player state doesn't match their requirement.
+        # rjlbuycveu goals are conditional walls: they block movement unless
+        # the player's state matches the goal's requirement.
+        goal_block_positions: set[tuple[int, int]] = set()
+        for i, req in enumerate(goal_reqs):
+            if i < len(goals) and req != player_state:
+                # This goal blocks movement because state doesn't match
+                goal_block_positions.add((int(goals[i].x), int(goals[i].y)))
+
+        if _DEBUG_L2 and original_level == 2:
+            print(f"[L2 DBG] iter={iteration}: pos=({px},{py}), remaining={actions_remaining}, "
+                  f"state={player_state}, collected={len(collected)}, "
+                  f"coins={len(adapter.coins) if adapter.coins else 0}")
+            print(f"[L2 DBG]   goal_reqs={goal_reqs}, goals={[(int(g.x),int(g.y)) for g in goals] if goals else []}")
+
         if not goal_reqs or not goals:
+            if _DEBUG_L2: print(f"[L2 DBG] No goals at iter={iteration}")
             break
 
         # ── 步数不足 → 紧急收集金币 (在任何路径决策之前) ──
-        # 核心洞察: BFS到changer可能消耗17+步, 到达后remaining只剩4
-        # 必须在trigger循环中间收集金币重置步数, 否则无法完成所有trigger+到goal
-        if actions_remaining < MIN_RESERVE and adapter.coins and not _is_level_solved(sim, original_level):
+        # v3.18.4: 保留 min_reserve 检查, 但核心修复在路径执行时:
+        # 执行 BFS 路径前检查 len(path) > remaining, 超预算时先收集金币.
+        # 不在循环入口做预算估算 (太保守导致 L1 regression).
+        if actions_remaining < min_reserve and adapter.coins and not _is_level_solved(sim, original_level):
             if _emergency_collect_coin():
                 continue  # 金币收集后步数重置, 重新进入主循环
             # 无法收集金币 → 但可能状态已匹配, 尝试直接到goal
@@ -6849,21 +7201,81 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
             goal_y = int(best_goal.y)
 
             # Ψ-Cut: 导航到 goal 时避开所有 changer — 防止路径意外触发状态变更
+            # v3.18.6 fix: 排除当前位置的 changer — 若玩家站在 changer 上,
+            # 把起始位置加入 avoid_positions 会封锁 BFS 起点, 导致找不到任何路径.
             all_changer_positions: set[tuple[int, int]] = set()
             for dim, chs in state_changers.items():
                 for ch in chs:
-                    all_changer_positions.add((int(ch.x), int(ch.y)))
-            path = _lightweight_bfs(sim, goal_x, goal_y, avoid_positions=all_changer_positions)
+                    ch_pos = (int(ch.x), int(ch.y))
+                    if ch_pos != (px, py):  # 不要避开当前位置
+                        all_changer_positions.add(ch_pos)
+
+            # v4.0: Also avoid OTHER unmatched goals when navigating to our target goal.
+            # Unmatched goals block movement like walls (rjlbuycveu behavior).
+            # We add them as conditional_block_positions so they block movement
+            # unless the BFS target is that position itself.
+            other_goal_blocks: set[tuple[int, int]] = set()
+            for i, req in enumerate(goal_reqs):
+                if i != best_goal_idx and i < len(goals):
+                    # Other goals — avoid them regardless (they're not our target)
+                    other_goal_blocks.add((int(goals[i].x), int(goals[i].y)))
+
+            goal_avoid = all_changer_positions | other_goal_blocks
+
+            # v4.0: Unmatched goal positions as conditional blocks.
+            # When navigating to THIS goal (best_goal_idx), other unmatched goals
+            # block movement. We pass them as conditional_block_positions.
+            # Our target goal position is never blocked (discarded inside BFS).
+            goal_conditional_blocks = goal_block_positions.copy()
+            # Our target goal must be reachable, so remove it from conditional blocks
+            goal_conditional_blocks.discard((goal_x, goal_y))
+
+            # v3.18.6 fix: 允许 max_steps = remaining + 2 — goal 路径可能需要轻微绕路
+            goal_max_steps = min(actions_remaining + 2, MAX_BFS_STEPS)
+            path = _lightweight_bfs(sim, goal_x, goal_y,
+                max_steps=goal_max_steps, avoid_positions=goal_avoid,
+                conditional_block_positions=goal_conditional_blocks)
+
+            # v3.18.6: 如果直接 BFS 到 goal 失败, 尝试到 goal 相邻格子.
+            # 原因: LS20 的 goal 位置只能通过 level transition 到达 (经过 goal 就通关),
+            # 而 BFS 只检测"玩家停留在 goal 位置", 这在 level transition 后读到的是下一关位置.
+            # 解法: BFS 到 goal 的上/下/左/右相邻格子, 然后向 goal 走1步触发 level transition.
+            if path is None and goal_max_steps <= MAX_BFS_STEPS:
+                # Try all 4 adjacent entry points to the goal
+                adjacent_dirs = [
+                    (goal_x - step_size, goal_y),  # left of goal → move RIGHT into goal
+                    (goal_x + step_size, goal_y),  # right of goal → move LEFT into goal
+                    (goal_x, goal_y - step_size),  # above goal → move DOWN into goal
+                    (goal_x, goal_y + step_size),  # below goal → move UP into goal
+                ]
+                for adj_x, adj_y in adjacent_dirs:
+                    adj_path = _lightweight_bfs(
+                        sim, adj_x, adj_y,
+                        max_steps=goal_max_steps - 1,  # -1 for the final step to goal
+                        avoid_positions=goal_avoid,
+                        conditional_block_positions=goal_conditional_blocks,
+                    )
+                    if adj_path is not None:
+                        # Found path to adjacent position — find the action to enter goal
+                        # Determine which action moves from (adj_x, adj_y) → (goal_x, goal_y)
+                        dx = goal_x - adj_x
+                        dy = goal_y - adj_y
+                        enter_action = None
+                        for act_id, (adx, ady) in dir_offsets_cached.items():
+                            if adx == dx and ady == dy:
+                                enter_action = act_id
+                                break
+                        if enter_action is not None:
+                            path = adj_path + [(enter_action, None)]
+                            break
+
             if path is not None:
-                for aid, data in path:
-                    ai = ActionInput(id=aid, data=data if data else {})
-                    try:
-                        sim.perform_action(ai)
-                        collected.append((aid, data))
-                    except Exception:
-                        break
+                # Path fits within remaining budget — execute with GAME_OVER checks
+                _execute_path_with_checks(sim, path, original_level)
                 if _is_level_solved(sim, original_level):
                     return collected
+                if _check_game_over(sim):
+                    break  # GAME_OVER — can't continue
                 # BFS到goal成功但未通关 → 可能路径中间经过changer改变了状态
                 continue
             else:
@@ -6890,24 +7302,54 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         # 按触发需求排序 — 最需要的维度优先
         mismatches.sort(key=lambda x: -x[1])
 
-        # ── 选择目标 changer (最需要的维度) ──
+        # ── 选择可达的目标 changer (v3.18.5: Manhattan距离预筛) ──
+        # v3.18.5 关键优化: 用Manhattan距离替代BFS可达性测试.
+        # 旧方法 (v3.18.4): 每个mismatch维度做一次BFS → ReplayEngine fallback ~5-8s/call
+        # → 2-3次BFS/迭代 → 10-24s → 45s超时只能做1-2次迭代.
+        # 新方法: Manhattan/step_size ≤ remaining-min_reserve → 可能可达.
+        # 实际可达性由导航BFS验证 (1次BFS而非2-3次).
+        # L2验证: rotation(49,10) Manhattan=75/5=15 > 13=21-8 → 不可达 ✓
+        #          color(29,45) Manhattan=20/5=4 ≤ 13 → 可能可达 ✓
+        #          实际BFS=17步(长于Manhattan) → post_nav不足 → 先收集coin ✓
         target_changer_x = px
         target_changer_y = py
-        target_changer_dim = mismatches[0][0]
+        target_changer_dim = None
+        triggers_needed = 0
 
-        for dim_name, _, _ in mismatches:
+        # v3.18.5: 排序策略 — 优先选最近可达的changer (而非最高triggers)
+        # 因为triggers高但距离远的changer可能浪费步数, 而近的changer可以先匹配部分状态
+        changer_candidates: list[tuple[str, int, int, int, int, int]] = []
+        for dim_name, trig, dim_sz in mismatches:
             changers = state_changers.get(dim_name, [])
             if changers:
                 nearest_ch = min(
                     changers,
                     key=lambda c: abs(px - int(c.x)) + abs(py - int(c.y)),
                 )
-                target_changer_x = int(nearest_ch.x)
-                target_changer_y = int(nearest_ch.y)
-                target_changer_dim = dim_name
-                break
+                ch_x = int(nearest_ch.x)
+                ch_y = int(nearest_ch.y)
+                manhattan = abs(px - ch_x) + abs(py - ch_y)
+                min_grid_steps = manhattan // step_size  # Minimum steps (ignoring walls)
+                # Manhattan pre-filter: if minimum steps > remaining - min_reserve,
+                # changer is definitely unreachable (even without walls, path is too long)
+                if min_grid_steps <= actions_remaining - min_reserve:
+                    changer_candidates.append((dim_name, trig, dim_sz, ch_x, ch_y, manhattan))
 
-        triggers_needed = mismatches[0][1] if mismatches else 0
+        if changer_candidates:
+            # Sort by: (1) proximity (closest first), (2) triggers (fewest first)
+            # Closest changer = shortest navigation = more remaining after arrival
+            changer_candidates.sort(key=lambda c: (c[5], c[1]))
+            best = changer_candidates[0]
+            target_changer_dim = best[0]
+            triggers_needed = best[1]
+            target_changer_x = best[3]
+            target_changer_y = best[4]
+
+        if target_changer_dim is None:
+            # No changer reachable within remaining → collect coins first
+            if _emergency_collect_coin():
+                continue
+            break
 
         # ── 如果已在 changer 上 → 属性置换原语多触发循环 ──
         if target_changer_x == px and target_changer_y == py:
@@ -6915,6 +7357,10 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
             # 每次触发: 移动离开 → 回到 changer → 触发下一级
             remaining_triggers = triggers_needed
             while remaining_triggers > 0 and len(collected) < MAX_TOTAL_STEPS:
+                # v3.18.4: GAME_OVER check in trigger loop
+                if _check_game_over(sim):
+                    break  # GAME_OVER during trigger cycle
+
                 # 先尝试移动离开 changer (1步)
                 moved_away = False
                 for d in [1, 2, 3, 4]:
@@ -6925,6 +7371,10 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
                     except Exception:
                         _restore_state(sim, snap)
                         continue
+                    # v3.18.4: Check GAME_OVER after each move in trigger loop
+                    if _check_game_over(sim):
+                        _restore_state(sim, snap)
+                        break  # GAME_OVER — stop trigger cycle
                     test_adapter = get_oracle_adapter("ls20", sim)
                     if test_adapter and test_adapter.player:
                         new_px = int(test_adapter.player.x)
@@ -6953,19 +7403,29 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
                             if ch_pos != (target_changer_x, target_changer_y):
                                 retreat_avoid.add(ch_pos)
 
+                    # v4.0: Add unmatched goal positions to retreat avoid.
+                    # When moving back to changer in trigger loop, unmatched goals
+                    # block movement like walls — must avoid them.
+                    for i, req in enumerate(goal_reqs):
+                        if i < len(goals) and req != player_state:
+                            retreat_avoid.add((int(goals[i].x), int(goals[i].y)))
+
                     retreat_path = _lightweight_bfs(
                         sim, target_changer_x, target_changer_y,
                         max_steps=min(adapter.steps_remaining, 8),
                         avoid_positions=retreat_avoid,
                     )
                     if retreat_path is not None:
-                        for aid, data in retreat_path:
-                            ai = ActionInput(id=aid, data=data if data else {})
-                            try:
-                                sim.perform_action(ai)
-                                collected.append((aid, data))
-                            except Exception:
-                                break
+                        # v3.18.4: Check retreat path length vs remaining
+                        trigger_adapter = get_oracle_adapter("ls20", sim)
+                        trigger_remaining = trigger_adapter.steps_remaining if trigger_adapter else 0
+                        if len(retreat_path) > trigger_remaining:
+                            # Retreat path exceeds budget — collect coins first
+                            if _emergency_collect_coin():
+                                continue
+                        _execute_path_with_checks(sim, retreat_path, original_level)
+                        if _check_game_over(sim):
+                            break  # GAME_OVER during retreat
                         # 回到 changer, 更新位置和状态
                         retreat_adapter = get_oracle_adapter("ls20", sim)
                         if retreat_adapter and retreat_adapter.player:
@@ -6982,7 +7442,7 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
 
                 # 检查 remaining 步数
                 retreat_adapter = get_oracle_adapter("ls20", sim)
-                if retreat_adapter and retreat_adapter.steps_remaining < MIN_RESERVE and retreat_adapter.coins:
+                if retreat_adapter and retreat_adapter.steps_remaining < min_reserve and retreat_adapter.coins:
                     if _emergency_collect_coin():
                         continue
                 if _is_level_solved(sim, original_level):
@@ -6992,6 +7452,13 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
 
         # ── BFS 导航到 changer (避开其他 changer, 不避开目标) ──
         # Ψ-Cut v3.18.2 fix: exclude target changer from avoid_positions
+        # v3.18.4: Limit BFS to remaining steps — prevents finding over-budget paths
+        # v3.18.4: Post-navigation budget check — ensure enough remaining after navigation
+        # L2 教训: 到 color changer 20步, 但 remaining=21, 到达后 remaining=1,
+        # 无法继续任何操作 → 必须先收集金币确保到达后有足够步数
+        # v4.0: Also add unmatched goal positions as conditional blocks and avoid positions.
+        # When navigating to a changer, goals that don't match the player state
+        # block movement like walls (rjlbuycveu behavior).
         other_changer_positions_nav: set[tuple[int, int]] = set()
         for dim, chs in state_changers.items():
             for ch in chs:
@@ -6999,25 +7466,49 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
                 if ch_pos != (target_changer_x, target_changer_y):
                     other_changer_positions_nav.add(ch_pos)
 
+        # v4.0: Add unmatched goal positions as avoid positions when navigating to changer.
+        # We don't want to accidentally walk through a goal that blocks us.
+        for i, req in enumerate(goal_reqs):
+            if i < len(goals) and req != player_state:
+                # This goal blocks movement because state doesn't match
+                other_changer_positions_nav.add((int(goals[i].x), int(goals[i].y)))
+
+        # v4.0: Goal conditional block positions for BFS.
+        # All goals that block movement when state doesn't match.
+        # The changer target position is never blocked (discarded in BFS).
+        changer_conditional_blocks = goal_block_positions.copy()
+
         path = _lightweight_bfs(
             sim, target_changer_x, target_changer_y,
+            max_steps=actions_remaining,  # v3.18.4: only find paths within step budget
             avoid_positions=other_changer_positions_nav,
+            conditional_block_positions=changer_conditional_blocks,
         )
         if path is not None:
-            for aid, data in path:
-                ai = ActionInput(id=aid, data=data if data else {})
-                try:
-                    sim.perform_action(ai)
-                    collected.append((aid, data))
-                except Exception:
-                    break
+            # v3.18.4: Post-navigation budget check
+            # After reaching changer, remaining = actions_remaining - len(path)
+            # Need at least min_reserve steps for trigger cycle + next navigation
+            post_nav_remaining = actions_remaining - len(path)
+            if post_nav_remaining < min_reserve + triggers_needed * 3:
+                # Not enough remaining after navigation → collect coins first
+                if _emergency_collect_coin():
+                    continue  # Re-enter loop with more remaining
+                # Can't collect coins → but maybe we can still reach the changer
+                # (trigger might reduce mismatches, allowing goal later with more coins)
+                # Try anyway with limited remaining
+
+            # Execute path with GAME_OVER checks
+            _execute_path_with_checks(sim, path, original_level)
 
             if _is_level_solved(sim, original_level):
                 return collected
 
+            if _check_game_over(sim):
+                break  # GAME_OVER — can't continue
+
             # 到达 changer, 检查 remaining
             post_adapter = get_oracle_adapter("ls20", sim)
-            if post_adapter and post_adapter.steps_remaining < MIN_RESERVE and post_adapter.coins:
+            if post_adapter and post_adapter.steps_remaining < min_reserve and post_adapter.coins:
                 if _emergency_collect_coin():
                     continue
 
@@ -7079,7 +7570,8 @@ class _LS20LightSim:
     """
 
     __slots__ = ('x', 'y', 'state', 'step_size', 'walls', 'changers',
-                 'dim_sizes', 'goal_positions', 'goal_reqs')
+                 'dim_sizes', 'goal_positions', 'goal_reqs', 'dir_offsets',
+                 'goal_blocks')
 
     def __init__(
         self,
@@ -7092,6 +7584,8 @@ class _LS20LightSim:
         dim_sizes: dict[str, int],
         goal_positions: list[tuple[int, int]],
         goal_reqs: list[dict[str, int]],
+        dir_offsets: dict[int, tuple[int, int]] | None = None,
+        goal_blocks: dict[tuple[int, int], dict[str, int]] | None = None,
     ) -> None:
         """Initialize lightweight state tracker.
 
@@ -7105,6 +7599,10 @@ class _LS20LightSim:
             dim_sizes: Dict mapping dimension name → size (e.g., rotation: 4).
             goal_positions: List of goal positions (x, y).
             goal_reqs: List of goal requirement dicts [{rotation, color, shape}].
+            dir_offsets: Dict mapping ACTION ID → (dx, dy). If None, uses
+                v3.18.3 _detect_direction_mapping() from parent game context.
+            goal_blocks: v4.0: Dict mapping goal position → required state dict.
+                Goals that block movement when player state doesn't match.
         """
         self.x = x
         self.y = y
@@ -7115,28 +7613,50 @@ class _LS20LightSim:
         self.dim_sizes = dim_sizes
         self.goal_positions = goal_positions
         self.goal_reqs = goal_reqs
+        # v4.0: Goal blocking positions — goals block movement when state doesn't match.
+        self.goal_blocks = goal_blocks if goal_blocks is not None else {}
+        # v3.18.3: Store direction offsets for game-specific coordinate mapping.
+        # Default to old convention if not provided (backward compat).
+        if dir_offsets is not None:
+            self.dir_offsets = dir_offsets
+        else:
+            self.dir_offsets = {
+                1: (0, -self.step_size),
+                2: (self.step_size, 0),
+                3: (0, self.step_size),
+                4: (-self.step_size, 0),
+            }
 
     def move(self, direction: int) -> bool:
         """Simulate a move. Returns True if move was valid.
 
         Args:
-            direction: Movement direction (1=UP, 2=RIGHT, 3=DOWN, 4=LEFT).
+            direction: Movement direction (ACTION ID 1-4).
 
         Returns:
-            True if move succeeded (not blocked by wall).
+            True if move succeeded (not blocked by wall or goal).
         """
-        offsets: dict[int, tuple[int, int]] = {
-            1: (0, -self.step_size),
-            2: (self.step_size, 0),
-            3: (0, self.step_size),
-            4: (-self.step_size, 0),
-        }
-        dx, dy = offsets.get(direction, (0, 0))
+        # v3.18.3: Use game-specific direction offsets (self.dir_offsets)
+        # instead of hardcoded convention.
+        dx, dy = self.dir_offsets.get(direction, (0, 0))
         new_x = self.x + dx
         new_y = self.y + dy
 
         if (new_x, new_y) in self.walls:
             return False
+
+        # v4.0: Goal blocking check — goals block movement when state doesn't match.
+        # rjlbuycveu goals are conditional walls: they block the player from
+        # entering the goal position unless the player state matches the goal's
+        # requirement. This prevents accidental paths through goal positions.
+        if (new_x, new_y) in self.goal_blocks:
+            req = self.goal_blocks[(new_x, new_y)]
+            if (
+                self.state.get('rotation', 0) != req.get('rotation', 0)
+                or self.state.get('color', 0) != req.get('color', 0)
+                or self.state.get('shape', 0) != req.get('shape', 0)
+            ):
+                return False  # Goal blocks movement when state doesn't match
 
         self.x = new_x
         self.y = new_y
@@ -7195,6 +7715,8 @@ class _LS20LightSim:
             dim_sizes=self.dim_sizes,
             goal_positions=self.goal_positions,
             goal_reqs=self.goal_reqs,
+            dir_offsets=self.dir_offsets,
+            goal_blocks=self.goal_blocks,  # v4.0: goal blocking dict
         )
 
 
@@ -7269,6 +7791,17 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
     for w in (adapter.walls or []):
         wall_set.add((int(w.x), int(w.y)))
 
+    # v4.0: Include push blocks (gbvqrjtaqo) as impassable obstacles
+    # L3 introduces push blocks that block movement like walls.
+    try:
+        current_level = game.current_level
+        if hasattr(current_level, 'get_sprites_by_tag'):
+            push_block_sprites = current_level.get_sprites_by_tag("gbvqrjtaqo")
+            for pb in (push_block_sprites or []):
+                wall_set.add((int(pb.x), int(pb.y)))
+    except (AttributeError, Exception):
+        pass
+
     changer_dict: dict[tuple[int, int], str] = {}
     changer_targets: list[tuple[int, int, str]] = []
     for dim, changers in state_changers_init.items():
@@ -7284,6 +7817,14 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
             goal_targets.append((gx, gy, goal_reqs[i]['rotation'], goal_reqs[i]['color'], goal_reqs[i]['shape']))
 
     # ── 创建 LightSim ──
+    # v3.18.3: Detect direction mapping for game-specific coordinate system
+    # v4.0: Build goal_blocks dict for goal blocking when state doesn't match
+    goal_blocks_dict: dict[tuple[int, int], dict[str, int]] = {}
+    for i, (gx, gy) in enumerate(goal_positions):
+        if i < len(goal_reqs):
+            goal_blocks_dict[(gx, gy)] = goal_reqs[i]
+
+    ls20_dir_offsets = _detect_direction_mapping(game)
     init_light = _LS20LightSim(
         x=px0, y=py0,
         state={'rotation': init_rot, 'color': init_color, 'shape': init_shape},
@@ -7293,6 +7834,8 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
         dim_sizes=dim_sizes,
         goal_positions=goal_positions,
         goal_reqs=goal_reqs,
+        dir_offsets=ls20_dir_offsets,
+        goal_blocks=goal_blocks_dict,
     )
 
     # ── 动态目标选择 ──
@@ -7337,7 +7880,7 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
             for dim_name, current_val, goal_val, dim_size in [
                 ('rotation', rot, g_rot, dim_sizes.get('rotation', 4)),
                 ('color', color, g_color, dim_sizes.get('color', 4)),
-                ('shape', shape, g_shape, dim_sizes.get('shape', 3)),
+                ('shape', shape, g_shape, dim_sizes.get('shape', 6)),
             ]:
                 triggers = (goal_val - current_val) % dim_size
                 if triggers > 0:
@@ -7395,7 +7938,7 @@ def _solve_ls20_kappa_ps_bfs(game: Any, level_idx: int) -> list[tuple] | None:
             state_grad = (
                 (g_rot - rot) % dim_sizes.get('rotation', 4)
                 + (g_color - color) % dim_sizes.get('color', 4)
-                + (g_shape - shape) % dim_sizes.get('shape', 3)
+                + (g_shape - shape) % dim_sizes.get('shape', 6)
             )
 
         composite_dist = state_grad * 5.0 * step_size + pos_dist

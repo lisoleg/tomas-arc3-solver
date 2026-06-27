@@ -1,0 +1,44 @@
+sequenceDiagram
+    participant Caller as solve_ls20
+    participant CP as ComboPipeline
+    participant S1 as GroupOrbitReducer
+    participant S2 as SATSMTSolver
+    participant S3 as SubmodularOptimizer
+    participant S4 as BranchBoundSearcher
+    participant S5 as EMLIsoPruner
+    participant CG as ConsensusGate
+    participant RE as ReplayEngine
+    participant BC as RHAEBudgetController
+
+    Caller->>BC: create_game_task(game, game_id)
+    BC-->>Caller: task_dict {rhae_budget, human_steps, ...}
+
+    Caller->>CP: solve(task_dict)
+    CP->>S1: reduce(task_dict)
+    Note over S1: 群论轨道化简: D_n/S_n → canonical form
+    S1-->>CP: StageResult(candidates=orbit_reprs, reduction=0.7)
+
+    CP->>S2: solve_constraints(task_dict, candidates)
+    Note over S2: Z3约束编码 → SyGuS → 最小程序归纳
+    S2-->>CP: StageResult(candidates=sat_programs, reduction=0.5)
+
+    CP->>S3: optimize(task_dict, candidates)
+    Note over S3: 次模贪心 + S_rel排序 + EML AbsMean 1/6阈值 + IC Early Stop
+    S3-->>CP: StageResult(candidates=s_rel_top_k, reduction=0.3)
+
+    CP->>S4: search(task_dict, candidates)
+    Note over S4: A* Beam Search + GaussEx剪枝 + 三层共识验证
+    S4->>CG: gate(candidate, context)
+    CG->>CG: verify_micro (GaussEx ≤ 1/6)
+    CG->>CG: verify_midic (IC ≥ IC_target)
+    CG->>CG: verify_macro (H_narrative ≤ H_max)
+    CG-->>S4: ConsensusResult(passed/failed_layer)
+    S4->>RE: replay_with_lru(target_id, lru_cache)
+    RE-->>S4: materialized_state
+    S4-->>CP: StageResult(candidates=verified_plans, reduction=0.1)
+
+    CP->>S5: prune(task_dict, candidates)
+    Note over S5: EML图同构检测 + Karma Cache + ψ-Anchor四条件
+    S5-->>CP: StageResult(candidates=final_plans, reduction=0.05)
+
+    CP-->>Caller: PipelineResult(plan=final_plan, solved=True, rhae_score)

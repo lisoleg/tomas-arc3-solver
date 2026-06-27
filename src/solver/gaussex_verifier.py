@@ -944,6 +944,150 @@ class GaussExVerifier:
         self.psi_anchors.clear()
         self._psi_anchor_counter = 0
 
+    # =========================================================================
+    # v4.1: GaussEx Fast — Three-Level Approximate Verification
+    # =========================================================================
+
+    def gauss_ex_fast(
+        self,
+        source_grid: np.ndarray,
+        target_grid: np.ndarray,
+        epsilon: float = 0.1,
+        confidence: float = 0.95,
+    ) -> tuple[bool, float, str]:
+        """Three-level fast approximate verification (v4.1).
+
+        Provides increasingly rigorous verification levels with early
+        exit at each stage. Designed for high-throughput program
+        screening where full verify_program() is too expensive.
+
+        Level 1 — Attribute Signature Short Circuit:
+          Compare grid shapes and color histograms. If shapes mismatch
+          or color distributions diverge significantly, reject immediately.
+          If pixel match ratio ≥ (1 − ε), accept immediately.
+
+        Level 2 — Hungarian Object Alignment:
+          Perceive both grids via EMLPerceiver, align JinlingSphere
+          objects via hungarian_align. If alignment cost > 2ε×n,
+          reject. If cost ≤ ε, accept.
+
+        Level 3 — Monte-Carlo Residual:
+          Sample random pixel positions and compare values. Use Hoeffding
+          inequality for statistical confidence with early stopping.
+          m ≥ ln(2/(1−confidence)) / (2ε²) samples guarantee that
+          the estimated error rate is within ε of the true rate with
+          probability ≥ confidence.
+
+        Args:
+            source_grid: Predicted output grid (2D numpy array).
+            target_grid: Expected output grid (2D numpy array).
+            epsilon: Error tolerance threshold. Default 0.1 (10% error).
+            confidence: Statistical confidence for Monte-Carlo level.
+                Default 0.95 (95% confidence).
+
+        Returns:
+            Tuple of (passed, score, level):
+              passed: True if grids are deemed sufficiently similar.
+              score: Estimated error rate or alignment cost.
+              level: String indicating which level decided:
+                "L1_shape_mismatch", "L1_color_mismatch",
+                "L1_short_circuit", "L2_alignment_fail",
+                "L2_alignment_pass", "L3_early_stop",
+                "L3_mc_pass", "L3_mc_fail".
+        """
+        source_grid = np.asarray(source_grid, dtype=np.int32)
+        target_grid = np.asarray(target_grid, dtype=np.int32)
+
+        # ------------------------------------------------------------------
+        # Level 1: Attribute Signature Short Circuit
+        # ------------------------------------------------------------------
+
+        # Shape check
+        if source_grid.shape != target_grid.shape:
+            return False, 1.0, "L1_shape_mismatch"
+
+        # Color set check
+        src_colors: np.ndarray = np.unique(source_grid)
+        tgt_colors: np.ndarray = np.unique(target_grid)
+
+        if not np.array_equal(src_colors, tgt_colors):
+            common: int = int(len(np.intersect1d(src_colors, tgt_colors)))
+            total: int = max(len(src_colors), len(tgt_colors), 1)
+            color_match: float = common / total
+            if color_match < 0.5:
+                return False, 1.0 - color_match, "L1_color_mismatch"
+
+        # Pixel match ratio (quick full-grid check)
+        total_pixels: int = source_grid.size
+        if total_pixels == 0:
+            return True, 0.0, "L1_short_circuit"
+
+        match_count: int = int(np.sum(source_grid == target_grid))
+        match_ratio: float = match_count / total_pixels
+
+        if match_ratio >= 1.0 - epsilon:
+            return True, 1.0 - match_ratio, "L1_short_circuit"
+
+        # ------------------------------------------------------------------
+        # Level 2: Hungarian Object Alignment
+        # ------------------------------------------------------------------
+        try:
+            from src.agent.eml_perceiver import EMLPerceiver
+            from src.agent.hungarian_align import hungarian_align
+
+            perceiver = EMLPerceiver()
+            src_spheres = perceiver.perceive(source_grid)
+            tgt_spheres = perceiver.perceive(target_grid)
+
+            alignment, total_cost = hungarian_align(
+                src_spheres, tgt_spheres, epsilon=epsilon
+            )
+
+            n_objects: int = max(len(src_spheres), len(tgt_spheres), 1)
+            avg_cost: float = total_cost / n_objects
+
+            if avg_cost > 2.0 * epsilon:
+                return False, avg_cost, "L2_alignment_fail"
+
+            if avg_cost <= epsilon and len(alignment) == n_objects:
+                return True, avg_cost, "L2_alignment_pass"
+
+        except (ImportError, Exception):
+            # EMLPerceiver or hungarian_align unavailable — fall through
+            pass
+
+        # ------------------------------------------------------------------
+        # Level 3: Monte-Carlo Residual with Hoeffding Inequality
+        # ------------------------------------------------------------------
+
+        # Hoeffding bound: m ≥ ln(2/(1−confidence)) / (2ε²)
+        hoeffding_bound: float = np.log(2.0 / (1.0 - confidence)) / (2.0 * epsilon ** 2)
+        m_samples: int = max(int(np.ceil(hoeffding_bound)), 30)
+        m_samples = min(m_samples, total_pixels)
+
+        rng: np.random.RandomState = np.random.RandomState(42)
+        H, W = source_grid.shape
+
+        cumulative_errors: int = 0
+        threshold_errors: float = epsilon * m_samples
+
+        for k in range(m_samples):
+            r: int = rng.randint(0, H)
+            c: int = rng.randint(0, W)
+            if source_grid[r, c] != target_grid[r, c]:
+                cumulative_errors += 1
+
+            # Early stopping: if errors already exceed threshold, reject
+            if cumulative_errors > threshold_errors:
+                error_rate: float = cumulative_errors / (k + 1)
+                return False, error_rate, "L3_early_stop"
+
+        final_error_rate: float = cumulative_errors / m_samples
+        if final_error_rate <= epsilon:
+            return True, final_error_rate, "L3_mc_pass"
+        else:
+            return False, final_error_rate, "L3_mc_fail"
+
 
 # =============================================================================
 # Helper: Connected Components (for Betti0)

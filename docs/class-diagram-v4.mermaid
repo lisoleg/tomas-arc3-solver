@@ -1,0 +1,192 @@
+classDiagram
+
+    class Node {
+        +int id
+        +int parent_id
+        +str action
+        +int depth
+        +dict meta
+        -ndarray _grid_cache
+        -str _hash_cache
+        +signature() str
+        +__hash__() int
+        +__eq__(other) bool
+    }
+
+    class ReplayEngine {
+        +Any root_state
+        +dict node_map
+        +str mode
+        +int _cache_count
+        +replay(target_id) Any
+        +_backtrack_path(target_id) list
+        +clear_cache() None
+        +replay_with_lru(target_id, lru_cache) Any
+        +compute_eml_signature(node_id) str
+    }
+
+    class ActionSpace {
+        +dict GAME_ACTIONS
+        +list GRID_PRIMITIVES
+        +str _mode
+        +get_primitives() list
+        +get_params(action, context) list
+        +apply(grid, action, params) ndarray
+        +apply_game_action(game, action_id, data) None
+    }
+
+    class LayoutHasher {
+        +hash(grid)$ str
+        +hash_with_shape(grid)$ str
+    }
+
+    class GaussExVerifier {
+        +float threshold
+        +verify(grid, examples) dict
+        +verify_node(node_id, replay_engine, examples) dict
+    }
+
+    class ConsensusGate {
+        +GaussExVerifier micro_verifier
+        +float ic_target
+        +float h_max
+        +verify_micro(grid, examples) dict
+        +verify_midic(ic_value) bool
+        +verify_macro(narrative_entropy) bool
+        +gate(candidate, context) ConsensusResult
+    }
+
+    class ComboPipeline {
+        +GroupOrbitReducer stage1
+        +SATSMTSolver stage2
+        +SubmodularOptimizer stage3
+        +BranchBoundSearcher stage4
+        +EMLIsoPruner stage5
+        +ConsensusGate consensus
+        +RHAEBudgetController budget
+        +solve(task) PipelineResult
+        +_dispatch_stage(stage_idx, candidates, context) StageResult
+    }
+
+    class GroupOrbitReducer {
+        +str group_type
+        +dict orbit_cache
+        +reduce(task) StageResult
+        +_compute_orbits(grid) list
+        +_canonical_form(grid, group) ndarray
+        +_orbit_signature(grid) str
+    }
+
+    class SATSMTSolver {
+        +str solver_type
+        +int max_program_length
+        +solve_constraints(task) StageResult
+        +_encode_sygs(task) Z3Problem
+        +_decode_solution(z3_result) list
+        +_encode_antimonotonicity() Z3Constraint
+    }
+
+    class SubmodularOptimizer {
+        +float alpha
+        +float beta
+        +float gamma
+        +optimize(task, candidates) StageResult
+        +compute_s_rel(candidate, context) float
+        +_marginal_gain(candidate_set, new_candidate) float
+        +_eml_absmean_prune(edge_set, threshold) list
+        +_ic_early_stop(current_ic, target_ic) bool
+    }
+
+    class BranchBoundSearcher {
+        +ReplayEngine replay_engine
+        +ConsensusGate consensus
+        +int beam_width
+        +search(task, candidates) StageResult
+        +_h_admissible(node) float
+        +_gaussex_prune(node) bool
+        +_s_rel_priority(node) float
+    }
+
+    class EMLIsoPruner {
+        +str hash_mode
+        +dict karma_cache
+        +prune(task, candidates) StageResult
+        +_compute_canonical_signature(eml_graph) str
+        +_is_isomorphic(sig_a, sig_b) bool
+        +_psi_anchor_check(candidate) bool
+    }
+
+    class TernaryMaskDSL {
+        +int KEEP = +1
+        +int PSI_CUT = 0
+        +int INVERT = -1
+        +ndarray mask
+        +apply_mask(transforms, mask) ndarray
+        +search_space_size(n_orbits) int
+        +encode_mask(mask) str
+        +decode_mask(encoded) ndarray
+    }
+
+    class RHAEBudgetController {
+        +float max_rhae
+        +float budget_mult
+        +create_game_task(game, game_id) dict
+        +estimate_human_steps(game_id) int
+        +check_budget(used, budget) bool
+    }
+
+    class CoinCollector {
+        +list tasks
+        +bool is_ls20
+        +float budget_mult
+        +dict results
+        +get_budget(task_id, human_steps) int
+    }
+
+    class StageResult {
+        +str stage_name
+        +list candidates
+        +dict meta
+        +bool success
+        +float reduction_ratio
+    }
+
+    class PipelineResult {
+        +list plan
+        +bool solved
+        +float rhae_score
+        +dict stage_reports
+        +list consensus_log
+    }
+
+    class ConsensusResult {
+        +bool passed
+        +str failed_layer
+        +dict micro_result
+        +bool mid_passed
+        +bool macro_passed
+    }
+
+    Node <-- ReplayEngine : replayed by
+    ReplayEngine <-- BranchBoundSearcher : used by
+    ActionSpace <-- ReplayEngine : action interface
+    LayoutHasher <-- EMLIsoPruner : hashing
+    GaussExVerifier <-- ConsensusGate : micro verification
+    ConsensusGate <-- BranchBoundSearcher : gating
+    ComboPipeline --> GroupOrbitReducer : Stage1
+    ComboPipeline --> SATSMTSolver : Stage2
+    ComboPipeline --> SubmodularOptimizer : Stage3
+    ComboPipeline --> BranchBoundSearcher : Stage4
+    ComboPipeline --> EMLIsoPruner : Stage5
+    ComboPipeline --> ConsensusGate : consensus
+    ComboPipeline --> RHAEBudgetController : budget
+    SubmodularOptimizer --> TernaryMaskDSL : mask search
+    EMLIsoPruner --> KarmaCache : caching
+    RHAEBudgetController --> CoinCollector : coin strategy
+    StageResult <-- GroupOrbitReducer : output
+    StageResult <-- SATSMTSolver : output
+    StageResult <-- SubmodularOptimizer : output
+    StageResult <-- BranchBoundSearcher : output
+    StageResult <-- EMLIsoPruner : output
+    PipelineResult <-- ComboPipeline : output
+    ConsensusResult <-- ConsensusGate : output

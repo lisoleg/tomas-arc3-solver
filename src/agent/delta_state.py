@@ -439,6 +439,8 @@ class ReplayEngine:
         self.node_map: Dict[int, Node] = node_map
         self.mode: str = mode
         self._cache_count: int = 0
+        # v4.1: Karma Cache — structural_hash lookup/store for ReplayEngine
+        self._karma_cache: Dict[str, Any] = {}
 
     def replay(self, target_id: int) -> Any:
         """从根节点 Replay 到 target_id，返回最终状态。
@@ -581,12 +583,66 @@ class ReplayEngine:
         """清除所有 Replay 缓存，释放内存。
 
         在 BFS 完成后或内存压力时调用。清除所有 node 的 _grid_cache
-        并重置缓存计数器。
+        并重置缓存计数器。v4.1: 同时清除 Karma 缓存。
         """
         for node in self.node_map.values():
             node._grid_cache = None
             node._hash_cache = None
         self._cache_count = 0
+        self._karma_cache.clear()
+
+    # =========================================================================
+    # v4.1: Karma Cache — structural_hash lookup/store
+    # =========================================================================
+
+    def lookup(self, sig: str) -> Any | None:
+        """Look up cached verification result by structural hash signature.
+
+        Karma Cache (v4.1) enables ReplayEngine to cache program verification
+        results keyed by program signature, avoiding redundant verification.
+        Uses structural_hash from LayoutHasher as the lookup key.
+
+        Typical usage pattern:
+          sig = LayoutHasher.hash_with_shape(materialized_grid)
+          cached = engine.lookup(sig)
+          if cached is not None:
+              return cached  # Skip redundant verification
+          result = verifier.verify(grid, examples)
+          engine.store(sig, result)  # Cache for future lookups
+
+        Args:
+            sig: Structural hash signature string. Typically generated
+                by LayoutHasher.hash_with_shape() on the materialized grid.
+
+        Returns:
+            Cached verification result if found, None otherwise.
+            The result type depends on what was stored — typically a
+            dict from GaussExVerifier.verify() or similar.
+        """
+        return self._karma_cache.get(sig)
+
+    def store(self, sig: str, result: Any) -> None:
+        """Store verification result in Karma cache.
+
+        Caches the verification result keyed by structural hash signature.
+        When the cache exceeds MAX_REPLAY_CACHE (128 entries), the oldest
+        entries are evicted (Python 3.7+ dict maintains insertion order).
+
+        Args:
+            sig: Structural hash signature string.
+            result: Verification result to cache. Can be any type —
+                typically a dict from GaussExVerifier.verify() containing
+                'passed', 'max_error', 'threshold', 'details', 'margin'.
+        """
+        self._karma_cache[sig] = result
+        # Prune if exceeding MAX_REPLAY_CACHE
+        if len(self._karma_cache) > MAX_REPLAY_CACHE:
+            # Remove oldest entries (first inserted; dict is ordered in Python 3.7+)
+            keys_to_remove: List[str] = list(self._karma_cache.keys())[
+                :len(self._karma_cache) - MAX_REPLAY_CACHE
+            ]
+            for key in keys_to_remove:
+                del self._karma_cache[key]
 
 
 # ============================================================================
