@@ -1,0 +1,40 @@
+sequenceDiagram
+    participant Client as solve_game()
+    participant SD as SOLVERS dict (3层)
+    participant PI as get_injector(game_id)
+    participant USP as solve_via_pipeline()
+    participant EML as EMLPerceiver
+    participant CS as CosetSearcher
+    participant RM as RamanujanConjecture
+    participant KS as κ-Snap
+    participant GE as GaussExCompositeVerifier
+    participant FB as fallback_solver
+
+    Client->>SD: 查找 game_id 的三层配置
+    SD->>PI: dispatcher 调用 → get_injector(game_id)
+    PI-->>SD: SBInjector 实例 (含 preamble 参数)
+
+    SD->>USP: solve_via_pipeline(game, game_id, injector)
+
+    USP->>EML: perceive(grid, time_window=injector.time_window)
+    EML-->>USP: List~JinlingSphere~
+
+    USP->>CS: search(uv_features, coset_filter=injector.coset_filter, sporadic_pref=injector.sporadic_pref)
+    CS-->>USP: List~CosetResult~
+
+    USP->>RM: produce(constants, enable_rm=injector.enable_rm)
+    RM-->>USP: List~Conjecture~ (或跳过 if enable_rm=False)
+
+    USP->>KS: kappa_snap(cosets, symmetry_hint=injector.symmetry_hint)
+    KS-->>USP: List~ProgramNode~
+
+    USP->>GE: verify(grid, examples, eps_factor=injector.eps_factor)
+    GE-->>USP: Verdict(passed=True/False)
+
+    alt Verdict.passed == True
+        USP-->>Client: 返回 action_plan
+    else Verdict.passed == False 或 pipeline 超时
+        USP-->>SD: pipeline 失败
+        SD->>FB: 调用 fallback (旧 solver)
+        FB-->>Client: 返回 action_plan 或 None
+    end

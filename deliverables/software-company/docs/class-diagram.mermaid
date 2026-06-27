@@ -1,0 +1,99 @@
+classDiagram
+    class SBInjector {
+        <<frozen dataclass>>
+        name: str
+        coset_filter: Optional~List~int~~
+        symmetry_hint: Optional~str~
+        enable_rm: bool
+        time_window: int
+        eps_factor: float
+        sporadic_pref: Optional~str~
+        replace(**overrides) SBInjector
+        to_dict() Dict~str,Any~
+    }
+
+    class PREAMBLES {
+        <<dict registry>>
+        Dict~str, Callable~[],SBInjector~~
+        get(game_id: str) SBInjector
+        register(game_id: str, fn: Callable) None
+        list_ids() List~str~
+    }
+
+    class GAME_INJECTORS {
+        <<dict cache>>
+        Dict~str, SBInjector~
+        get(game_id: str) SBInjector
+    }
+
+    class GaussExCompositeVerifier {
+        eps_factor: float
+        base_threshold: float
+        tianxing_verifier: TianxingGaussExVerifier
+        delta_verifier: GaussExVerifier
+        verify(grid, examples, injector) Verdict
+        verify_with_eps(grid, examples, eps_factor) Verdict
+    }
+
+    class Verdict {
+        <<dataclass>>
+        passed: bool
+        gex_score: float
+        xi_value: float
+        kappa_release: float
+        reason: str
+    }
+
+    class UniversalSolverPipeline {
+        game: Any
+        game_id: str
+        injector: Optional~SBInjector~
+        solve() List~tuple~ | None
+        solve_via_pipeline(input, train_pairs, injector) List~tuple~ | None
+        _run_eml_perceive(injector) List~JinlingSphere~
+        _run_coset_search(spheres, injector) List~CosetResult~
+        _run_ramanujan(constants, injector) List~Conjecture~
+        _run_kappa_snap(cosets, injector) List~ProgramNode~
+        _run_gaussex_verify(candidates, injector) Verdict
+    }
+
+    class SOLVERS_NEW {
+        <<三层架构 dict>>
+        Dict~str, Dict~
+        dispatcher: Callable (pipeline+injector)
+        shortcut: Callable (旧solver快径)
+        fallback: Callable (旧solver兜底)
+    }
+
+    class solve_game {
+        <<function>>
+        solve_game(game, game_id, level_idx) List~tuple~ | None
+    }
+
+    class EMLPerceiver {
+        perceive(grid, time_window) List~JinlingSphere~
+    }
+
+    class CosetSearcher {
+        search(uv_features, coset_filter, sporadic_pref) List~CosetResult~
+    }
+
+    class RamanujanConjectureProducer {
+        produce(constants, enable_rm) List~Conjecture~
+    }
+
+    class SporadicGroupFilter {
+        filter(grid, sporadic_pref) str
+    }
+
+    SBInjector --> PREAMBLES : 注册于
+    PREAMBLES --> GAME_INJECTORS : 缓存到
+    SBInjector --> UniversalSolverPipeline : 作为参数传入
+    SBInjector --> GaussExCompositeVerifier : eps_factor 传入
+    UniversalSolverPipeline --> EMLPerceiver : time_window
+    UniversalSolverPipeline --> CosetSearcher : coset_filter, sporadic_pref
+    UniversalSolverPipeline --> RamanujanConjectureProducer : enable_rm
+    UniversalSolverPipeline --> GaussExCompositeVerifier : eps_factor
+    SOLVERS_NEW --> UniversalSolverPipeline : dispatcher 路径
+    SOLVERS_NEW --> solve_game : 集成入口
+    Verdict --> GaussExCompositeVerifier : 返回

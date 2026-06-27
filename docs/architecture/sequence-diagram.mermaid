@@ -1,0 +1,136 @@
+sequenceDiagram
+    autonumber
+
+    %% ════════════════════════════════════════════════════════════════
+    %% 4.1 主管线流程: solve_ls20 → RGFlowPlanner.plan()
+    %% ════════════════════════════════════════════════════════════════
+
+    section Stage 1 (保留)
+        GS as solve_ls20
+        OR as _solve_oracle_replay
+        GS->>OR: call(game, "ls20", level_idx)
+        OR-->>GS: plan or None
+        Note over GS: if plan≠None → return plan
+
+    section Stage 2 (新增: RG-Flow Preplan)
+        RFP as RGFlowPlanner
+        IDA as LS20IDOAdapter
+        LSA as LS20Adapter
+        EML as EMLPerceiver
+        IDO as ido_axioms
+        SGF as SporadicGroupFilter
+        CS as CosetPrioritizedSearch
+        SPS as StatePathSolver
+        KBC as KappaBudgetController
+
+        GS->>RFP: plan(game, level_idx)
+
+        %% Step 2a: UV特征提取
+        RFP->>IDA: game_to_uv_features(game, level_idx, adapter)
+        IDA->>LSA: player/walls/changers/goals/coins
+        LSA-->>IDA: game entities
+        IDA->>EML: perceive(grid)
+        EML-->>IDA: 11-dim features (JinlingSphere list)
+        IDA->>IDO: estimate_kappa_uv(grid), estimate_kappa_ir(grid)
+        IDO-->>IDA: κ_UV, κ_IR values
+        IDA-->>RFP: UVFeatures(position, state, κ_UV=4.32, κ_IR=1.0)
+
+        %% Step 2b: Level分类 (一次性, Q4选A)
+        RFP->>IDA: game_to_sporadic_input(game, level_idx, adapter)
+        IDA-->>RFP: sporadic_input_dict
+        RFP->>SGF: classify_ls20_level(game, level_idx)
+        Note over SGF: L0→Moebius(rotation), L2→Monster(color+rotation)
+        SGF-->>RFP: level_type="Moebius" or "Monster"
+
+        %% Step 2c: Coset搜索 (2640有限路径)
+        RFP->>IDA: game_to_coset_input(uv_features)
+        IDA-->>RFP: coset_input_dict
+        RFP->>SPS: compute_state_path_sequence(start, goal, changers, effects, game, adapter)
+        Note over SPS: 分析start→goal状态差异<br/>规划changer访问顺序<br/>生成(position,state)序列
+        SPS->>CS: search_best_coset(uv_features, grid, target_ir_dims=4)
+        Note over CS: 330 cosets × D₄ = 2640 paths<br/>IDO pruning: 50-70% → ~800-1300 paths
+        CS-->>SPS: best_coset_path
+        SPS->>SPS: compute_changer_trigger_sequence(current, target, changer_pos, effect, triggers=3, game, adapter)
+        Note over SPS: rotation 0→3 needs 3 triggers<br/>leave-and-return ×3
+        SPS->>SPS: compute_bfs_path(start_pos, changer_pos, game, adapter, avoid)
+        Note over SPS: Wall-Map BFS: (29,40)→(49,45)
+        SPS->>SPS: compute_leave_and_return_path(changer_pos, game, adapter)
+        SPS->>SPS: compute_bfs_path(changer_pos, goal_pos, game, adapter)
+        Note over SPS: Wall-Map BFS: (49,45)→(14,40)
+        SPS-->>RFP: StatePath candidates (multiple)
+
+        %% Step 2d: Anti-Monotonicity剪枝
+        RFP->>IDO: verify_anti_monotonicity(kappa_uv, kappa_ir, config)
+        IDO-->>RFP: IDOVerdict(passed=True, Δκ=4.32)
+        RFP->>KBC: should_collect_coin(current_kappa, coin_cost, kappa_reduction, remaining)
+        Note over KBC: κ-reduction=0, cost>0 → SKIP<br/>only collect when κ-reduction > cost
+        KBC-->>RFP: CoinDecision(should_collect=False, reason="Anti-Mono violation")
+        RFP->>RFP: _anti_monotonicity_prune(candidates, current_kappa)
+        Note over RFP: κ增加的候选路径剪枝<br/>L1: coin收集路径κ增加→剪枝
+
+        %% Step 2e: κ-Entropy GaussEx校验
+        RFP->>IDO: kappa_entropy_release(kappa_uv=4.32, kappa_ir=1.0)
+        IDO-->>RFP: Δκ = ln(4.32/1.0) ≈ 4.32 nat
+        RFP->>RFP: _verify_kappa_release(state_path, expected=4.32)
+        Note over RFP: Δκ ≥ expected → PASS
+
+        %% Step 2f: 执行
+        RFP->>RFP: _execute_plan(game, state_path, adapter)
+        Note over RFP: 按预规划一次性执行<br/>coin仅在κ-reduction > cost时收集
+        RFP-->>GS: plan = [(dir,data), ...] or None
+
+    section Fallback (保留)
+        Note over GS: if RG-Flow plan=None → Stage3 fallback
+        GS->>GS: _solve_ls20_kappa_gradient_direct(game, level_idx)
+        GS->>GS: _solve_ls20_kappa_ps_bfs(game, level_idx)
+        GS-->>GS: return plan or None
+
+    %% ════════════════════════════════════════════════════════════════
+    %% 4.2 分段预规划流程 (L5/L6)
+    %% ════════════════════════════════════════════════════════════════
+
+    section L5/L6 分段预规划 (Segmented RG-Flow)
+        RFP->>RFP: _segmented_preplan(game, level_idx=5, n_segments=3)
+        Note over RFP: L5/L6 baseline 192/186步<br/>需要分段坍缩
+
+        %% Segment 1: start→changer₁
+        RFP->>IDA: game_to_uv_features(game, level_idx, adapter)
+        IDA-->>RFP: UVFeatures(Segment1 start)
+        RFP->>SPS: compute_bfs_path(start_pos, changer₁_pos, game, adapter)
+        SPS-->>RFP: segment1_path_actions
+        RFP->>IDO: kappa_entropy_release(S1_kappa_uv, S1_kappa_ir)
+        Note over IDO: Δκ₁ ≥ Δκ理论值/3
+        RFP->>KBC: should_collect_coin(S1_current, S1_cost, S1_reduction, S1_remaining)
+        KBC-->>RFP: CoinDecision for Segment1
+
+        %% Segment 2: changer₁→changer₂
+        Note over RFP: 以changer₁触发后状态为新start
+        RFP->>IDA: game_to_uv_features(game, level_idx, adapter) [updated start]
+        IDA-->>RFP: UVFeatures(Segment2 start)
+        RFP->>SPS: compute_bfs_path(changer₁_pos, changer₂_pos, game, adapter)
+        SPS-->>RFP: segment2_path_actions
+        RFP->>IDO: kappa_entropy_release(S2_kappa_uv, S2_kappa_ir)
+        Note over IDO: Δκ₂ ≥ Δκ理论值/3
+
+        %% Segment 3: changer₂→goal
+        Note over RFP: 以changer₂触发后状态为新start
+        RFP->>SPS: compute_bfs_path(changer₂_pos, goal_pos, game, adapter)
+        SPS-->>RFP: segment3_path_actions
+        RFP->>IDO: kappa_entropy_release(S3_kappa_uv, S3_kappa_ir)
+        Note over IDO: Δκ₃ ≥ Δκ理论值/3
+
+        RFP->>RFP: concatenate(segment1 + segment2 + segment3)
+        RFP-->>GS: plan = full_segmented_actions
+
+    %% ════════════════════════════════════════════════════════════════
+    %% 4.3 Fallback流程
+    %% ════════════════════════════════════════════════════════════════
+
+    section Fallback: RG-Flow失败 → Stage3
+        Note over RFP: plan() returns None
+        Note over RFP: 失败原因:<br/>UV提取超时<br/>coset搜索无路径<br/>Anti-Mono全部剪枝<br/>κ校验失败<br/>执行状态不匹配
+        Note over GS: 进入Stage3 fallback
+        GS->>GS: _solve_ls20_kappa_gradient_direct(game, level_idx)
+        Note over GS: κ-gradient方向导航(不绕墙)
+        GS->>GS: _solve_ls20_kappa_ps_bfs(game, level_idx)
+        Note over GS: κ-PS BFS: 复合状态(position,rot,color,shape)<br/>最后防线

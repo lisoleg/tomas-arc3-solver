@@ -1,0 +1,219 @@
+classDiagram
+    direction TB
+
+    %% ═══════════════════════════════════════════
+    %% 新增模块 (P0 核心实现)
+    %% ═══════════════════════════════════════════
+
+    class RGFlowPlanner {
+        -ido_config : IDOConfig
+        -max_total_time : float
+        -max_bfs_time : float
+        -ido_adapter : LS20IDOAdapter
+        -path_solver : StatePathSolver
+        -budget_ctrl : KappaBudgetController
+        +__init__(ido_config, max_total_time, max_bfs_time)
+        +plan(game, level_idx) list~tuple~ | None
+        #_uv_feature_extraction(game, adapter) UVFeatures
+        #_classify_level(game, adapter) str
+        #_coset_state_search(uv_features, goal_state, level_type, game, adapter) StatePath | None
+        #_anti_monotonicity_prune(candidates, current_kappa) list~StatePath~
+        #_execute_plan(game, state_path, adapter) list~tuple~
+        #_segmented_preplan(game, level_idx, adapter, n_segments) list~tuple~ | None
+        #_verify_kappa_release(state_path, expected_delta_kappa) bool
+    }
+
+    class StatePathSolver {
+        -coset_search : CosetPrioritizedSearch
+        -replay_engine : ReplayEngine
+        -hungarian_fn : Callable
+        +__init__(coset_search, replay_engine, hungarian_fn)
+        +compute_state_path_sequence(start, goal, changers, effects, game, adapter) StatePath | None
+        +compute_changer_trigger_sequence(current, target, pos, effect, triggers, game, adapter) list~ChangerStep~
+        +compute_leave_and_return_path(changer_pos, game, adapter, retreat_steps) list~tuple~
+        +compute_bfs_path(start_pos, target_pos, game, adapter, avoid, max_steps) list~tuple~ | None
+        +verify_path_on_replay_engine(game, actions, target_state) bool
+        +compute_segmented_paths(start, goal, changer_seq, n_segments, game, adapter) list~StatePath~
+    }
+
+    class KappaBudgetController {
+        -ido_config : IDOConfig
+        -total_time_budget : float
+        +__init__(ido_config, total_time_budget)
+        +should_collect_coin(current_kappa, coin_cost, kappa_reduction, remaining, min_reserve) CoinDecision
+        +allocate_time_budget(level_idx, level_type, path_estimate) TimeBudget
+        +compute_kappa_reduction(before_kappa, after_kappa) float
+        +compute_action_cost(coin_pos, player_pos, step_size, game, adapter) float
+        +check_emergency_collect(remaining, min_reserve, current_kappa, coin_options, game, adapter) CoinDecision | None
+    }
+
+    class LS20IDOAdapter {
+        +__init__()
+        +game_to_uv_features(game, level_idx, ls20_adapter) UVFeatures
+        +game_to_coset_input(uv_features) dict
+        +game_to_ido_input(uv_features) dict
+        +game_to_sporadic_input(game, level_idx, ls20_adapter) dict
+        +extract_changer_effects(game, ls20_adapter) dict
+        +extract_state_requirements(game, ls20_adapter) dict
+    }
+
+    %% ═══════════════════════════════════════════
+    %% 新增数据结构
+    %% ═══════════════════════════════════════════
+
+    class UVFeatures {
+        +position : tuple~int_int~
+        +state_dimensions : dict
+        +goal_state : dict
+        +changer_positions : list~tuple~
+        +changer_effects : dict
+        +wall_positions : set~tuple~
+        +coin_positions : list~tuple~
+        +goal_positions : list~tuple~
+        +eml_features : list~dict~
+        +kappa_uv : float
+        +kappa_ir : float
+        +compression_ratio : float
+        +step_size : int
+        +grid_size : int
+    }
+
+    class StateTuple {
+        +position : tuple~int_int~
+        +rotation : int
+        +color : int
+        +shape : int
+    }
+
+    class ChangerStep {
+        +changer_pos : tuple~int_int~
+        +triggers_needed : int
+        +leave_return_path : list~tuple~
+        +kappa_reduction : float
+    }
+
+    class StatePath {
+        +start_state : StateTuple
+        +goal_state : StateTuple
+        +changer_sequence : list~ChangerStep~
+        +total_kappa : float
+        +plan_actions : list~tuple~
+        +level_type : str
+        +is_segmented : bool
+        +segment_index : int
+    }
+
+    class CoinDecision {
+        +should_collect : bool
+        +kappa_reduction : float
+        +action_cost : float
+        +coin_position : tuple~int_int~
+        +reason : str
+    }
+
+    class TimeBudget {
+        +total_budget : float
+        +uv_extraction_time : float
+        +coset_search_time : float
+        +execution_time : float
+        +verification_time : float
+        +fallback_reserve : float
+    }
+
+    %% ═══════════════════════════════════════════
+    %% 已有理论模块 (10个, import验证通过)
+    %% ═══════════════════════════════════════════
+
+    class RGFlowSimulator {
+        +RGFlowState : RGFlowState
+        +simulate_rg_flow(grid_uv, grid_ir) RGFlowState
+        +compute_beta_function(kappa) float
+    }
+
+    class CosetPrioritizedSearch {
+        +extract_11_uv_features(grid, spheres) list~dict~
+        +enumerate_cosets(uv_features) list~CosetPath~
+        +search_best_coset(uv_features, grid, target_ir_dims) CosetPath | None
+    }
+
+    class IDOAxioms {
+        +IDOConfig : IDOConfig
+        +IDOVerdict : IDOVerdict
+        +estimate_kappa_uv(grid) float
+        +estimate_kappa_ir(grid) float
+        +verify_anti_monotonicity(kappa_uv, kappa_ir, config) IDOVerdict
+        +kappa_entropy_release(kappa_uv, kappa_ir) float
+        +prune_by_ido(candidates, input, output, config) list
+    }
+
+    class SporadicGroupFilter {
+        +SPORADIC_TYPES : list~str~
+        +classify_sporadic_group(grid, spheres) str
+        +detect_24_fold_symmetry(grid) bool
+        +detect_chirality(grid) bool
+        +detect_monster_pattern(grid) bool
+        +classify_ls20_level(game, level_idx) str
+    }
+
+    class EMLPerceiver {
+        +JinlingSphere : JinlingSphere
+        +perceive(grid) list~JinlingSphere~
+    }
+
+    class ReplayEngine {
+        +replay_from_root(game, actions) Any
+        +verify_path(game, actions, target_pos) bool
+        +verify_ls20_state_path(game, actions, expected_state) bool
+    }
+
+    class OctonionPhaseModule {
+        +OctonionPhase : OctonionPhase
+        +compute_multi_trigger_phase(changer_pos, triggers_needed) dict
+    }
+
+    class HungarianAlign {
+        +hungarian_align(source, target) list~tuple~
+        +_default_cost(src, tgt) float
+    }
+
+    class SemanticConstants {
+        +SemanticConstants : SemanticConstants
+        +extract_semantic_constants(grid, spheres) SemanticConstants
+    }
+
+    class LS20Adapter {
+        +player : GameEntity | None
+        +walls : list~GameEntity~
+        +goals : list~GameEntity~
+        +switchers : list~GameEntity~
+        +step : int
+        +grid_size : int
+    }
+
+    %% ═══════════════════════════════════════════
+    %% 关系定义
+    %% ═══════════════════════════════════════════
+
+    RGFlowPlanner --> LS20IDOAdapter : uses for data conversion
+    RGFlowPlanner --> StatePathSolver : uses for path generation
+    RGFlowPlanner --> KappaBudgetController : uses for budget control
+    RGFlowPlanner --> IDOAxioms : calls verify_anti_monotonicity + kappa_entropy_release
+    RGFlowPlanner --> SporadicGroupFilter : calls classify_ls20_level
+
+    LS20IDOAdapter --> LS20Adapter : wraps for game data access
+    LS20IDOAdapter --> EMLPerceiver : calls perceive() for 11-dim features
+    LS20IDOAdapter --> IDOAxioms : calls estimate_kappa_uv/ir
+    LS20IDOAdapter --> SemanticConstants : calls extract_semantic_constants
+
+    StatePathSolver --> CosetPrioritizedSearch : uses for coset enumeration
+    StatePathSolver --> ReplayEngine : uses for path verification
+    StatePathSolver --> HungarianAlign : uses for state matching
+    StatePathSolver --> OctonionPhaseModule : uses for multi-trigger planning
+
+    KappaBudgetController --> IDOAxioms : uses IDOConfig + tolerance
+
+    StatePath *-- StateTuple : contains start/goal
+    StatePath *-- ChangerStep : contains sequence
+    ChangerStep *-- StateTuple : references state changes
+
+    UVFeatures *-- StateTuple : references position/state

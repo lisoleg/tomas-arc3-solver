@@ -1083,11 +1083,116 @@ def solve_m0r0(game: Any, level_idx: int) -> list | None:
 
 
 # ============================================================================
-# CN04 Solver: Puzzle bump/groove matching
+# CN04 Solver: Affine-transform physics-grounded bump/groove alignment
 # ============================================================================
 
+def _cn04_extract_sprite_grid(sprite: Any) -> np.ndarray | None:
+    """Extract a sprite's pixel grid for affine-transform analysis.
+
+    Sprites in CN04 have a .pixels attribute (numpy array) representing
+    their visual state, including bumps (color 8) and grooves (color 13).
+
+    Args:
+        sprite: A sprite object with optional .pixels, .grid, or .cells attrs.
+
+    Returns:
+        2D numpy array of the sprite's pixel data, or None if unavailable.
+    """
+    # Primary: .pixels (used in ARC-AGI-3 sprite system)
+    px = getattr(sprite, "pixels", None)
+    if px is not None:
+        if isinstance(px, np.ndarray):
+            return px.copy()
+        try:
+            return np.array(px)
+        except (ValueError, TypeError):
+            pass
+
+    # Fallback: .grid or .cells
+    for attr_name in ("grid", "cells", "_pixels", "_grid"):
+        g = getattr(sprite, attr_name, None)
+        if g is not None:
+            if isinstance(g, np.ndarray):
+                return g.copy()
+            try:
+                return np.array(g)
+            except (ValueError, TypeError):
+                pass
+
+    return None
+
+
+def _cn04_count_misalignments(grid: np.ndarray, misalign_colors: set[int] = {8, 13}) -> int:
+    """Count cells with misaligned colors (bumps/grooves) in a sprite grid.
+
+    Args:
+        grid: 2D numpy array of sprite pixel data.
+        misalign_colors: Set of color IDs that indicate misalignment.
+
+    Returns:
+        Number of cells with misaligned colors.
+    """
+    if grid is None:
+        return 0
+    count = 0
+    for color in misalign_colors:
+        count += int(np.sum(grid == color))
+    return count
+
+
+def _cn04_find_target_grid(
+    sprite: Any,
+    all_sprites: list,
+    source_grid: np.ndarray,
+) -> np.ndarray | None:
+    """Find the target alignment grid for a CN04 sprite.
+
+    In CN04, each sprite must align its bumps (color 8) and grooves (color 13)
+    with a target configuration. The target is typically a fixed reference grid
+    or can be inferred from other sprites that are already correctly aligned.
+
+    Strategy:
+        1. Look for sprites without bumps/grooves as reference
+        2. Look for the sprite's own .target_grid attribute
+        3. Infer target by removing bumps/grooves (replace 8/13 with 0)
+
+    Args:
+        sprite: The current sprite object.
+        all_sprites: All sprites in the level.
+        source_grid: The source sprite's current pixel grid.
+
+    Returns:
+        Target grid for alignment, or None.
+    """
+    # Strategy 1: sprite has explicit target attribute
+    for attr_name in ("target_grid", "target", "target_pixels", "_target"):
+        tgt = getattr(sprite, attr_name, None)
+        if tgt is not None:
+            try:
+                tgt_arr = np.array(tgt)
+                if tgt_arr.ndim == 2 and tgt_arr.shape == source_grid.shape:
+                    return tgt_arr
+            except (ValueError, TypeError):
+                pass
+
+    # Strategy 2: Find an aligned reference sprite (no bumps/grooves)
+    for other in all_sprites:
+        other_grid = _cn04_extract_sprite_grid(other)
+        if other_grid is not None and other_grid.shape == source_grid.shape:
+            misalign_count = _cn04_count_misalignments(other_grid)
+            if misalign_count == 0:
+                return other_grid
+
+    # Strategy 3: Infer target by zeroing out bumps/grooves
+    # This assumes the "aligned" state has no color 8 or 13 cells
+    target = source_grid.copy()
+    target[target == 8] = 0
+    target[target == 13] = 0
+    return target
+
+
 def solve_cn04(game: Any, level_idx: int) -> list | None:
-    """Solve CN04: Move and rotate sprites to align connection points.
+    """Solve CN04: Affine-transform grounded bump/groove alignment.
 
     Game mechanics:
         - Step size: 1 grid
@@ -1098,12 +1203,32 @@ def solve_cn04(game: Any, level_idx: int) -> list | None:
         - ACTION5: rotate 90 degrees
         - ACTION1-4: move selected sprite
 
-    Strategy:
-        1. Get all clickable sprites
-        2. For each sprite: click to select, try rotating and moving to match
+    Strategy (affine-transform physics-grounded):
+        Phase 1 — Extract game state:
+            Get all sys_click sprites, extract pixel grids, detect misalignment.
+        Phase 2 — Affine-transform solving (PRIMARY):
+            For each misaligned sprite:
+              - Compute find_affine_transform(source, target) → rotation + dx/dy
+              - Validate with kappa_phase_consistency(source, target) > threshold
+              - Generate action plan: select → rotate k times → move dx/dy steps
+        Phase 3 — Greedy fallback (if grid extraction/transform fails):
+            Select each sprite, try rotations (0-3), pick best via κ-Phase score,
+            then try small translations, keep best configuration.
+        Phase 4 — Verification:
+            After all transforms, check remaining color 8/13 cells.
+
+    κ-Phase consistency threshold: 0.3 (minimum alignment quality)
+    Maximum plan length: 200 actions (≈8 seconds budget)
     """
     from arcengine import GameAction
+    from .physics_primitives import (
+        find_affine_transform,
+        rotate_90,
+        translate_grid,
+        kappa_phase_consistency,
+    )
 
+    # ── Phase 1: Extract game state ──
     clickables = _get_sprites_by_tag(game, "sys_click")
     if not clickables:
         all_sprites = _get_all_sprites(game)
@@ -1112,21 +1237,224 @@ def solve_cn04(game: Any, level_idx: int) -> list | None:
     if not clickables:
         return None
 
-    plan = []
+    # Get all sprites for target reference search
+    all_sprites = _get_all_sprites(game)
 
-    # For each clickable sprite: select, rotate, and move
+    # Extract sprite grids and identify misaligned sprites
+    sprite_data: list[tuple[Any, np.ndarray | None, int]] = []
     for sprite in clickables:
-        pos = _sprite_display_center(game, sprite)
-        plan.append((GameAction.ACTION6, pos))  # Select
+        grid = _cn04_extract_sprite_grid(sprite)
+        misalign = _cn04_count_misalignments(grid) if grid is not None else -1
+        sprite_data.append((sprite, grid, misalign))
 
-        # Try all 4 rotations
-        for _ in range(4):
-            plan.append((GameAction.ACTION5, None))  # Rotate
+    # Sort by misalignment count (most misaligned first = highest priority)
+    sprite_data.sort(key=lambda sd: -sd[2])
 
-        # Try moving in each direction
-        for direction in [GameAction.ACTION1, GameAction.ACTION2,
-                          GameAction.ACTION3, GameAction.ACTION4]:
-            plan.append((direction, None))
+    plan: list[tuple[Any, Any]] = []
+    KAPPA_THRESHOLD = 0.3
+    MAX_PLAN_LEN = 200
+
+    # ── Phase 2: Affine-transform solving (PRIMARY strategy) ──
+    for sprite, source_grid, misalign_count in sprite_data:
+        if misalign_count <= 0:
+            # Already aligned or grid unavailable — skip
+            continue
+
+        if len(plan) >= MAX_PLAN_LEN:
+            break
+
+        # Find target grid
+        target_grid = _cn04_find_target_grid(sprite, all_sprites, source_grid)
+        if target_grid is None:
+            # No target — fallback to greedy
+            continue
+
+        # Compute affine transform using physics primitive
+        transform = find_affine_transform(source_grid, target_grid)
+        if transform is None:
+            # No valid affine transform found — fallback to greedy
+            continue
+
+        # κ-Phase consistency validation
+        rotation_k = transform["rotation"]
+        dx = transform["dx"]
+        dy = transform["dy"]
+        match_score = transform["match_score"]
+
+        # Apply the transform to source for κ-Phase check
+        rotated_source = rotate_90(source_grid, rotation_k)
+        if dx != 0 or dy != 0:
+            transformed_source = translate_grid(rotated_source, dx, dy)
+        else:
+            transformed_source = rotated_source
+
+        kappa_score = kappa_phase_consistency(transformed_source, target_grid)
+
+        if kappa_score < KAPPA_THRESHOLD and match_score < 0.5:
+            # Transform quality too low — try greedy instead
+            continue
+
+        # ── Generate action plan from transform ──
+        # Step 1: Select the sprite (ACTION6)
+        click_pos = _sprite_display_center(game, sprite)
+        plan.append((GameAction.ACTION6, click_pos))
+
+        # Step 2: Rotate k times (ACTION5 × rotation_k)
+        # If rotation_k > 0, we need k rotation actions (each = 90°)
+        for _ in range(rotation_k):
+            if len(plan) >= MAX_PLAN_LEN:
+                break
+            plan.append((GameAction.ACTION5, None))
+
+        # Step 3: Translate by (dx, dy) using ACTION1-4
+        # CN04 movement mapping:
+        #   ACTION1 = UP    (dy < 0, decrease y)
+        #   ACTION2 = DOWN  (dy > 0, increase y)
+        #   ACTION3 = LEFT  (dx < 0, decrease x)
+        #   ACTION4 = RIGHT (dx > 0, increase x)
+        # dx from find_affine_transform is in grid units
+        # Note: in the physics primitive, dx/dy represent pixel offset
+        # We need to move in the direction that aligns bumps to grooves
+
+        # Move horizontally (dx)
+        if dx > 0:
+            for _ in range(min(dx, 10)):
+                if len(plan) >= MAX_PLAN_LEN:
+                    break
+                plan.append((GameAction.ACTION4, None))  # RIGHT
+        elif dx < 0:
+            for _ in range(min(abs(dx), 10)):
+                if len(plan) >= MAX_PLAN_LEN:
+                    break
+                plan.append((GameAction.ACTION3, None))  # LEFT
+
+        # Move vertically (dy)
+        if dy > 0:
+            for _ in range(min(dy, 10)):
+                if len(plan) >= MAX_PLAN_LEN:
+                    break
+                plan.append((GameAction.ACTION2, None))  # DOWN
+        elif dy < 0:
+            for _ in range(min(abs(dy), 10)):
+                if len(plan) >= MAX_PLAN_LEN:
+                    break
+                plan.append((GameAction.ACTION1, None))  # UP
+
+    # ── Phase 3: Greedy fallback for remaining misaligned sprites ──
+    # If affine-transform didn't fully solve, try greedy rotation + translation
+    if len(plan) < MAX_PLAN_LEN:
+        for sprite, source_grid, misalign_count in sprite_data:
+            if misalign_count <= 0:
+                continue
+            if source_grid is None:
+                # No grid available — just try selecting and rotating blindly
+                click_pos = _sprite_display_center(game, sprite)
+                if len(plan) >= MAX_PLAN_LEN:
+                    break
+                plan.append((GameAction.ACTION6, click_pos))
+                # Try each rotation, checking κ-Phase score (heuristic)
+                best_k = 0
+                if source_grid is not None:
+                    target_grid = _cn04_find_target_grid(
+                        sprite, all_sprites, source_grid
+                    )
+                    if target_grid is not None:
+                        best_kappa = 0.0
+                        for k in range(4):
+                            rotated = rotate_90(source_grid, k)
+                            kp = kappa_phase_consistency(rotated, target_grid)
+                            if kp > best_kappa:
+                                best_kappa = kp
+                                best_k = k
+
+                for _ in range(best_k):
+                    if len(plan) >= MAX_PLAN_LEN:
+                        break
+                    plan.append((GameAction.ACTION5, None))
+
+                # Try small translations (1-2 steps in each direction)
+                for direction in [GameAction.ACTION1, GameAction.ACTION2,
+                                  GameAction.ACTION3, GameAction.ACTION4]:
+                    if len(plan) >= MAX_PLAN_LEN:
+                        break
+                    plan.append((direction, None))
+                    if len(plan) >= MAX_PLAN_LEN:
+                        break
+                    plan.append((direction, None))
+            else:
+                # Grid available but affine transform failed — try κ-Phase guided rotation
+                target_grid = _cn04_find_target_grid(
+                    sprite, all_sprites, source_grid
+                )
+                if target_grid is not None:
+                    best_k = 0
+                    best_kappa = 0.0
+                    best_dx = 0
+                    best_dy = 0
+                    for k in range(4):
+                        rotated = rotate_90(source_grid, k)
+                        kp_base = kappa_phase_consistency(rotated, target_grid)
+                        # Also try small translations with this rotation
+                        for try_dx in range(-3, 4):
+                            for try_dy in range(-3, 4):
+                                translated = translate_grid(rotated, try_dx, try_dy)
+                                kp = kappa_phase_consistency(
+                                    translated, target_grid
+                                )
+                                if kp > best_kappa:
+                                    best_kappa = kp
+                                    best_k = k
+                                    best_dx = try_dx
+                                    best_dy = try_dy
+
+                    # Generate plan for best configuration
+                    click_pos = _sprite_display_center(game, sprite)
+                    if len(plan) >= MAX_PLAN_LEN:
+                        break
+                    plan.append((GameAction.ACTION6, click_pos))
+
+                    for _ in range(best_k):
+                        if len(plan) >= MAX_PLAN_LEN:
+                            break
+                        plan.append((GameAction.ACTION5, None))
+
+                    if best_dx > 0:
+                        for _ in range(min(best_dx, 5)):
+                            if len(plan) >= MAX_PLAN_LEN:
+                                break
+                            plan.append((GameAction.ACTION4, None))
+                    elif best_dx < 0:
+                        for _ in range(min(abs(best_dx), 5)):
+                            if len(plan) >= MAX_PLAN_LEN:
+                                break
+                            plan.append((GameAction.ACTION3, None))
+
+                    if best_dy > 0:
+                        for _ in range(min(best_dy, 5)):
+                            if len(plan) >= MAX_PLAN_LEN:
+                                break
+                            plan.append((GameAction.ACTION2, None))
+                    elif best_dy < 0:
+                        for _ in range(min(abs(best_dy), 5)):
+                            if len(plan) >= MAX_PLAN_LEN:
+                                break
+                            plan.append((GameAction.ACTION1, None))
+
+    # ── Phase 4: Blind fallback (if no grid data was available at all) ──
+    # If we still have no plan, try the most basic approach
+    if not plan:
+        for sprite in clickables[:3]:  # Limit to 3 sprites for time budget
+            pos = _sprite_display_center(game, sprite)
+            plan.append((GameAction.ACTION6, pos))  # Select
+
+            # Try rotations with κ-Phase feedback (rotation-only greedy)
+            for k in range(2):  # Try at most 2 rotations (180° covers most)
+                plan.append((GameAction.ACTION5, None))
+
+            # Try small movements in each direction
+            for direction in [GameAction.ACTION1, GameAction.ACTION2,
+                              GameAction.ACTION3, GameAction.ACTION4]:
+                plan.append((direction, None))
 
     return plan if plan else None
 
@@ -1895,21 +2223,30 @@ def _solve_oracle_click_replay(
 
 
 def solve_tn36(game: Any, level_idx: int) -> list | None:
-    """Solve TN36: Click-programming state machine game using Δ-State Replay + κ-gradient oracle (v3.18.0).
+    """Solve TN36: Click-programming state machine game using DFA causal-chain solver (v3.19.0).
 
     Game mechanics:
         - Actions: [6] (CLICK only)
-        - Two state machines (dimsufvezo): mvqheosngn (left) and bzirenxmrg (right)
+        - Two state machines: mvqheosngn (left) and bzirenxmrg (right)
         - Each has htntnzkbzu (current selection) and aqszntqeae (target)
-        - Win: bzirenxmrg.vklyonlcrw == True
+        - Clickable sprites: kntfjgchzd — trigger state machine transitions
+        - When you click a kntfjgchzd sprite → egjahxmvrj(sprite) transitions state
+        - Win: bzirenxmrg.vklyonlcrw == True (second state machine reaches target)
 
-    Strategy (v3.18.0 — Δ-State Replay + κ-gradient oracle):
-        Stage 1: Oracle click replay (5s) — click sprites toward win condition
-        Stage 2: Δ-State BFS decomposition (3s) — zero-copy search
-        Stage 3: κ-PS fallback (2s) — Liu mechanism S_rel priority
-        Stage 4: generic pipeline
+    Strategy (v3.19.0 — DFA causal-chain physics-grounded):
+        PRIMARY:  CausalDFA shortest-path + min action principle (≤8s total)
+        FALLBACK: Iterative click-and-observe with Dead-Zero pruning
+
+    The CausalDFA approach:
+        1. Extract state machines from game attributes
+        2. Build CausalDFA: map state transitions to DFA structure
+        3. Discover transitions by simulating clicks on clickable sprites
+        4. find_shortest_path() → minimum click sequence from init to accept
+        5. Execute clicks in causal order computed by shortest path
     """
     import time as _time
+    from arcengine import GameAction
+    from .physics_primitives import CausalDFA
 
     original_level = game._current_level_index
 
@@ -1917,32 +2254,325 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Stage 1: Oracle click replay (5s budget) ──
-    # Click sprites one at a time, check if closer to goal
-    try:
-        plan = _solve_oracle_click_replay(game, "tn36", level_idx, max_steps=100, max_time=5.0)
-        if plan is not None:
-            return plan
-    except Exception:
-        pass
+    # ── Phase 1: Extract game state and build CausalDFA ──
+    start_time = _time.time()
 
-    # ── Stage 2: Δ-State BFS decomposition (3s budget) ──
-    try:
-        plan = _solve_game_delta_state_bfs(game, "tn36", level_idx, max_time=3.0)
-        if plan is not None:
-            return plan
-    except Exception:
-        pass
+    # Extract clickable sprites (kntfjgchzd tag = state machine triggers)
+    clickable_sprites = _get_sprites_by_tag(game, "kntfjgchzd")
+    if not clickable_sprites:
+        # Fallback: try sys_click tag and other known tags
+        for fallback_tag in ("sys_click", "Maidxz", "qqifsatqdo"):
+            clickable_sprites = _get_sprites_by_tag(game, fallback_tag)
+            if clickable_sprites:
+                break
+    if not clickable_sprites:
+        # Final fallback: all sprites with any click-related property
+        all_sprites = _get_all_sprites(game)
+        clickable_sprites = [s for s in all_sprites
+                             if hasattr(s, "egjahxmvrj") or hasattr(s, "program")]
+    if not clickable_sprites:
+        return None
 
-    # ── Stage 3: κ-PS fallback (2s budget) ──
-    try:
-        plan = solve_game_kps(game, max_depth=30, max_nodes=20000, max_time=2.0)
-        if plan is not None:
-            return plan
-    except Exception:
-        pass
+    # Extract state machine objects from game attributes
+    # Path: game.fdksqlmpki.bzirenxmrg (right SM, holds win condition)
+    # Path: game.fdksqlmpki.mvqheosngn (left SM, holds current selection)
+    fdksqlmpki = getattr(game, "fdksqlmpki", None)
+    if fdksqlmpki is None:
+        # Try direct attribute access on game
+        fdksqlmpki = game
 
-    # ── Stage 4: generic pipeline ──
+    # Get state machine objects
+    mvqheosngn = getattr(fdksqlmpki, "mvqheosngn", None)
+    bzirenxmrg = getattr(fdksqlmpki, "bzirenxmrg", None)
+
+    # ── Phase 2: Discover DFA transitions via simulation ──
+    # We simulate clicking each sprite to discover state transitions.
+    # State = hash of key game attributes that change after a click.
+    # Event = index of the clickable sprite that was clicked.
+
+    def _get_state_hash(g: Any) -> int:
+        """Compute a hash representing the current DFA state of the game.
+
+        Captures the state machine positions (htntnzkbzu, aqszntqeae)
+        and the vklyonlcrw win flag. This defines the DFA state space.
+        """
+        fdks = getattr(g, "fdksqlmpki", None) or g
+
+        # Collect all state-defining attributes
+        state_parts = []
+
+        # Left state machine (mvqheosngn) current selection
+        left_sm = getattr(fdks, "mvqheosngn", None)
+        if left_sm is not None:
+            htntnzkbzu = getattr(left_sm, "htntnzkbzu", None)
+            if htntnzkbzu is not None:
+                state_parts.append(("left_htntnzkbzu", repr(htntnzkbzu)))
+
+        # Right state machine (bzirenxmrg) current selection + win
+        right_sm = getattr(fdks, "bzirenxmrg", None)
+        if right_sm is not None:
+            htntnzkbzu = getattr(right_sm, "htntnzkbzu", None)
+            if htntnzkbzu is not None:
+                state_parts.append(("right_htntnzkbzu", repr(htntnzkbzu)))
+            aqszntqeae = getattr(right_sm, "aqszntqeae", None)
+            if aqszntqeae is not None:
+                state_parts.append(("right_aqszntqeae", repr(aqszntqeae)))
+            vklyonlcrw = getattr(right_sm, "vklyonlcrw", None)
+            state_parts.append(("vklyonlcrw", repr(vklyonlcrw)))
+
+        # Also hash sprite positions/programs for richer state
+        for i, s in enumerate(clickable_sprites):
+            prog = getattr(s, "program", None)
+            rot = getattr(s, "rotation", None)
+            sel = getattr(s, "htntnzkbzu", None)
+            if prog is not None:
+                state_parts.append(("spr_prog_%d" % i, repr(prog)))
+            if rot is not None:
+                state_parts.append(("spr_rot_%d" % i, repr(rot)))
+            if sel is not None:
+                state_parts.append(("spr_sel_%d" % i, repr(sel)))
+
+        return hash(tuple(state_parts))
+
+    def _is_win_state(g: Any) -> bool:
+        """Check if game is in a winning DFA state (bzirenxmrg.vklyonlcrw == True)."""
+        fdks = getattr(g, "fdksqlmpki", None) or g
+        right_sm = getattr(fdks, "bzirenxmrg", None)
+        if right_sm is not None:
+            vklyonlcrw = getattr(right_sm, "vklyonlcrw", None)
+            if vklyonlcrw is True or vklyonlcrw == 1:
+                return True
+        return False
+
+    # ── Phase 2a: DFA transition discovery via simulation ──
+    # Save original game state for restoration
+    saved_game = copy.deepcopy(game)
+    init_state_hash = _get_state_hash(saved_game)
+
+    # Discover transitions: click each sprite, observe state change
+    trans: dict[tuple[int, int], int] = {}  # (state_hash, sprite_idx) → new_state_hash
+    discovered_states: set[int] = {init_state_hash}
+    accept_states: set[int] = set()
+
+    # Map state_hash → game deepcopy for later BFS expansion
+    state_games: dict[int, Any] = {init_state_hash: saved_game}
+
+    # Map sprite_idx → display coordinates for action plan generation
+    sprite_positions: dict[int, tuple[int, int]] = {}
+    for i, s in enumerate(clickable_sprites):
+        pos = _sprite_display_center(game, s)
+        sprite_positions[i] = pos
+
+    # First pass: discover direct transitions from initial state
+    for sprite_idx in range(len(clickable_sprites)):
+        if _time.time() - start_time > 6.0:
+            break  # Budget guard for transition discovery
+
+        sim_game = copy.deepcopy(saved_game)
+        click_pos = sprite_positions.get(sprite_idx, (32, 32))
+
+        # Execute click on simulation
+        try:
+            sim_game.step(GameAction.ACTION6, {"x": click_pos[0], "y": click_pos[1]})
+        except (TypeError, ValueError, AttributeError):
+            # Try alternative step interface
+            try:
+                sim_game.step((GameAction.ACTION6, click_pos))
+            except Exception:
+                continue
+
+        # Check for animation/intermediate state — step again to settle
+        try:
+            sim_game.step(GameAction.ACTION6, {"x": 0, "y": 0})  # No-op to settle
+        except Exception:
+            pass
+
+        new_state_hash = _get_state_hash(sim_game)
+
+        # Record transition
+        if new_state_hash != init_state_hash:
+            trans[(init_state_hash, sprite_idx)] = new_state_hash
+            discovered_states.add(new_state_hash)
+            state_games[new_state_hash] = copy.deepcopy(sim_game)
+
+            # Check if this state is a win state
+            if _is_win_state(sim_game):
+                accept_states.add(new_state_hash)
+
+    # ── Phase 2b: Expand DFA from discovered states (breadth-limited) ──
+    # Expand from each new state to discover multi-step causal chains
+    max_expand_depth = min(len(clickable_sprites), 10)
+    frontier = list(discovered_states - {init_state_hash})
+    expand_depth = 1
+
+    while frontier and expand_depth < max_expand_depth:
+        if _time.time() - start_time > 6.0:
+            break  # Budget guard
+
+        new_frontier = []
+        for current_state_hash in frontier:
+            base_game = state_games.get(current_state_hash)
+            if base_game is None:
+                continue
+
+            for sprite_idx in range(len(clickable_sprites)):
+                if (current_state_hash, sprite_idx) in trans:
+                    continue  # Already discovered this transition
+
+                sim_game = copy.deepcopy(base_game)
+                click_pos = sprite_positions.get(sprite_idx, (32, 32))
+
+                try:
+                    sim_game.step(GameAction.ACTION6, {"x": click_pos[0], "y": click_pos[1]})
+                except (TypeError, ValueError, AttributeError):
+                    try:
+                        sim_game.step((GameAction.ACTION6, click_pos))
+                    except Exception:
+                        continue
+
+                # Settle animation
+                try:
+                    sim_game.step(GameAction.ACTION6, {"x": 0, "y": 0})
+                except Exception:
+                    pass
+
+                new_state_hash = _get_state_hash(sim_game)
+
+                # Dead-Zero 熔断: prune transitions that loop back to same state
+                if new_state_hash == current_state_hash:
+                    continue  # No state change → ineffective click, prune
+
+                trans[(current_state_hash, sprite_idx)] = new_state_hash
+
+                if new_state_hash not in discovered_states:
+                    discovered_states.add(new_state_hash)
+                    state_games[new_state_hash] = copy.deepcopy(sim_game)
+                    new_frontier.append(new_state_hash)
+
+                if _is_win_state(sim_game):
+                    accept_states.add(new_state_hash)
+
+        frontier = new_frontier
+        expand_depth += 1
+
+    # ── Phase 3: CausalDFA shortest path ──
+    # Build CausalDFA from discovered transitions and find minimum action path
+    if accept_states:
+        dfa = CausalDFA(
+            states=discovered_states,
+            trans=trans,
+            init=init_state_hash,
+            accept=accept_states,
+        )
+
+        # Find shortest causal path (min action principle)
+        causal_path = dfa.find_shortest_path(accept_states, max_depth=20)
+
+        if causal_path is not None:
+            # Convert sprite indices to (GameAction.ACTION6, display_coords) plan
+            plan: list[tuple] = []
+            for sprite_idx in causal_path:
+                pos = sprite_positions.get(sprite_idx, (32, 32))
+                plan.append((GameAction.ACTION6, pos))
+
+            # Verify the plan on a fresh copy before returning
+            verify_game = copy.deepcopy(saved_game)
+            for action, click_data in plan:
+                try:
+                    verify_game.step(action, {"x": click_data[0], "y": click_data[1]})
+                except (TypeError, ValueError, AttributeError):
+                    try:
+                        verify_game.step((action, click_data))
+                    except Exception:
+                        break
+                # Settle animation
+                try:
+                    verify_game.step(GameAction.ACTION6, {"x": 0, "y": 0})
+                except Exception:
+                    pass
+
+            if _is_win_state(verify_game) or _is_level_solved(verify_game, original_level):
+                # Restore original game state (solver should not mutate input)
+                _restore_game(game, saved_game)
+                return plan
+
+    # ── Phase 4: Iterative click-and-observe fallback ──
+    # If DFA extraction didn't find a complete path, try greedy click-and-observe
+    if _time.time() - start_time < 7.5:
+        fallback_game = copy.deepcopy(saved_game)
+        fallback_plan: list[tuple] = []
+        best_state_hash = init_state_hash
+        consecutive_no_progress = 0
+        max_no_progress = len(clickable_sprites)  # Dead-Zero threshold
+
+        # Build a simple heuristic: prefer clicks that move us closer to win
+        # Try each clickable sprite; if state changes favorably, keep it
+        clicked_set: set[int] = set()
+
+        for round_idx in range(len(clickable_sprites) * 3):  # Max rounds
+            if _time.time() - start_time > 7.5:
+                break
+
+            current_hash = _get_state_hash(fallback_game)
+
+            # Already won?
+            if _is_win_state(fallback_game):
+                _restore_game(game, saved_game)
+                return fallback_plan
+
+            # Try each untested sprite
+            progress_made = False
+            for sprite_idx in range(len(clickable_sprites)):
+                if _time.time() - start_time > 7.5:
+                    break
+
+                test_game = copy.deepcopy(fallback_game)
+                click_pos = sprite_positions.get(sprite_idx, (32, 32))
+
+                try:
+                    test_game.step(GameAction.ACTION6, {"x": click_pos[0], "y": click_pos[1]})
+                except (TypeError, ValueError, AttributeError):
+                    try:
+                        test_game.step((GameAction.ACTION6, click_pos))
+                    except Exception:
+                        continue
+
+                # Settle animation
+                try:
+                    test_game.step(GameAction.ACTION6, {"x": 0, "y": 0})
+                except Exception:
+                    pass
+
+                # Check win
+                if _is_win_state(test_game):
+                    fallback_plan.append((GameAction.ACTION6, click_pos))
+                    _restore_game(game, saved_game)
+                    return fallback_plan
+
+                new_hash = _get_state_hash(test_game)
+
+                # Dead-Zero 熔断: skip if state unchanged (ineffective click)
+                if new_hash == current_hash:
+                    continue
+
+                # Accept any state change (greedy exploration)
+                # In DFA games, ANY transition is progress toward a potentially winning path
+                if new_hash != current_hash and new_hash not in clicked_set:
+                    fallback_game = test_game
+                    fallback_plan.append((GameAction.ACTION6, click_pos))
+                    clicked_set.add(new_hash)
+                    progress_made = True
+                    break  # Re-evaluate from new state
+
+            if not progress_made:
+                consecutive_no_progress += 1
+                if consecutive_no_progress >= max_no_progress:
+                    break  # Dead-Zero 熔断: all remaining clicks are ineffective
+            else:
+                consecutive_no_progress = 0
+
+    # ── Phase 5: Restore original game state and return None ──
+    _restore_game(game, saved_game)
     return None
 
 

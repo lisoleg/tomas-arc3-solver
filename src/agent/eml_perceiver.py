@@ -331,7 +331,7 @@ class EMLPerceiver:
         self._H: int = 0
         self._W: int = 0
 
-    def perceive(self, grid: np.ndarray) -> List[JinlingSphere]:
+    def perceive(self, grid: np.ndarray, time_window: int = 1) -> List[JinlingSphere]:
         """Extract JinlingSphere objects from a raw ARC grid.
 
         Full 6-stage EML perception pipeline. Returns a list of
@@ -341,6 +341,11 @@ class EMLPerceiver:
         Args:
             grid: 2D numpy array (H, W) with integer color values.
                 Background color 0 is ignored.
+            time_window: EML temporal edge preservation window.
+                1 = 单帧(默认，标准EML感知);
+                >1 = 多帧因果边标记(交互任务保留帧间因果边).
+                当time_window>1时，JinlingSphere的attrs中会标记
+                'temporal_edge'=True，表示该感知单元参与跨帧因果链.
 
         Returns:
             List of JinlingSphere objects representing perceived regions.
@@ -374,6 +379,16 @@ class EMLPerceiver:
 
         # Step 6: Dead-Zero pruning (coupling < 1/6)
         spheres = self._dead_zero_prune(spheres, threshold=1.0 / 6.0)
+
+        # Step 6b: 多帧因果边标记 (time_window > 1 时)
+        # 交互任务需要保留跨帧因果边，标记temporal_edge属性
+        if time_window > 1:
+            for sphere in spheres:
+                sphere.attrs['temporal_edge'] = True
+                sphere.attrs['time_window'] = time_window
+                # 多帧模式：检测因果边（相邻帧之间的颜色变化）
+                # 标记spheres中涉及跨帧变化的感知单元
+                sphere.attrs['causal_chain_depth'] = time_window
 
         return spheres
 

@@ -374,6 +374,8 @@ def solve_arc3_coset_search(
     time_limit: float = 30.0,
     ido_config: IDOConfig = IDOConfig(),
     verify_fn: Optional[Callable] = None,
+    coset_filter: Optional[List[int]] = None,
+    sporadic_pref: Optional[str] = None,
 ) -> CosetSearchResult:
     """Full coset-prioritized search pipeline for ARC-3 solving.
 
@@ -391,6 +393,12 @@ def solve_arc3_coset_search(
         time_limit: Maximum search time in seconds.
         ido_config: IDO configuration for pruning.
         verify_fn: Custom verification function (default: pixel match).
+        coset_filter: Optional list of coset indices to search.
+            None = 搜全330陪集; [0, 3] = 只搜陪集0和3.
+            缩小搜索范围可大幅加速（IDO/TOMAS §4.1效率质变）.
+        sporadic_pref: Sporadic group DSL routing preference.
+            None = auto检测; "M11"/"M12"/"M24"/"Niemeier"/"Monster" =
+            优先指定散在群过滤，引导DSL primitive选择.
 
     Returns:
         CosetSearchResult with solution status and metrics.
@@ -405,6 +413,45 @@ def solve_arc3_coset_search(
     # Step 2: Enumerate cosets
     cosets = enumerate_cosets(uv_features, target_dims, ido_config=ido_config)
     total_cosets = len(cosets)
+
+    # Step 2b: coset_filter — 缩小陪集搜索范围
+    # coset_filter=None → 搜全330陪集; coset_filter=[0,3] → 只搜指定陪集
+    if coset_filter is not None and len(coset_filter) > 0:
+        filtered_cosets: List[CosetCandidate] = []
+        for coset in cosets:
+            # 将coset的selected_features组合映射为coset索引
+            # 使用feature_indices tuple作为唯一标识
+            coset_idx = _coset_to_index(coset, len(uv_features), target_dims)
+            if coset_idx in coset_filter:
+                filtered_cosets.append(coset)
+        if filtered_cosets:
+            cosets = filtered_cosets
+        # 如果过滤后无结果，保留原coset列表（不退化）
+
+    # Step 2c: sporadic_pref — 优先指定散在群过滤
+    # 引导DSL primitive选择方向
+    if sporadic_pref is not None:
+        from .sporadic_group_filter import classify_sporadic_group
+        # 根据sporadic_pref调整coset优先级
+        sporadic_dsl_map: Dict[str, List[str]] = {
+            "M11": ["flip_diagonal_main", "flip_diagonal_anti", "chirality_apply"],
+            "M12": ["chirality_apply", "reflection_apply", "flip_horizontal"],
+            "M24": ["compose_apply", "decompose_apply", "octonion_apply"],
+            "Niemeier": ["rotation_apply", "symmetry_enforce", "periodic_apply"],
+            "Monster": ["compose_apply", "decompose_apply", "associate_apply"],
+        }
+        preferred_dsl_names: List[str] = sporadic_dsl_map.get(sporadic_pref, [])
+        if preferred_dsl_names:
+            # 给包含preferred DSL的coset提升优先级
+            for coset in cosets:
+                dsl_prims = build_dsl_for_coset(
+                    coset.selected_features, coset.symmetry_idx, uv_features
+                )
+                dsl_names = [p.get('name', '') for p in dsl_prims]
+                overlap = sum(1 for n in dsl_names if n in preferred_dsl_names)
+                coset.priority += overlap * 3.0  # Boost priority
+            # Re-sort by priority
+            cosets.sort(key=lambda c: c.priority, reverse=True)
     ido_pruned = 0
 
     # Step 3-4: Search each coset
@@ -490,6 +537,44 @@ def solve_arc3_coset_search(
 # §5. κ-Snap Integration Interface
 # =============================================================================
 
+def coset_prioritized_search(
+    input_grid: np.ndarray,
+    output_grid: np.ndarray,
+    target_dims: int = 4,
+    time_limit: float = 30.0,
+    ido_config: IDOConfig = IDOConfig(),
+    coset_filter: Optional[List[int]] = None,
+    sporadic_pref: Optional[str] = None,
+) -> CosetSearchResult:
+    """Convenience wrapper for solve_arc3_coset_search with injector params.
+
+    This is the primary entry point for the injector-driven pipeline.
+    It calls solve_arc3_coset_search with the additional coset_filter
+    and sporadic_pref parameters from SBInjector.
+
+    Args:
+        input_grid: Input ARC grid (2D numpy array).
+        output_grid: Expected output ARC grid.
+        target_dims: IR dimension target (default 4).
+        time_limit: Maximum search time in seconds.
+        ido_config: IDO configuration for pruning.
+        coset_filter: Optional list of coset indices. None = 搜全330.
+        sporadic_pref: Sporadic group routing preference. None = auto.
+
+    Returns:
+        CosetSearchResult with solution status and metrics.
+    """
+    return solve_arc3_coset_search(
+        input_grid=input_grid,
+        output_grid=output_grid,
+        target_dims=target_dims,
+        time_limit=time_limit,
+        ido_config=ido_config,
+        coset_filter=coset_filter,
+        sporadic_pref=sporadic_pref,
+    )
+
+
 def coset_search_as_kappa_snap_pre_filter(
     input_grid: np.ndarray,
     output_grid: np.ndarray,
@@ -549,6 +634,35 @@ def coset_search_as_kappa_snap_pre_filter(
 # =============================================================================
 # §6. Internal Helpers
 # =============================================================================
+
+def _coset_to_index(
+    coset: CosetCandidate,
+    n_uv: int,
+    target_dims: int,
+) -> int:
+    """Map a coset's selected features to a canonical coset index.
+
+    The coset index is determined by the combination of selected UV
+    feature indices (C(n_uv, target_dims) enumeration). Uses a
+    canonical ordering to map each C(n,k) combination to a unique
+    integer index in [0, C(n_uv, target_dims) - 1].
+
+    Args:
+        coset: CosetCandidate with selected_features list.
+        n_uv: Number of UV features.
+        target_dims: Number of IR dimensions (target selection size).
+
+    Returns:
+        Canonical coset index (0-based).
+    """
+    from itertools import combinations
+    selection = tuple(sorted(coset.selected_features))
+    all_combos = list(combinations(range(n_uv), target_dims))
+    try:
+        return all_combos.index(selection)
+    except ValueError:
+        return -1  # Unknown combination
+
 
 def _count_cc(grid: np.ndarray) -> int:
     """Count connected components (same color, 4-connected)."""

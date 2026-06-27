@@ -766,5 +766,70 @@ def _self_test() -> None:
     print("ALL SELF-TESTS PASSED")
 
 
+# =============================================================================
+# §7. EML-based Conjecture Production — Pipeline Integration
+# =============================================================================
+
+def conjecture_from_eml(
+    grid: np.ndarray,
+    spheres: Optional[List[Any]] = None,
+    enable_rm: bool = True,
+) -> List[Conjecture]:
+    """从EML感知结果生成DSL猜想 — pipeline集成入口.
+
+    这是injector驱动的管线中Stage 3 (Ramanujan Machine)的入口函数.
+    当enable_rm=False时，直接返回空列表，跳过PSLQ整数关系检测，
+    适用于交互任务(ka59/ar25/sb26)中RM搜索不高效的情况.
+
+    Args:
+        grid: 2D numpy array (ARC input grid).
+        spheres: Optional JinlingSphere list from EML perception.
+            None → 自动调用EMLPerceiver感知.
+        enable_rm: Ramanujan Machine开关.
+            True = 调用PSLQ/GCF/hypergeometric搜索;
+            False = 直接返回空列表，跳过RM阶段.
+
+    Returns:
+        List of Conjecture objects sorted by residual (best first).
+        Empty list if enable_rm=False or no conjectures found.
+    """
+    # enable_rm=False → 直接返回空列表，跳过PSLQ搜索
+    if not enable_rm:
+        return []
+
+    try:
+        # mpmath import 防御: PSLQ需要mpmath，但可选
+        try:
+            import mpmath
+            HAS_MPMATH: bool = True
+        except ImportError:
+            HAS_MPMATH = False
+
+        # 如果没有提供spheres，自动感知
+        if spheres is None:
+            from .eml_perceiver import EMLPerceiver
+            perceiver = EMLPerceiver()
+            spheres = perceiver.perceive(grid)
+
+        if not spheres:
+            return []
+
+        # 提取语义常量
+        from .semantic_constants import extract_semantic_constants
+        constants = extract_semantic_constants(spheres, grid)
+
+        # 生成猜想
+        producer = RamanujanConjectureProducer(
+            max_coeff=50 if HAS_MPMATH else 20,
+            tolerance=1e-4 if HAS_MPMATH else 0.01,
+        )
+        conjectures = producer.propose(constants)
+
+        return conjectures
+    except Exception:
+        # RM阶段失败 → 返回空列表（不影响后续管线阶段）
+        return []
+
+
 if __name__ == "__main__":
     _self_test()
