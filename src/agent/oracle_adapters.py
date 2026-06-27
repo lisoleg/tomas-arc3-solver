@@ -13,6 +13,10 @@ Adapter Registry:
     - LS20Adapter: LS20 game (player=gudziatsk, walls=plrpelhym, etc.)
     - TR87Adapter: TR87 game (walls=zdwrfusvmx, goals=ztgmtnnufb, etc.)
     - FT09Adapter: FT09 game (goals=fhc, player=zth, etc.)
+    - KA59Adapter: KA59 game (player=0022vrxelxosfy tag, blocks=0010xzmuziohuf tag, etc.)
+    - AR25Adapter: AR25 game (player=0006lxjtqggkmi tag, goals=0001sruqbuvukh tag, etc.)
+    - TN36Adapter: TN36 game (goals=kntfjgchzd tag, state_machines=mkfavqnwxy tag, etc.)
+    - SB26Adapter: SB26 game (goals=lngftsryyw tag, slots=susublrply tag, etc.)
 
 Usage:
     from .oracle_adapters import auto_detect_adapter, get_oracle_adapter
@@ -202,8 +206,13 @@ class OracleAdapter:
     def _get_sprite_list(self, attr_name: str) -> list:
         """Safely get a list of sprites from a game attribute.
 
+        This method should only be used when attr_name is a real game
+        attribute (e.g., 'fhc', 'mou', 'gig', 'zdwrfusvmx') — NOT for
+        sprite tag identifiers. For tag-based lookup, use _get_sprites_by_tag().
+
         Args:
-            attr_name: Name of the game attribute to access.
+            attr_name: Name of the game attribute to access (must be a
+                real attribute on the game object, not a sprite tag).
 
         Returns:
             List of sprite objects, or empty list if attribute
@@ -216,6 +225,63 @@ class OracleAdapter:
         except AttributeError:
             pass
         return []
+
+    def _get_sprites_by_tag(self, tag_name: str) -> list:
+        """Find sprites by their tag name (searching through sprite .tags).
+
+        Sprite tags (e.g., '0022vrxelxosfy', '0010xzmuziohuf') are stored
+        in each sprite object's .tags property, NOT as direct attributes on
+        the game object. Therefore getattr(game, '0022vrxelxosfy') would
+        return None/AttributeError, which is why _get_sprite_list() cannot
+        be used for tag-based identifiers.
+
+        This method first tries the game's current_level.get_sprites_by_tag()
+        (the canonical ARC-AGI-3 API for tag-based sprite lookup), then
+        falls back to scanning all game attributes for sprites whose .tags
+        contain the given tag_name.
+
+        Use this method instead of _get_sprite_list() whenever the identifier
+        looks like a sprite tag (random alphanumeric string, often starting
+        with digits like '0022vrxelxosfy') rather than a normal game attribute
+        name (short alphabetic strings like 'fhc', 'mou', 'gig').
+
+        Args:
+            tag_name: Tag name to search for (e.g., '0022vrxelxosfy',
+                '0010xzmuziohuf', 'sys_click', 'lngftsryyw').
+
+        Returns:
+            List of sprite objects that have this tag, or empty list if
+            none found.
+        """
+        # Primary approach: use current_level.get_sprites_by_tag() if
+        # available. This is the canonical API for tag-based sprite lookup
+        # in ARC-AGI-3 games and is used successfully in LS20Adapter.
+        try:
+            current_level = getattr(self.game, 'current_level', None)
+            if current_level is not None and hasattr(current_level, 'get_sprites_by_tag'):
+                sprites = current_level.get_sprites_by_tag(tag_name)
+                if sprites:
+                    return sprites
+        except (AttributeError, TypeError, Exception):
+            pass
+
+        # Fallback: brute-force scan through all game attributes to find
+        # sprites whose .tags property contains the given tag_name.
+        # This handles cases where current_level.get_sprites_by_tag() is
+        # not available or doesn't find the tag.
+        results: list = []
+        for attr_name in dir(self.game):
+            try:
+                val = getattr(self.game, attr_name)
+                if isinstance(val, list):
+                    for item in val:
+                        if hasattr(item, 'tags') and tag_name in item.tags:
+                            results.append(item)
+                elif hasattr(val, 'tags') and tag_name in val.tags:
+                    results.append(val)
+            except Exception:
+                continue
+        return results
 
 
 # ============================================================================
@@ -794,10 +860,15 @@ class KA59Adapter(OracleAdapter):
     def player(self) -> Optional[GameEntity]:
         """Get the player entity from KA59's 0022vrxelxosfy (first target sprite).
 
+        Note: '0022vrxelxosfy' is a sprite tag (stored in sprite.tags),
+        not a game attribute. Uses _get_sprites_by_tag() for proper lookup.
+
         Returns:
             GameEntity for the player, or None if not found.
         """
-        sprites = self._get_sprite_list('0022vrxelxosfy')
+        # 0022vrxelxosfy is a sprite tag, not a game attribute — must use
+        # _get_sprites_by_tag() instead of _get_sprite_list()
+        sprites = self._get_sprites_by_tag('0022vrxelxosfy')
         if sprites:
             p = sprites[0]
             return self._to_entity(p)
@@ -807,33 +878,45 @@ class KA59Adapter(OracleAdapter):
     def walls(self) -> list[GameEntity]:
         """Get wall entities from KA59's 0015qniapgwsvb (inner walls only).
 
+        Note: '0015qniapgwsvb' is a sprite tag, not a game attribute.
+        Uses _get_sprites_by_tag() for proper lookup.
+
         NOTE: Does NOT include 0029ifoxxfvvvs (51×51 boundary walls).
         Inner walls are the ones that affect pathfinding.
 
         Returns:
             List of wall GameEntity objects (inner walls only).
         """
-        sprites = self._get_sprite_list('0015qniapgwsvb')
+        # 0015qniapgwsvb is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('0015qniapgwsvb')
         return [self._to_entity(s) for s in sprites]
 
     @property
     def goals(self) -> list[GameEntity]:
         """Get goal entities from KA59's 0001uqqokjrptk.
 
+        Note: '0001uqqokjrptk' is a sprite tag, not a game attribute.
+        Uses _get_sprites_by_tag() for proper lookup.
+
         Returns:
             List of goal GameEntity objects.
         """
-        sprites = self._get_sprite_list('0001uqqokjrptk')
+        # 0001uqqokjrptk is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('0001uqqokjrptk')
         return [self._to_entity(s) for s in sprites]
 
     @property
     def blocks(self) -> list[GameEntity]:
         """Get pushable block entities from KA59's 0010xzmuziohuf (Sokoban blocks).
 
+        Note: '0010xzmuziohuf' is a sprite tag, not a game attribute.
+        Uses _get_sprites_by_tag() for proper lookup.
+
         Returns:
             List of block GameEntity objects (5x5 pushable blocks).
         """
-        sprites = self._get_sprite_list('0010xzmuziohuf')
+        # 0010xzmuziohuf is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('0010xzmuziohuf')
         return [self._to_entity(s) for s in sprites]
 
     @property
@@ -842,10 +925,13 @@ class KA59Adapter(OracleAdapter):
 
         ACTION6 click on any 0022vrxelxosfy sprite switches active player.
 
+        Note: '0022vrxelxosfy' is a sprite tag — uses _get_sprites_by_tag().
+
         Returns:
             List of all target switcher GameEntity objects.
         """
-        sprites = self._get_sprite_list('0022vrxelxosfy')
+        # 0022vrxelxosfy is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('0022vrxelxosfy')
         return [self._to_entity(s) for s in sprites]
 
     @property
@@ -855,10 +941,13 @@ class KA59Adapter(OracleAdapter):
         The enemy sprite chases the goal target. If enemy reaches goal,
         the game is lost.
 
+        Note: 'omeizjufss' is a sprite tag — uses _get_sprites_by_tag().
+
         Returns:
             GameEntity for the enemy, or None if not found.
         """
-        sprites = self._get_sprite_list('omeizjufss')
+        # omeizjufss is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('omeizjufss')
         if sprites:
             return self._to_entity(sprites[0])
         return None
@@ -902,10 +991,14 @@ class AR25Adapter(OracleAdapter):
     def player(self) -> Optional[GameEntity]:
         """Get the player/cursor entity from AR25's 0006lxjtqggkmi.
 
+        Note: '0006lxjtqggkmi' is a sprite tag, not a game attribute.
+        Uses _get_sprites_by_tag() for proper lookup.
+
         Returns:
             GameEntity for the player/cursor, or None if not found.
         """
-        sprites = self._get_sprite_list('0006lxjtqggkmi')
+        # 0006lxjtqggkmi is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('0006lxjtqggkmi')
         if sprites:
             p = sprites[0]
             return self._to_entity(p)
@@ -924,10 +1017,14 @@ class AR25Adapter(OracleAdapter):
     def goals(self) -> list[GameEntity]:
         """Get goal entities from AR25's 0001sruqbuvukh (coins to cover).
 
+        Note: '0001sruqbuvukh' is a sprite tag, not a game attribute.
+        Uses _get_sprites_by_tag() for proper lookup.
+
         Returns:
             List of coin GameEntity objects.
         """
-        sprites = self._get_sprite_list('0001sruqbuvukh')
+        # 0001sruqbuvukh is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('0001sruqbuvukh')
         return [self._to_entity(s) for s in sprites]
 
     @property
@@ -936,10 +1033,13 @@ class AR25Adapter(OracleAdapter):
 
         Pieces with this tag get reflected through mirror axes when moved.
 
+        Note: '0003uqrdzdofso' is a sprite tag — uses _get_sprites_by_tag().
+
         Returns:
             List of mirror GameEntity objects.
         """
-        sprites = self._get_sprite_list('0003uqrdzdofso')
+        # 0003uqrdzdofso is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('0003uqrdzdofso')
         return [self._to_entity(s) for s in sprites]
 
     @property
@@ -948,10 +1048,13 @@ class AR25Adapter(OracleAdapter):
 
         These pieces can only move UP/DOWN (constrained by vertical mirror tag).
 
+        Note: '0054kgxrvfihgm' is a sprite tag — uses _get_sprites_by_tag().
+
         Returns:
             List of vertical-only piece GameEntity objects.
         """
-        sprites = self._get_sprite_list('0054kgxrvfihgm')
+        # 0054kgxrvfihgm is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('0054kgxrvfihgm')
         return [self._to_entity(s) for s in sprites]
 
     @property
@@ -960,10 +1063,13 @@ class AR25Adapter(OracleAdapter):
 
         These pieces can only move LEFT/RIGHT (constrained by horizontal mirror tag).
 
+        Note: '0002nuguepuujf' is a sprite tag — uses _get_sprites_by_tag().
+
         Returns:
             List of horizontal-only piece GameEntity objects.
         """
-        sprites = self._get_sprite_list('0002nuguepuujf')
+        # 0002nuguepuujf is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('0002nuguepuujf')
         return [self._to_entity(s) for s in sprites]
 
     @property
@@ -974,13 +1080,17 @@ class AR25Adapter(OracleAdapter):
         ACTION6: click to select piece at grid position.
         ACTION7: undo last move.
 
+        Note: Both '0006lxjtqggkmi' and 'sys_click' are sprite tags,
+        not game attributes. Uses _get_sprites_by_tag() for proper lookup.
+
         Returns:
             List of switcher GameEntity objects.
         """
         result: list[GameEntity] = []
-        # Try common attribute names for switchers
-        for attr in ['0006lxjtqggkmi', 'sys_click']:
-            sprites = self._get_sprite_list(attr)
+        # 0006lxjtqggkmi and sys_click are sprite tags — use
+        # _get_sprites_by_tag() instead of _get_sprite_list()
+        for tag in ['0006lxjtqggkmi', 'sys_click']:
+            sprites = self._get_sprites_by_tag(tag)
             if sprites:
                 result.extend([self._to_entity(s) for s in sprites])
         # Deduplicate by position
@@ -1052,15 +1162,19 @@ class TN36Adapter(OracleAdapter):
 
         These are the clickable sprites that trigger state machine transitions.
 
+        Note: 'kntfjgchzd', 'Maidxz', 'qqifsatqdo', and 'sys_click' are
+        all sprite tags, not game attributes. Uses _get_sprites_by_tag().
+
         Returns:
             List of clickable goal GameEntity objects.
         """
-        sprites = self._get_sprite_list('kntfjgchzd')
+        # kntfjgchzd is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('kntfjgchzd')
         if sprites:
             return [self._to_entity(s) for s in sprites]
-        # Fallback tag names
+        # Fallback tag names — all are sprite tags, not game attributes
         for tag_name in ('Maidxz', 'qqifsatqdo', 'sys_click'):
-            sprites = self._get_sprite_list(tag_name)
+            sprites = self._get_sprites_by_tag(tag_name)
             if sprites:
                 return [self._to_entity(s) for s in sprites]
         return []
@@ -1088,7 +1202,8 @@ class TN36Adapter(OracleAdapter):
         right_sm = None
 
         # Try to get state machines from game attributes
-        mkfav_sprites = self._get_sprite_list('mkfavqnwxy')
+        # mkfavqnwxy is a sprite tag — use _get_sprites_by_tag()
+        mkfav_sprites = self._get_sprites_by_tag('mkfavqnwxy')
         if mkfav_sprites and len(mkfav_sprites) >= 1:
             left_sm = self._to_entity(mkfav_sprites[0])
         if mkfav_sprites and len(mkfav_sprites) >= 2:
@@ -1128,6 +1243,99 @@ class TN36Adapter(OracleAdapter):
 
 
 # ============================================================================
+# SB26Adapter: Oracle adapter for SB26 game (click-to-match pattern)
+# ============================================================================
+
+class SB26Adapter(OracleAdapter):
+    """Oracle adapter for SB26 game.
+
+    SB26 is a click-based matching/pattern game:
+    - Player: None (click-only game, no player entity)
+    - Walls: None (no walls in click game)
+    - Goals/click targets: sprites with tag 'lngftsryyw' (4 blocks, 6x6)
+    - Slots: sprites with tag 'susublrply' (8 slots to fill)
+    - sys_click sprites: UI interaction sprites
+    - Available actions: ACTION5 (select), ACTION6/7 (click)
+    - Step: 1
+
+    Win condition: match lngftsryyw blocks to susublrply slots correctly.
+    """
+
+    def __init__(self, game: Any, step: int = 1) -> None:
+        """Initialize SB26Adapter with step=1 for click positions."""
+        super().__init__(game, step)
+
+    @property
+    def player(self) -> Optional[GameEntity]:
+        """Get the player entity for SB26 (None — click-only game).
+
+        Returns:
+            None (SB26 has no player entity — only click actions).
+        """
+        return None
+
+    @property
+    def walls(self) -> list[GameEntity]:
+        """Get wall entities for SB26 (None — click-only game).
+
+        Returns:
+            Empty list (no walls in click game).
+        """
+        return []
+
+    @property
+    def goals(self) -> list[GameEntity]:
+        """Get goal/clickable entities from SB26's lngftsryyw (4 blocks).
+
+        Note: 'lngftsryyw' is a sprite tag, not a game attribute.
+        Uses _get_sprites_by_tag() for proper lookup.
+
+        Returns:
+            List of clickable block GameEntity objects (4 blocks).
+        """
+        # lngftsryyw is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('lngftsryyw')
+        return [self._to_entity(s) for s in sprites]
+
+    @property
+    def slots(self) -> list[GameEntity]:
+        """Get slot entities from SB26's susublrply (8 slots).
+
+        These are the 8 slot positions where blocks need to be placed.
+
+        Note: 'susublrply' is a sprite tag — uses _get_sprites_by_tag().
+
+        Returns:
+            List of slot GameEntity objects (8 slots).
+        """
+        # susublrply is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('susublrply')
+        return [self._to_entity(s) for s in sprites]
+
+    @property
+    def switchers(self) -> list[GameEntity]:
+        """Get sys_click switcher entities from SB26.
+
+        Note: 'sys_click' is a sprite tag — uses _get_sprites_by_tag().
+
+        Returns:
+            List of sys_click GameEntity objects.
+        """
+        # sys_click is a sprite tag — use _get_sprites_by_tag()
+        sprites = self._get_sprites_by_tag('sys_click')
+        return [self._to_entity(s) for s in sprites]
+
+    @property
+    def grid_size(self) -> int:
+        """Get grid size for SB26 (typically 64).
+
+        Returns:
+            Grid dimension from game attribute, or 64 as default.
+        """
+        return getattr(self.game, 'upmkivwyrxz', 64)
+
+
+# ============================================================================
 # Registry and factory functions
 # ============================================================================
 
@@ -1139,6 +1347,7 @@ ADAPTER_REGISTRY: dict[str, type[OracleAdapter]] = {
     'ka59': KA59Adapter,
     'ar25': AR25Adapter,
     'tn36': TN36Adapter,
+    'sb26': SB26Adapter,
 }
 
 
@@ -1180,7 +1389,11 @@ def auto_detect_adapter(game: Any, game_id: Optional[str] = None) -> Optional[Or
         1. LS20: has 'gudziatsk' attribute
         2. TR87: has 'zdwrfusvmx' and 'qvtymdcqear_parts' attributes
         3. FT09: has 'zth' and 'fhc' attributes
-        4. Universal: fallback for any game with env._game access.
+        4. KA59: has '0010xzmuziohuf' and '0022vrxelxosfy' sprite tags
+        5. AR25: has '0001sruqbuvukh' and '0006lxjtqggkmi' sprite tags
+        6. TN36: has 'kntfjgchzd' sprite tag
+        7. SB26: has 'lngftsryyw' and 'susublrply' sprite tags
+        8. Universal: fallback for any game with env._game access.
            Uses UniversalOracleAdapter to auto-discover entities.
            When game_id is provided, uses game_configs for entity detection.
 
@@ -1236,6 +1449,18 @@ def auto_detect_adapter(game: Any, game_id: Optional[str] = None) -> Optional[Or
             tn36_clickables = cl.get_sprites_by_tag('kntfjgchzd')
             if tn36_clickables:
                 return TN36Adapter(game)
+    except (AttributeError, TypeError):
+        pass
+
+    # Check SB26 — Click-to-match game has lngftsryyw blocks and
+    # susublrply slots
+    try:
+        cl = getattr(game, 'current_level', None)
+        if cl is not None and hasattr(cl, 'get_sprites_by_tag'):
+            sb26_blocks = cl.get_sprites_by_tag('lngftsryyw')
+            sb26_slots = cl.get_sprites_by_tag('susublrply')
+            if sb26_blocks and sb26_slots:
+                return SB26Adapter(game)
     except (AttributeError, TypeError):
         pass
 

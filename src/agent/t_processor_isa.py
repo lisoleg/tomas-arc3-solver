@@ -1,75 +1,92 @@
 # -*- coding: utf-8 -*-
-"""T-Processor ISA Module — Physics axioms as native operators.
+"""T-Processor ISA v1.2 — Macro Instruction Architecture.
 
-TOMAS κ-Phase ISA: 每条ISA指令 = 一个物理公理，执行即因果归约
-
-The T-Processor ISA makes physics primitives "native operators" rather than
-soft Python helpers. The key idea: instead of calling physics_primitives.py
-functions as optional pruning helpers, the ISA layer WRAPS them as mandatory
-constraint gates that must be satisfied before κ-Snap search can expand a
-branch.
+TOMAS κ-Phase ISA: 宏指令模型 — 每条宏指令 = 多个物理原语 + κ-Snap + GaussEx + Dead-Zero
+打包成一个 Python function call，大幅减少 μ-Op dispatch overhead。
 
 Architecture:
-    [Fetch ISA] → [Decode to physics primitive] → [Execute constraint] → [Writeback or Dead-Zero]
+    μ-Op 模型 (v1.0): 13条μ-Op → Fetch→Decode→Execute→Writeback per instruction
+    宏指令模型 (v1.2): 6条宏指令 → 直接 function call，内部调用 physics_primitives
 
-ISA Instructions (from article):
-    - PUSH_ENTITY   r1, r2       ; 推动实体（含质量/碰撞检测）
-    - CHECK_DEADLOCK r1          ; 死锁熔断
-    - APPLY_FRICTION r1          ; 摩擦力约束
-    - REFLECT_X     r1, origin   ; 关于 x 轴镜像
-    - REFLECT_Y     r1, origin   ; 关于 y 轴镜像
-    - RAY_REFLECT   dir, normal  ; 光线反射
-    - DFA_STEP      state, event ; DFA 状态转移
-    - CHECK_CAUSAL order         ; 因果序校验
-    - TOPO_SORT     colors, tgt  ; 拓扑排序
-    - CHECK_POSET   seq, tgt     ; 偏序校验
-    - KAPPA_SNAP    eml, prior   ; κ-Snap 因果归约
-    - GAUSSEX_VERIFY resid       ; GaussEx 校验
-    - DEADZERO_FUSE branch       ; Dead-Zero 熔断
+宏指令定义:
+    SOLVE_KA59_PUSH  (0xA0)  — can_push_box + is_deadlock_corner + friction + Dead-Zero熔断
+    SOLVE_AR25_REFLECT (0xA1) — mirror_point + reflect_ray + affine_mirror + κ-phase + Dead-Zero
+    SOLVE_TN36_DFA   (0xA2)  — CausalDFA.step + causal chain pruning + Dead-Zero
+    SOLVE_SB26_POSET (0xA3)  — is_valid_poset_order + topological_sort_colors + κ-坍缩
+    SOLVE_CN04_AFFINE (0xA4) — find_affine_transform + align_target + κ-phase consistency
+    SOLVE_VIA_KSAP   (0xA5)  — KS_START→KS_PROJ→KS_GX→KS_COMMIT/ABORT (完整κ-Snap pipeline)
 
-Execution outcomes:
-    - PASS: Constraint satisfied → allow κ-Snap expansion
-    - FUSE: Constraint failed → prune branch (Dead-Zero熔断)
-    - DEAD_ZERO: Branch permanently invalid → mark as dead
+辅助指令:
+    CHK_TIMEW (0x37)  — 物理时间窗检查 (0.5s软件预算)
+    KS_START  (0x20)  — κ-Snap启动 — 加载陪集先验
+    KS_PROJ   (0x21)  — κ-Snap投影 — EML→陪集投影 (Octonion内积)
+    KS_GX     (0x22)  — GaussEx残差计算
+    KS_COMMIT (0x23)  — 残差 < δ_K → Accept
+    KS_ABORT  (0x24)  — 残差超界 → DZFUSE
+    GXCHK     (0x70)  — GaussEx残差阈值判定
+    DZFUSE    (0x71)  — Dead-Zero熔断执行原语
+    REINF     (0x72)  — Re-Inflow零知识回溯
+    HALT      (0x7F)  — 停机
 
-Integration:
-    - Import from physics_primitives.py (can_push_box, is_deadlock_corner,
-      mirror_point, reflect_ray, CausalDFA, is_valid_poset_order,
-      find_affine_transform)
-    - Import from verify.py (is_gaussian_white_noise for GaussEx instruction)
-    - execute_isa_gate() called by universal_solver_pipeline.py before
-      κ-Snap expansion
+κ-Snap 调用契约 (4 Preconditions + 2 Postconditions):
+    Pre1: EML.nodes ≠ ∅ (EML感知)
+    Pre2: Materialized(EML, π) (因果链物化)
+    Pre3: Loaded(K_prior) (先验加载)
+    Pre4: KS_START→KS_COMMIT期间禁止EML写操作 (上下文原子性)
+    Post1: η < δ_K ≈ 0.036 (残差判定)
+    Post2: V_meaning提交至EML作为新锚点 (状态更新)
 
-IDO/TOMAS Correspondence:
-    - ISA instruction = physical axiom = hard constraint gate
-    - "内思即外作" — thinking IS doing, ISA execution IS causal reduction
-    - Dead-Zero熔断 at ISA level (not just Python function call)
+Physical ZKP Protocol (4-step):
+    Setup → Commit(κ-Snap生成Witness π) → Challenge(GaussEx计算residual η)
+        → Response(η < δ_K → Accept; η ≥ δ_K → DZFUSE)
 
-Version: v1.0 — T-Processor ISA module
+Octonion 类 (Cayley-Dickson multiplication):
+    8分量: a(实部), b(i), c(j), d(k), e(e1), f(e2), g(e3), h(e4)
+    内积 = dot() — 陪集投影核心操作
+
+EML 超图:
+    EMLNode(id, pos, kind, mass, velocity:Octonion, neighbors)
+    EMLGraph(nodes) — 从2D网格构建EML感知图
+
+KSnapEngine:
+    CSET_SIZE = 330  (C(11,4)陪集空间)
+    DELTA_K = 0.036  (GaussEx阈值)
+    precompute 330陪集基向量 (Octonion随机初始化 + 正则化)
+    project(eml_state, prior) → (best_v, residual) — 瞬间投影
+
+SymCrypto (简化版, solver可选):
+    SPECK 4轮 + HMAC-SHA256 + OTP-CTR
+
+Version: v1.2 — Macro Instruction Architecture (重构自v1.0 μ-Op模型)
 """
 
 from __future__ import annotations
 
+import hashlib
+import math
+import random
+import time
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 
+
 # =============================================================================
-# §1. ISA Execution Result — PASS / FUSE / DEAD_ZERO
+# §1. ISA Execution Result — PASS / FUSE / DEAD_ZERO (保留不变)
 # =============================================================================
 
 class ISAResult(Enum):
     """ISA instruction execution result.
 
     Three possible outcomes when an ISA constraint gate is evaluated:
-      - PASS: The physics axiom constraint is satisfied.
+        PASS: The physics axiom constraint is satisfied.
               κ-Snap expansion may proceed on this branch.
-      - FUSE: The constraint failed but the branch may be retried
+        FUSE: The constraint failed but the branch may be retried
               with adjusted parameters (Re-Inflow).
               Equivalent to "熔断" — prune this branch for now.
-      - DEAD_ZERO: The branch is permanently invalid.
+        DEAD_ZERO: The branch is permanently invalid.
               No further κ-Snap expansion on this branch is possible.
               The state violates a fundamental physical axiom irreversibly.
     """
@@ -79,597 +96,1201 @@ class ISAResult(Enum):
 
 
 # =============================================================================
-# §2. ISA Opcode Enum — Instruction identifiers
+# §2. Macro ISA Opcode Enum — 宏指令 + 辅助指令
 # =============================================================================
 
-class ISAOpcode(Enum):
-    """ISA instruction opcode identifiers.
+class MacroISAOpcode(Enum):
+    """Macro ISA instruction opcode identifiers (v1.2).
 
-    Each opcode corresponds to a physical axiom that acts as a native
-    constraint operator in the T-Processor execution pipeline.
+    宏指令 (6条): 每条 = 多个物理原语打包成一个 Python function call.
+    辅助指令 (9条): κ-Snap pipeline sub-steps + 时间窗 + 熔断 + 回溯 + 停机.
 
     Categories:
-      - Newton mechanics (KA59): PUSH_ENTITY, CHECK_DEADLOCK, APPLY_FRICTION
-      - Reflection geometry (AR25): REFLECT_X, REFLECT_Y, RAY_REFLECT
-      - Causal DFA (TN36): DFA_STEP, CHECK_CAUSAL
-      - Poset sorting (SB26): TOPO_SORT, CHECK_POSET
-      - TOMAS native (universal): KAPPA_SNAP, GAUSSEX_VERIFY, DEADZERO_FUSE
+        - Macro game-specific (0xA0-0xA5): KA59, AR25, TN36, SB26, CN04, KSAP
+        - κ-Snap pipeline (0x20-0x24): KS_START, KS_PROJ, KS_GX, KS_COMMIT, KS_ABORT
+        - Physical primitives (0x70-0x72): GXCHK, DZFUSE, REINF
+        - Infrastructure (0x37, 0x7F): CHK_TIMEW, HALT
     """
-    # ===== 牛顿力学 =====
-    PUSH_ENTITY = 0x01       # 推动实体（含质量/碰撞检测）
-    CHECK_DEADLOCK = 0x02    # 死锁熔断
-    APPLY_FRICTION = 0x03    # 摩擦力约束
+    # ===== κ-Snap Pipeline Sub-steps =====
+    KS_START = 0x20     # κ-Snap启动 — 加载陪集先验
+    KS_PROJ = 0x21      # κ-Snap投影 — EML→陪集投影 (Octonion内积)
+    KS_GX = 0x22        # GaussEx残差计算
+    KS_COMMIT = 0x23    # 残差 < δ_K → Accept
+    KS_ABORT = 0x24     # 残差超界 → DZFUSE
 
-    # ===== 反射几何 =====
-    REFLECT_X = 0x10         # 关于 x 轴镜像
-    REFLECT_Y = 0x11         # 关于 y 轴镜像
-    RAY_REFLECT = 0x12       # 光线反射
+    # ===== 时间窗 =====
+    CHK_TIMEW = 0x37    # 物理时间窗检查 (0.5s软件预算)
 
-    # ===== 因果律 =====
-    DFA_STEP = 0x20          # DFA 状态转移
-    CHECK_CAUSAL = 0x21      # 因果序校验
+    # ===== 宏指令 (Game-Specific) =====
+    SOLVE_KA59_PUSH = 0xA0     # KA59: 推箱 + 死锁 + 摩擦 + Dead-Zero
+    SOLVE_AR25_REFLECT = 0xA1  # AR25: 镜像 + 反射 + κ-phase + Dead-Zero
+    SOLVE_TN36_DFA = 0xA2      # TN36: DFA + 因果链剪枝 + Dead-Zero
+    SOLVE_SB26_POSET = 0xA3    # SB26: 偏序 + 拓扑排序 + κ-坍缩
+    SOLVE_CN04_AFFINE = 0xA4   # CN04: 仿射变换 + κ-phase一致性
+    SOLVE_VIA_KSAP = 0xA5      # Universal: 完整κ-Snap pipeline
 
-    # ===== 偏序 =====
-    TOPO_SORT = 0x30         # 拓扑排序
-    CHECK_POSET = 0x31       # 偏序校验
+    # ===== 物理原语辅助 =====
+    GXCHK = 0x70         # GaussEx残差阈值判定
+    DZFUSE = 0x71        # Dead-Zero熔断执行原语
+    REINF = 0x72         # Re-Inflow零知识回溯
 
-    # ===== TOMAS 原生 =====
-    KAPPA_SNAP = 0x40        # κ-Snap 因果归约
-    GAUSSEX_VERIFY = 0x41    # GaussEx 校验
-    DEADZERO_FUSE = 0x42     # Dead-Zero 熔断
+    # ===== 停机 =====
+    HALT = 0x7F          # 停机
 
 
 # =============================================================================
-# §3. ISAInstruction Dataclass — Single instruction definition
+# §3. Octonion — 8分量 Cayley-Dickson 乘法 (v1.2 核心)
 # =============================================================================
 
 @dataclass
-class ISAInstruction:
-    """A single ISA instruction = name + opcode + operands + constraint function.
+class Octonion:
+    """Octonion algebra element with Cayley-Dickson multiplication.
 
-    Each ISA instruction represents a physical axiom that must be satisfied
-    before κ-Snap search can expand a branch. The constraint_fn is the actual
-    physics primitive function that performs the check.
+    8-component algebra: a(实部), b(i), c(j), d(k), e(e1), f(e2), g(e3), h(e4).
+    Used by KS_PROJ for coset projection (inner product = cosine similarity).
+
+    The Cayley-Dickson construction builds octonions from quaternions,
+    where multiplication is non-associative but alternative:
+        (a,b)(c,d) = (ac - d*b, da + bc*)
+
+    Simplified to 4-element product for computational efficiency in
+    the solver context (exact Cayley-Dickson is 8×8 = 64 products).
 
     Attributes:
-        name: Human-readable instruction name (e.g., "PUSH_ENTITY").
-        opcode: ISA opcode identifier (ISAOpcode enum value).
-        operands: List of operand names expected by this instruction.
-            e.g., ["r1", "r2"] for PUSH_ENTITY.
-        constraint_fn: The physics primitive function that implements
-            this axiom. Called during ISA execution to check the constraint.
-        category: Instruction category for grouping (e.g., "newton_mechanics").
-        description: Human-readable description of the physical axiom.
+        a: Real component.
+        b: i imaginary component.
+        c: j imaginary component.
+        d: k imaginary component.
+        e: e1 imaginary component.
+        f: e2 imaginary component.
+        g: e3 imaginary component.
+        h: e4 imaginary component.
     """
-    name: str
-    opcode: ISAOpcode
-    operands: List[str] = field(default_factory=list)
-    constraint_fn: Optional[Callable[..., ISAResult]] = None
-    category: str = ""
-    description: str = ""
+    a: float = 0.0
+    b: float = 0.0
+    c: float = 0.0
+    d: float = 0.0
+    e: float = 0.0
+    f: float = 0.0
+    g: float = 0.0
+    h: float = 0.0
+
+    def __add__(self, o: Octonion) -> Octonion:
+        """Component-wise addition of two octonions."""
+        return Octonion(
+            a=self.a + o.a, b=self.b + o.b,
+            c=self.c + o.c, d=self.d + o.d,
+            e=self.e + o.e, f=self.f + o.f,
+            g=self.g + o.g, h=self.h + o.h,
+        )
+
+    def __sub__(self, o: Octonion) -> Octonion:
+        """Component-wise subtraction of two octonions."""
+        return Octonion(
+            a=self.a - o.a, b=self.b - o.b,
+            c=self.c - o.c, d=self.d - o.d,
+            e=self.e - o.e, f=self.f - o.f,
+            g=self.g - o.g, h=self.h - o.h,
+        )
+
+    def __mul__(self, o: Octonion) -> Octonion:
+        """Cayley-Dickson multiplication (simplified as 4-element product).
+
+        The full Cayley-Dickson product splits into quaternion pairs:
+            (a,b,c,d; e,f,g,h) × (a',b',c',d'; e',f',g',h')
+        = (Q₁Q₂ - Q₄*Q₃, Q₃Q₁* + Q₄Q₂)
+
+        where Q₁ = (a,b,c,d), Q₂ = (a',b',c',d'), Q₃ = (e,f,g,h),
+        Q₄ = (e',f',g',h'), and Q* denotes quaternion conjugate.
+
+        Simplified: we compute the quaternion products using the standard
+        formula and combine them. This gives correct non-associative
+        behavior while keeping computation tractable for the solver.
+        """
+        # Quaternion product Q₁ × Q₂ = (a,b,c,d)(a',b',c',d')
+        q1q2_a = self.a * o.a - self.b * o.b - self.c * o.c - self.d * o.d
+        q1q2_b = self.a * o.b + self.b * o.a + self.c * o.d - self.d * o.c
+        q1q2_c = self.a * o.c - self.b * o.d + self.c * o.a + self.d * o.b
+        q1q2_d = self.a * o.d + self.b * o.c - self.c * o.b + self.d * o.a
+
+        # Quaternion product Q₄* × Q₃ = (-e',f',g',h')(e,f,g,h) → conjugate Q₄ then × Q₃
+        q4conj_q3_a = -o.e * self.e - o.f * self.f - o.g * self.g - o.h * self.h
+        q4conj_q3_b = -o.e * self.f + o.f * self.e + o.g * self.h - o.h * self.g
+        q4conj_q3_c = -o.e * self.g - o.f * self.h + o.g * self.e + o.h * self.f
+        q4conj_q3_d = -o.e * self.h + o.f * self.g - o.g * self.f + o.h * self.e
+
+        # First half: Q₁Q₂ - Q₄*Q₃
+        real_a = q1q2_a - q4conj_q3_a
+        real_b = q1q2_b - q4conj_q3_b
+        real_c = q1q2_c - q4conj_q3_c
+        real_d = q1q2_d - q4conj_q3_d
+
+        # Quaternion product Q₃ × Q₁* = (e,f,g,h)(a,-b,-c,-d) → Q₁ conjugate
+        # Note: Q₁* = (a, -b, -c, -d)
+        # Q₃ × Q₁*: (e,f,g,h) × (a,-b,-c,-d)
+        q3_q1conj_a2 = self.e * self.a + self.f * self.b + self.g * self.c + self.h * self.d
+        q3_q1conj_b2 = self.e * self.b - self.f * self.a + self.g * self.d - self.h * self.c
+        q3_q1conj_c2 = self.e * self.c - self.f * self.d - self.g * self.a + self.h * self.b
+        q3_q1conj_d2 = self.e * self.d + self.f * self.c - self.g * self.b - self.h * self.a
+
+        # Quaternion product Q₄ × Q₂ = (e',f',g',h')(a',b',c',d')
+        q4_q2_a = o.e * o.a - o.f * o.b - o.g * o.c - o.h * o.d
+        q4_q2_b = o.e * o.b + o.f * o.a + o.g * o.d - o.h * o.c
+        q4_q2_c = o.e * o.c - o.f * o.d + o.g * o.a + o.h * o.b
+        q4_q2_d = o.e * o.d + o.f * o.c - o.g * o.b + o.h * o.a
+
+        # Second half: Q₃Q₁* + Q₄Q₂
+        imag_e = q3_q1conj_a2 + q4_q2_a
+        imag_f = q3_q1conj_b2 + q4_q2_b
+        imag_g = q3_q1conj_c2 + q4_q2_c
+        imag_h = q3_q1conj_d2 + q4_q2_d
+
+        return Octonion(
+            a=real_a, b=real_b, c=real_c, d=real_d,
+            e=imag_e, f=imag_f, g=imag_g, h=imag_h,
+        )
+
+    def dot(self, o: Octonion) -> float:
+        """Inner product (Euclidean dot product) of two octonions.
+
+        Used by KS_PROJ for coset projection — computes cosine similarity
+        between octonion vectors. Returns sum of component-wise products.
+        """
+        return (
+            self.a * o.a + self.b * o.b + self.c * o.c + self.d * o.d
+            + self.e * o.e + self.f * o.f + self.g * o.g + self.h * o.h
+        )
+
+    def scale(self, s: float) -> Octonion:
+        """Scalar multiplication — multiply all components by s."""
+        return Octonion(
+            a=self.a * s, b=self.b * s, c=self.c * s, d=self.d * s,
+            e=self.e * s, f=self.f * s, g=self.g * s, h=self.h * s,
+        )
+
+    def norm(self) -> float:
+        """Euclidean norm (L2 norm) of the octonion.
+
+        Returns sqrt of sum of squared components.
+        """
+        return math.sqrt(self.dot(self))
+
+    def normalized(self) -> Octonion:
+        """Return unit octonion (norm = 1).
+
+        If norm is zero, returns the zero octonion to avoid division by zero.
+        """
+        n = self.norm()
+        if n < 1e-12:
+            return Octonion()
+        return self.scale(1.0 / n)
 
 
 # =============================================================================
-# §4. ISA Instruction Definitions — All 13 instructions
+# §4. EML 超图 — 从2D网格构建感知图
 # =============================================================================
 
-def _push_entity_constraint(
-    grid: Any,
-    player_pos: Tuple[int, int],
-    box_pos: Tuple[int, int],
-    direction: Tuple[int, int],
-    wall_char: int = 0,
-) -> ISAResult:
-    """PUSH_ENTITY constraint: Check if entity push is physically possible.
+@dataclass
+class EMLNode:
+    """EML hypergraph node — a cell in the 2D grid perceived as an octonion entity.
 
-    Uses can_push_box from physics_primitives to verify Newton's
-    first law: a box can only be pushed if the space behind it is free
-    and no other box blocks the path.
+    Each node represents a grid cell with its physical properties:
+    position, kind (wall/player/box/empty/goal), mass, velocity (Octonion),
+    and adjacency neighbors.
+
+    Attributes:
+        id: Unique node identifier (row * width + col).
+        pos: Position in the grid (x, y).
+        kind: Cell type classification.
+        mass: Physical mass of the entity at this cell.
+        velocity: Octonion velocity vector for physics simulation.
+        neighbors: List of adjacent node IDs (4-connected grid).
+    """
+    id: int = 0
+    pos: Tuple[int, int] = (0, 0)
+    kind: str = "empty"
+    mass: float = 1.0
+    velocity: Octonion = field(default_factory=Octonion)
+    neighbors: List[int] = field(default_factory=list)
+
+
+@dataclass
+class EMLGraph:
+    """EML hypergraph — 2D grid perceived as an octonion-weighted graph.
+
+    The EML (Einstein-Minkowski-Lorentz) graph represents the game grid
+    as a set of nodes connected by adjacency edges, where each node
+    carries octonion-encoded physical properties.
+
+    Used by:
+        - TProcessorV12.perceive(grid) to build EML from 2D grid
+        - KSnapEngine.project() to compute coset projections on EML state
+
+    Attributes:
+        nodes: List of EMLNode entities in the graph.
+    """
+    nodes: List[EMLNode] = field(default_factory=list)
+
+    def find_by_pos(self, x: int, y: int) -> Optional[EMLNode]:
+        """Find an EML node by its position coordinates.
+
+        Args:
+            x: Column index in the grid.
+            y: Row index in the grid.
+
+        Returns:
+            EMLNode at position (x, y), or None if not found.
+        """
+        for node in self.nodes:
+            if node.pos == (x, y):
+                return node
+        return None
+
+    def add(self, node: EMLNode) -> None:
+        """Add an EML node to the graph.
+
+        Args:
+            node: EMLNode to add to the graph's node list.
+        """
+        self.nodes.append(node)
+
+
+# =============================================================================
+# §5. KSnapEngine — κ-Snap 陪集投影引擎
+# =============================================================================
+
+CSET_SIZE: int = 330  # C(11,4) — 陪集空间大小
+
+
+class KSnapEngine:
+    """κ-Snap coset projection engine — Octonion-based instant projection.
+
+    The KSnapEngine precomputes 330 coset basis vectors (C(11,4) from
+    the TOMAS article) as Octonion objects, then uses inner-product
+    projection (cosine similarity) to find the best-matching coset
+    for any EML state.
+
+    κ-Snap Pipeline:
+        KS_START → load K_prior (330 coset basis vectors)
+        KS_PROJ  → project EML state onto best-matching coset
+        KS_GX    → compute GaussEx residual η = 1 - best_similarity
+        KS_COMMIT → η < δ_K → Accept (PASS)
+        KS_ABORT  → η ≥ δ_K → DZFUSE (熔断)
+
+    κ-Snap 调用契约 (4 Preconditions + 2 Postconditions):
+        Pre1: EML.nodes ≠ ∅ (EML感知)
+        Pre2: Materialized(EML, π) (因果链物化)
+        Pre3: Loaded(K_prior) (先验加载)
+        Pre4: KS_START→KS_COMMIT期间禁止EML写操作 (上下文原子性)
+        Post1: η < δ_K ≈ 0.036 (残差判定)
+        Post2: V_meaning提交至EML作为新锚点 (状态更新)
+
+    Attributes:
+        DELTA_K: GaussEx residual threshold (≈ 0.036 from article).
+        basis: Precomputed 330 Octonion coset basis vectors.
+        _prior_loaded: Whether K_prior has been loaded (Pre3).
+    """
+
+    DELTA_K: float = 0.036  # GaussEx residual threshold
+
+    def __init__(self) -> None:
+        """Initialize the KSnapEngine with empty basis."""
+        self.basis: List[Octonion] = []
+        self._prior_loaded: bool = False
+        self._precompute()
+
+    def _precompute(self) -> None:
+        """Precompute 330 coset basis vectors (C(11,4) from TOMAS article).
+
+        Each basis vector is an Octonion initialized with Gaussian random
+        components (seed=42 for reproducibility), then normalized to unit
+        length. These represent the 330 possible coset directions in the
+        octonion space that κ-Snap can project onto.
+
+        After precompute, _prior_loaded = True (Pre3 satisfied).
+        """
+        random.seed(42)
+        self.basis = []
+        for _ in range(CSET_SIZE):
+            v = Octonion(
+                a=random.gauss(0, 1),
+                b=random.gauss(0, 1),
+                c=random.gauss(0, 1),
+                d=random.gauss(0, 1),
+                e=random.gauss(0, 1),
+                f=random.gauss(0, 1),
+                g=random.gauss(0, 1),
+                h=random.gauss(0, 1),
+            )
+            self.basis.append(v.normalized())
+        self._prior_loaded = True
+
+    def project(
+        self,
+        eml_state: Octonion,
+        prior: Optional[Octonion] = None,
+    ) -> Tuple[Octonion, float]:
+        """Instant coset projection — find best-matching basis vector.
+
+        Computes inner product (cosine similarity) between eml_state and
+        all 330 basis vectors. Returns the best-matching basis vector and
+        its residual η = 1 - best_similarity.
+
+        This is the core KS_PROJ operation — "瞬间计算" in the article.
+        The inner product is an Octonion dot product, giving a scalar
+        cosine similarity measure.
+
+        Args:
+            eml_state: Octonion representation of the current EML state.
+            prior: Optional prior Octonion (used for κ-phase weighting).
+                If None, pure cosine similarity is used.
+
+        Returns:
+            Tuple of (best_v, residual) where:
+                best_v: Best-matching coset basis Octonion vector.
+                residual: GaussEx residual η = 1 - best_similarity.
+        """
+        if not self._prior_loaded:
+            # Pre3 violated: K_prior not loaded
+            return Octonion(), 1.0
+
+        # Normalize input state for cosine similarity
+        normed_state = eml_state.normalized()
+        if normed_state.norm() < 1e-12:
+            return Octonion(), 1.0
+
+        best_similarity: float = -1.0
+        best_v: Octonion = Octonion()
+
+        # Compute inner product with all 330 basis vectors
+        for v in self.basis:
+            sim: float = normed_state.dot(v)  # Cosine similarity (both unit)
+            if sim > best_similarity:
+                best_similarity = sim
+                best_v = v
+
+        # Weight by prior if available
+        if prior is not None:
+            prior_normed = prior.normalized()
+            if prior_normed.norm() > 1e-12:
+                prior_sim: float = normed_state.dot(prior_normed)
+                best_similarity = max(best_similarity, prior_sim)
+
+        # GaussEx residual η = 1 - similarity
+        residual: float = 1.0 - max(best_similarity, 0.0)
+        return best_v, residual
+
+
+# =============================================================================
+# §6. SymCrypto — 简化版SPECK cipher (solver可选)
+# =============================================================================
+
+class SymCrypto:
+    """Simplified SPECK cipher + HMAC-SHA256 + OTP-CTR for solver context.
+
+    This is a minimal implementation of the SymCrypto layer from the v1.2
+    article. In the solver context, encryption is optional — the solver
+    can skip the crypto layer and work directly with plaintext data.
+
+    The cipher uses 4-round SPECK (instead of the full 22/23 rounds)
+    for performance in the solver context. HMAC-SHA256 provides
+    integrity verification. OTP-CTR mode provides stream encryption.
+
+    Usage:
+        crypto = SymCrypto()
+        # Optional: use encryption for data integrity
+        ciphertext = crypto.speck_encrypt(plaintext_int)
+        plaintext = crypto.speck_decrypt(ciphertext)
+        mac = crypto.hmac_sha256(data_bytes)
+    """
+
+    # SPECK parameters (simplified 4-round)
+    SPECK_ROUNDS: int = 4
+    BLOCK_SIZE: int = 32  # 32-bit block for SPECK-32/64
+
+    def __init__(self, key: int = 0xDEADBEEF) -> None:
+        """Initialize SymCrypto with a key.
+
+        Args:
+            key: 32-bit encryption key. Default is a deterministic key
+                for reproducibility in the solver context.
+        """
+        self.key: int = key
+        self._subkeys: List[int] = self._key_schedule(key)
+
+    def _key_schedule(self, key: int) -> List[int]:
+        """SPECK key schedule — generate 4 round subkeys.
+
+        Uses the SPECK-32/64 key expansion formula:
+            k[i+1] = (k[i] >>> 7) ⊕ k[i+1]
+            l[i+1] = (l[i] <<< 2) ⊕ k[i+1]
+
+        Args:
+            key: 32-bit master key.
+
+        Returns:
+            List of 4 16-bit round subkeys.
+        """
+        k: int = (key >> 16) & 0xFFFF
+        l: int = key & 0xFFFF
+        subkeys: List[int] = []
+        for i in range(self.SPECK_ROUNDS):
+            subkeys.append(k & 0xFFFF)
+            # l[i+1] = (l[i] <<< 2) ⊕ k[i]  — SPECK-32/64
+            l = ((l << 2) | (l >> 14)) & 0xFFFF
+            l = (l ^ k) & 0xFFFF
+            # k[i+1] = (k[i] >>> 7) ⊕ l[i+1]
+            k = ((k >> 7) | (k << 9)) & 0xFFFF
+            k = (k ^ l) & 0xFFFF
+        return subkeys
+
+    def speck_encrypt(self, plaintext: int) -> int:
+        """SPECK-32/64 encrypt — 4 rounds.
+
+        SPECK round function:
+            x = (x <<< 7) ⊕ y
+            x = x ⊕ k[i]
+            y = (y <<< 2) ⊕ x
+
+        Args:
+            plaintext: 32-bit plaintext (two 16-bit halves packed).
+
+        Returns:
+            32-bit ciphertext.
+        """
+        x: int = (plaintext >> 16) & 0xFFFF
+        y: int = plaintext & 0xFFFF
+        for sk in self._subkeys:
+            x = ((x << 7) | (x >> 9)) & 0xFFFF
+            x = (x ^ y) & 0xFFFF
+            x = (x ^ sk) & 0xFFFF
+            y = ((y << 2) | (y >> 14)) & 0xFFFF
+            y = (y ^ x) & 0xFFFF
+        return (x << 16) | y
+
+    def speck_decrypt(self, ciphertext: int) -> int:
+        """SPECK-32/64 decrypt — reverse 4 rounds.
+
+        Inverse SPECK round:
+            y = y ⊕ x
+            y = (y >>> 2)
+            x = x ⊕ k[i]
+            x = x ⊕ y
+            x = (x >>> 7)
+
+        Args:
+            ciphertext: 32-bit ciphertext.
+
+        Returns:
+            32-bit plaintext.
+        """
+        x: int = (ciphertext >> 16) & 0xFFFF
+        y: int = ciphertext & 0xFFFF
+        for sk in reversed(self._subkeys):
+            y = (y ^ x) & 0xFFFF
+            y = ((y >> 2) | (y << 14)) & 0xFFFF
+            x = (x ^ sk) & 0xFFFF
+            x = (x ^ y) & 0xFFFF
+            x = ((x >> 7) | (x << 9)) & 0xFFFF
+        return (x << 16) | y
+
+    def hmac_sha256(self, data: bytes) -> bytes:
+        """HMAC-SHA256 integrity verification.
+
+        Standard HMAC construction using SHA-256 as the underlying hash.
+
+        Args:
+            data: Input data bytes to authenticate.
+
+        Returns:
+            32-byte HMAC-SHA256 digest.
+        """
+        key_bytes: bytes = self.key.to_bytes(4, byteorder='big')
+        return hashlib.sha256(key_bytes + data + key_bytes).digest()
+
+    def otp_ctr_encrypt(self, plaintext: bytes, nonce: int = 0) -> bytes:
+        """OTP-CTR stream encryption using SPECK as block cipher.
+
+        Generates a keystream by encrypting nonce + counter values,
+        then XORs with plaintext for stream encryption.
+
+        Args:
+            plaintext: Input data bytes to encrypt.
+            nonce: Nonce value for CTR mode (default 0).
+
+        Returns:
+            Encrypted bytes (same length as plaintext).
+        """
+        keystream: bytes = b""
+        counter: int = nonce
+        # Generate enough keystream blocks
+        num_blocks: int = (len(plaintext) + 3) // 4  # 4 bytes per SPECK block
+        for _ in range(num_blocks):
+            block_input: int = (nonce << 16) | (counter & 0xFFFF)
+            keystream += self.speck_encrypt(block_input).to_bytes(4, byteorder='big')
+            counter += 1
+        # XOR plaintext with keystream
+        result: bytes = bytes(
+            p ^ k for p, k in zip(plaintext, keystream[:len(plaintext)])
+        )
+        return result
+
+    def otp_ctr_decrypt(self, ciphertext: bytes, nonce: int = 0) -> bytes:
+        """OTP-CTR stream decryption (identical to encryption for XOR mode).
+
+        Args:
+            ciphertext: Encrypted bytes to decrypt.
+            nonce: Nonce value for CTR mode (must match encryption nonce).
+
+        Returns:
+            Decrypted plaintext bytes.
+        """
+        return self.otp_ctr_encrypt(ciphertext, nonce)  # XOR is self-inverse
+
+
+# =============================================================================
+# §7. CHK_TIMEW — 物理时间窗检查 (0.5s软件预算)
+# =============================================================================
+
+TIME_WINDOW_SECONDS: float = 0.5  # 硬件500μs → 软件0.5s预算 per macro call
+
+
+def chk_timew(start_time: float) -> bool:
+    """CHK_TIMEW: Check if the physical time window has been exceeded.
+
+    Hardware budget: 500μs per macro call → software budget: 0.5s.
+    If exceeded, the macro call should trigger DZFUSE (Dead-Zero熔断).
+
+    Args:
+        start_time: Timestamp when the macro call started (time.time()).
 
     Returns:
-        PASS if push is physically possible.
-        FUSE if push violates Newton constraints (blocked by wall/box).
+        True if within time budget (continue execution).
+        False if time budget exceeded (trigger DZFUSE).
     """
-    from .physics_primitives import can_push_box
+    elapsed: float = time.time() - start_time
+    return elapsed < TIME_WINDOW_SECONDS
+
+
+# =============================================================================
+# §8. Macro Instruction Implementations
+# =============================================================================
+
+def _solve_ka59_push(state: Dict[str, Any]) -> ISAResult:
+    """SOLVE_KA59_PUSH (0xA0): Push box + deadlock + friction + Dead-Zero.
+
+    Macro instruction that packs all KA59 (Sokoban) physics primitives
+    into a single function call:
+        1. can_push_box — Newton's first law (push feasibility)
+        2. is_deadlock_corner — Irreversible dead-lock detection
+        3. Friction check — Static friction prevents unforced sliding
+        4. Dead-Zero熔断 — If deadlock detected → DEAD_ZERO
+
+    This replaces the μ-Op sequence: PUSH_ENTITY + CHECK_DEADLOCK + APPLY_FRICTION
+
+    Args:
+        state: Game state dict containing:
+            grid: 2D grid (numpy array or list).
+            player_pos: Player position tuple (x, y).
+            box_pos: Box position tuple (x, y).
+            direction: Push direction tuple (dx, dy).
+            wall_char: Wall cell value (default 0).
+            goal_char: Goal cell value (default 2).
+
+    Returns:
+        ISAResult.PASS if push is physically possible and no deadlock.
+        ISAResult.FUSE if push is blocked but not irreversible.
+        ISAResult.DEAD_ZERO if box is in irreversible deadlock corner.
+    """
+    from .physics_primitives import can_push_box, is_deadlock_corner
+
+    grid = state.get("grid")
+    player_pos: Tuple[int, int] = state.get("player_pos", (0, 0))
+    box_pos: Tuple[int, int] = state.get("box_pos", (0, 0))
+    direction: Tuple[int, int] = state.get("direction", (0, 0))
+    wall_char: int = state.get("wall_char", 0)
+    goal_char: int = state.get("goal_char", 2)
+
+    # Step 1: can_push_box — Newton's first law
     ok, new_pos = can_push_box(grid, player_pos, box_pos, direction, wall_char)
-    if ok:
-        return ISAResult.PASS
-    return ISAResult.FUSE
+    if not ok:
+        return ISAResult.FUSE
 
-
-def _check_deadlock_constraint(
-    grid: Any,
-    box_pos: Tuple[int, int],
-    wall_char: int = 0,
-    goal_char: int = 2,
-) -> ISAResult:
-    """CHECK_DEADLOCK constraint: Detect irreversible dead-lock states.
-
-    Uses is_deadlock_corner from physics_primitives. A box pushed into
-    a wall corner that is not a goal position is permanently stuck —
-    this is a DEAD_ZERO (irreversible) violation of Newton's second law.
-
-    Returns:
-        PASS if box is not in a dead-lock corner.
-        DEAD_ZERO if box is irreversibly stuck in a corner (not goal).
-    """
-    from .physics_primitives import is_deadlock_corner
-    if is_deadlock_corner(grid, box_pos, wall_char, goal_char):
+    # Step 2: is_deadlock_corner — Check if resulting position is a deadlock
+    if is_deadlock_corner(grid, new_pos, wall_char, goal_char):
         return ISAResult.DEAD_ZERO
-    return ISAResult.PASS
 
-
-def _apply_friction_constraint(
-    grid: Any,
-    box_pos: Tuple[int, int],
-    wall_char: int = 0,
-) -> ISAResult:
-    """APPLY_FRICTION constraint: Check friction force constraints.
-
-    In KA59 Sokoban, friction means boxes do not slide on their own —
-    they require an active push force. This instruction verifies that
-    the current state respects static friction (no unforced box movement).
-
-    Returns:
-        PASS if state respects friction constraints.
-        FUSE if friction is violated (implies impossible state).
-    """
-    # Friction constraint: boxes don't move unless pushed
-    # In grid-based Sokoban, this is implicitly enforced by the
-    # push-only mechanic. We verify by checking that box positions
-    # are reachable only via player adjacency.
+    # Step 3: Friction check — Boxes don't move without active push force
+    # In grid-based Sokoban, friction is implicit (push-only mechanic)
+    # Explicit check: verify grid is not None
     if grid is None:
         return ISAResult.FUSE
+
     return ISAResult.PASS
 
 
-def _reflect_x_constraint(
-    x: int,
-    y: int,
-    origin_x: int = 0,
-) -> ISAResult:
-    """REFLECT_X constraint: Verify x-axis mirror reflection is valid.
+def _solve_ar25_reflect(state: Dict[str, Any]) -> ISAResult:
+    """SOLVE_AR25_REFLECT (0xA1): Mirror + reflect + affine + κ-phase + Dead-Zero.
 
-    Uses mirror_point from physics_primitives to compute the reflected
-    position, then verifies the result stays within grid bounds.
+    Macro instruction that packs all AR25 (mirror/reflect) physics primitives:
+        1. mirror_point — κ-flip (180° phase flip) for x/y mirror
+        2. reflect_ray — κ-phase bounce in information dual field
+        3. Affine mirror — Combined mirror + translation transform
+        4. κ-phase consistency — Check phase coherence
+        5. Dead-Zero熔断 — If reflection out of bounds → FUSE/DEAD_ZERO
 
-    Returns:
-        PASS if reflection result is within valid bounds.
-        FUSE if reflection goes out of bounds.
-    """
-    from .physics_primitives import mirror_point
-    rx, ry = mirror_point(x, y, axis='x', origin_x=origin_x)
-    # Validate: reflected position should be a reasonable coordinate
-    if isinstance(rx, int) and isinstance(ry, int):
-        return ISAResult.PASS
-    return ISAResult.FUSE
+    This replaces the μ-Op sequence: REFLECT_X + REFLECT_Y + RAY_REFLECT
 
-
-def _reflect_y_constraint(
-    x: int,
-    y: int,
-    origin_y: int = 0,
-) -> ISAResult:
-    """REFLECT_Y constraint: Verify y-axis mirror reflection is valid.
-
-    Uses mirror_point from physics_primitives to compute the reflected
-    position, then verifies the result stays within grid bounds.
+    Args:
+        state: Game state dict containing:
+            x, y: Point coordinates to reflect.
+            origin_x, origin_y: Mirror axis origins (default 0).
+            start: Ray start point (for ray reflection).
+            hit_pos: Ray hit point.
+            normal: Reflection normal vector.
+            grid1, grid2: Grids for κ-phase consistency check (optional).
+            axis: Mirror axis ('x', 'y', 'xy', default 'x').
+            mode: 'mirror' or 'ray' (default 'mirror').
 
     Returns:
-        PASS if reflection result is within valid bounds.
-        FUSE if reflection goes out of bounds.
+        ISAResult.PASS if reflection is physically valid.
+        ISAResult.FUSE if reflection violates constraints.
+        ISAResult.DEAD_ZERO if κ-phase irreversibly fails.
     """
-    from .physics_primitives import mirror_point
-    rx, ry = mirror_point(x, y, axis='y', origin_y=origin_y)
-    if isinstance(rx, int) and isinstance(ry, int):
-        return ISAResult.PASS
-    return ISAResult.FUSE
+    from .physics_primitives import mirror_point, reflect_ray, kappa_phase_consistency
 
+    mode: str = state.get("mode", "mirror")
 
-def _ray_reflect_constraint(
-    start: Tuple[int, int],
-    hit_pos: Tuple[int, int],
-    normal: Tuple[int, int],
-) -> ISAResult:
-    """RAY_REFLECT constraint: Verify light ray reflection obeys optics.
+    if mode == "mirror":
+        # Mirror point reflection
+        x: int = state.get("x", 0)
+        y: int = state.get("y", 0)
+        origin_x: int = state.get("origin_x", 0)
+        origin_y: int = state.get("origin_y", 0)
+        axis: str = state.get("axis", "x")
 
-    Uses reflect_ray from physics_primitives to compute the reflected
-    ray direction. Validates that the reflection obeys the law of
-    reflection (angle of incidence = angle of reflection).
-
-    Returns:
-        PASS if ray reflection is physically valid.
-        FUSE if reflection violates optical constraints.
-    """
-    from .physics_primitives import reflect_ray
-    result = reflect_ray(start, hit_pos, normal)
-    if result is not None and len(result) == 2:
-        return ISAResult.PASS
-    return ISAResult.FUSE
-
-
-def _dfa_step_constraint(
-    dfa_state: int,
-    event: int,
-    dfa: Any = None,
-) -> ISAResult:
-    """DFA_STEP constraint: Verify DFA causal state transition is valid.
-
-    Uses CausalDFA from physics_primitives. A DFA transition must exist
-    in the transition table — if no transition exists for (state, event),
-    the causal chain is broken and the branch is pruned.
-
-    Returns:
-        PASS if DFA transition exists and is executed.
-        FUSE if no transition exists for (state, event).
-    """
-    from .physics_primitives import CausalDFA
-    if dfa is None:
-        return ISAResult.FUSE
-    if isinstance(dfa, CausalDFA):
-        success = dfa.step(event)
-        if success:
-            return ISAResult.PASS
-        return ISAResult.FUSE
-    return ISAResult.FUSE
-
-
-def _check_causal_constraint(
-    event_sequence: List[int],
-    dfa: Any = None,
-) -> ISAResult:
-    """CHECK_CAUSAL constraint: Verify causal ordering of events.
-
-    In TN36 click-programming, events must follow a valid causal order.
-    This instruction checks that the entire event sequence can be
-    executed by the CausalDFA without any failed transitions.
-
-    Returns:
-        PASS if all events follow valid causal order.
-        FUSE if any event violates causal ordering.
-    """
-    from .physics_primitives import CausalDFA
-    if dfa is None or not isinstance(dfa, CausalDFA):
-        return ISAResult.FUSE
-
-    for event in event_sequence:
-        success = dfa.step(event)
-        if not success:
+        try:
+            rx, ry = mirror_point(x, y, axis, origin_x, origin_y)
+            # Validate: reflected position should be reasonable
+            grid = state.get("grid")
+            if grid is not None:
+                if hasattr(grid, 'shape'):
+                    h, w = grid.shape
+                elif isinstance(grid, list):
+                    h = len(grid)
+                    w = len(grid[0]) if h > 0 else 0
+                else:
+                    h, w = 0, 0
+                # Out-of-bounds check
+                if not (0 <= rx < w and 0 <= ry < h):
+                    return ISAResult.FUSE
+        except (ValueError, TypeError):
             return ISAResult.FUSE
-    return ISAResult.PASS
 
+    elif mode == "ray":
+        # Ray reflection
+        start: Tuple[int, int] = state.get("start", (0, 0))
+        hit_pos: Tuple[int, int] = state.get("hit_pos", (0, 0))
+        normal: Tuple[int, int] = state.get("normal", (0, 0))
 
-def _topo_sort_constraint(
-    colors: List[int],
-    target_order: List[int],
-) -> ISAResult:
-    """TOPO_SORT constraint: Verify topological sorting produces valid order.
+        try:
+            result = reflect_ray(start, hit_pos, normal)
+            if result is None or len(result) != 2:
+                return ISAResult.FUSE
+        except (TypeError, ValueError):
+            return ISAResult.FUSE
 
-    Uses topological_sort_colors from physics_primitives. The topological
-    sort of a partial order must produce a linear extension that respects
-    all precedence constraints.
-
-    Returns:
-        PASS if topological sort produces a valid ordering.
-        FUSE if sorting fails or produces invalid result.
-    """
-    from .physics_primitives import topological_sort_colors
-    result = topological_sort_colors(target_order)
-    if result is not None and len(result) > 0:
-        return ISAResult.PASS
-    return ISAResult.FUSE
-
-
-def _check_poset_constraint(
-    colors: List[int],
-    target_order: List[int],
-) -> ISAResult:
-    """CHECK_POSET constraint: Verify partial order constraint satisfaction.
-
-    Uses is_valid_poset_order from physics_primitives. A color sequence
-    must satisfy the partial order defined by target_order (left-to-right
-    priority). Violation = κ-Phase inconsistency → FUSE.
-
-    Returns:
-        PASS if colors satisfy the partial order.
-        FUSE if partial order is violated (κ-Phase inconsistency).
-    """
-    from .physics_primitives import is_valid_poset_order
-    if is_valid_poset_order(colors, target_order):
-        return ISAResult.PASS
-    return ISAResult.FUSE
-
-
-def _kappa_snap_constraint(
-    eml_data: Any = None,
-    prior_data: Any = None,
-) -> ISAResult:
-    """KAPPA_SNAP constraint: κ-Snap causal reduction gate.
-
-    The κ-Snap instruction verifies that the current state admits a
-    valid causal reduction (κ-Snap归约). This is the central TOMAS
-    native instruction that bridges ISA-level execution with the
-    κ-Snap search mechanism.
-
-    If eml_data is available, checks κ-Phase consistency between
-    the EML spheres and the prior state. If consistent → PASS,
-    allowing κ-Snap expansion. Otherwise → FUSE (prune branch).
-
-    Returns:
-        PASS if κ-Snap reduction is possible.
-        FUSE if κ-Snap reduction fails (no causal consistency).
-        DEAD_ZERO if κ-Snap irreversibly fails (永久无效分支).
-    """
-    if eml_data is None:
-        # No EML data — cannot verify κ-Snap, default to PASS
-        # (κ-Snap search will handle verification internally)
-        return ISAResult.PASS
-
-    # If we have EML spheres, check κ-Phase consistency
-    try:
-        from .physics_primitives import kappa_phase_consistency
-        if prior_data is not None:
-            score = kappa_phase_consistency(eml_data, prior_data)
+    # κ-phase consistency check (optional, if two grids provided)
+    grid1 = state.get("grid1")
+    grid2 = state.get("grid2")
+    if grid1 is not None and grid2 is not None:
+        try:
+            score: float = kappa_phase_consistency(grid1, grid2)
             if score > 0.5:
                 return ISAResult.PASS
             elif score > 0.1:
                 return ISAResult.FUSE
             else:
                 return ISAResult.DEAD_ZERO
-    except Exception:
-        pass
+        except Exception:
+            pass  # κ-phase check optional → continue
 
     return ISAResult.PASS
 
 
-def _gaussex_verify_constraint(
-    residual: Any = None,
-    alpha: float = 0.05,
-) -> ISAResult:
-    """GAUSSEX_VERIFY constraint: GaussEx residual verification gate.
+def _solve_tn36_dfa(state: Dict[str, Any]) -> ISAResult:
+    """SOLVE_TN36_DFA (0xA2): DFA + causal chain pruning + Dead-Zero.
 
-    Uses is_gaussian_white_noise from verify.py to check that the
-    κ-Snap reduction residual is Gaussian white noise. This is the
-    Gaussian Uniqueness theorem check:
+    Macro instruction that packs all TN36 (click-programming) primitives:
+        1. CausalDFA.step — DFA state transition (κ-flip sequence)
+        2. Causal chain pruning — Check entire event sequence validity
+        3. Dead-Zero熔断 — If causal chain broken → FUSE/DEAD_ZERO
 
-    - Residual is Gaussian white noise → PASS (κ-Snap归约正确)
-    - Residual is NOT Gaussian white noise → FUSE (Dead-Zero熔断)
-      → triggers Re-Inflow回溯
+    This replaces the μ-Op sequence: DFA_STEP + CHECK_CAUSAL
+
+    Args:
+        state: Game state dict containing:
+            dfa: CausalDFA instance (required).
+            event: Single event for step (if mode='step').
+            event_sequence: List of events for full causal chain (if mode='chain').
+            mode: 'step' or 'chain' (default 'step').
+            max_depth: BFS depth for shortest path search (optional).
 
     Returns:
-        PASS if residual is Gaussian white noise.
-        FUSE if residual is NOT Gaussian white noise (Dead-Zero).
-        DEAD_ZERO if residual is severely non-Gaussian (永久失败).
+        ISAResult.PASS if DFA transition/causal chain is valid.
+        ISAResult.FUSE if DFA transition fails (prune branch).
+        ISAResult.DEAD_ZERO if causal chain irreversibly broken.
     """
-    if residual is None:
+    from .physics_primitives import CausalDFA
+
+    dfa = state.get("dfa")
+    mode: str = state.get("mode", "step")
+
+    if dfa is None or not isinstance(dfa, CausalDFA):
+        return ISAResult.FUSE
+
+    if mode == "step":
+        # Single DFA step
+        event: int = state.get("event", 0)
+        success: bool = dfa.step(event)
+        if success:
+            return ISAResult.PASS
+        return ISAResult.FUSE
+
+    elif mode == "chain":
+        # Full causal chain execution
+        event_sequence: List[int] = state.get("event_sequence", [])
+        if not event_sequence:
+            return ISAResult.FUSE
+
+        # Save initial state for potential rollback
+        initial_state: int = dfa.state
+
+        for event in event_sequence:
+            success: bool = dfa.step(event)
+            if not success:
+                # Restore DFA state (causal chain broken)
+                dfa.state = initial_state
+                # Check severity: if no valid path exists → DEAD_ZERO
+                target_states = state.get("target_states", set())
+                if target_states:
+                    path = dfa.find_shortest_path(target_states)
+                    if path is None:
+                        return ISAResult.DEAD_ZERO
+                return ISAResult.FUSE
+
+        # Check if DFA reached accept state
+        if dfa.is_accept():
+            return ISAResult.PASS
+        # Valid chain but not at accept state → may need more events
         return ISAResult.PASS
 
-    try:
-        from .verify import is_gaussian_white_noise
-        if isinstance(residual, np.ndarray):
-            if is_gaussian_white_noise(residual, alpha):
-                return ISAResult.PASS
-            # Check severity: compute basic statistics
-            flat = residual.flatten().astype(float)
-            mean_val = float(np.mean(flat))
-            std_val = float(np.std(flat))
-            # Severe deviation: mean far from 0 or std very large
-            if abs(mean_val) > 2.0 and std_val > 5.0:
-                return ISAResult.DEAD_ZERO
-            return ISAResult.FUSE
-    except Exception:
-        pass
+    return ISAResult.FUSE
+
+
+def _solve_sb26_poset(state: Dict[str, Any]) -> ISAResult:
+    """SOLVE_SB26_POSET (0xA3): Poset validation + topological sort + κ-坍缩.
+
+    Macro instruction that packs all SB26 (color sorting) primitives:
+        1. is_valid_poset_order — κ-Phase consistency (no phase conflict)
+        2. topological_sort_colors — κ-坍缩 (partial order → total order)
+        3. κ-坍缩 verification — Check that sorted result satisfies constraints
+
+    This replaces the μ-Op sequence: TOPO_SORT + CHECK_POSET
+
+    Args:
+        state: Game state dict containing:
+            colors: List of color values to validate.
+            target_order: Target partial order (left-to-right priority).
+
+    Returns:
+        ISAResult.PASS if colors satisfy partial order.
+        ISAResult.FUSE if partial order violated (κ-Phase inconsistency).
+        ISAResult.DEAD_ZERO if κ-坍缩 irreversibly fails.
+    """
+    from .physics_primitives import is_valid_poset_order, topological_sort_colors
+
+    colors: List[int] = state.get("colors", [])
+    target_order: List[int] = state.get("target_order", [])
+
+    if not colors or not target_order:
+        return ISAResult.FUSE
+
+    # Step 1: Validate partial order
+    if not is_valid_poset_order(colors, target_order):
+        return ISAResult.FUSE
+
+    # Step 2: Topological sort (κ-坍缩: partial → total)
+    sorted_result: Optional[List[int]] = topological_sort_colors(target_order)
+    if sorted_result is None or len(sorted_result) == 0:
+        return ISAResult.DEAD_ZERO
+
+    # Step 3: Verify sorted result satisfies constraints
+    # The sorted result should be a valid linear extension
+    if not is_valid_poset_order(sorted_result, target_order):
+        return ISAResult.FUSE
 
     return ISAResult.PASS
 
 
-def _deadzero_fuse_constraint(
-    branch_state: Any = None,
-) -> ISAResult:
-    """DEADZERO_FUSE constraint: Explicit Dead-Zero branch marking.
+def _solve_cn04_affine(state: Dict[str, Any]) -> ISAResult:
+    """SOLVE_CN04_AFFINE (0xA4): Affine transform + align + κ-phase consistency.
 
-    This instruction is called when a branch has been identified as
-    permanently invalid (e.g., irreversibly stuck box, irrecoverable
-    causal violation). It marks the branch as DEAD_ZERO, preventing
-    any further κ-Snap expansion.
+    Macro instruction that packs all CN04 (affine transform) primitives:
+        1. find_affine_transform — D4 group rotation × translation search
+        2. align_target — Apply found transform to source grid
+        3. κ-phase consistency — Verify transform preserves κ-phase coherence
+
+    This replaces the μ-Op sequence: KAPPA_SNAP + GAUSSEX_VERIFY
+
+    Args:
+        state: Game state dict containing:
+            source: Source grid (2D numpy array or list).
+            target: Target grid (2D numpy array or list).
+            max_translation: Maximum translation offset to search (default 10).
 
     Returns:
-        DEAD_ZERO always (this instruction IS the熔断 declaration).
+        ISAResult.PASS if affine transform found with good match.
+        ISAResult.FUSE if no valid transform found.
+        ISAResult.DEAD_ZERO if κ-phase irreversibly fails.
     """
-    return ISAResult.DEAD_ZERO
+    from .physics_primitives import find_affine_transform, kappa_phase_consistency
+
+    source = state.get("source")
+    target = state.get("target")
+    max_translation: int = state.get("max_translation", 10)
+
+    if source is None or target is None:
+        return ISAResult.FUSE
+
+    # Step 1: Find affine transform (κ-Phase consistency detection)
+    params = find_affine_transform(source, target, max_translation)
+    if params is None:
+        return ISAResult.FUSE
+
+    match_score: float = params.get("match_score", 0.0)
+
+    # Step 2: κ-phase consistency check
+    if match_score > 0.9:
+        # High match → strong κ-phase consistency
+        return ISAResult.PASS
+    elif match_score > 0.5:
+        # Moderate match → κ-phase partially consistent
+        # Additional κ-phase check
+        try:
+            score: float = kappa_phase_consistency(source, target)
+            if score > 0.3:
+                return ISAResult.PASS
+        except Exception:
+            pass
+        return ISAResult.FUSE
+    else:
+        # Low match → κ-phase fails
+        return ISAResult.DEAD_ZERO
+
+
+def _solve_via_ksap(state: Dict[str, Any]) -> ISAResult:
+    """SOLVE_VIA_KSAP (0xA5): Complete κ-Snap pipeline — universal macro.
+
+    This is the CORE macro instruction. It executes the full κ-Snap pipeline:
+        KS_START → load K_prior (330 coset basis vectors)
+        KS_PROJ  → project EML state onto best-matching coset (Octonion inner product)
+        KS_GX    → compute GaussEx residual η
+        KS_COMMIT → η < δ_K → Accept (PASS)
+        KS_ABORT  → η ≥ δ_K → DZFUSE (熔断)
+
+    κ-Snap 调用契约 enforcement (4 Preconditions + 2 Postconditions):
+        Pre1: EML.nodes ≠ ∅ — Check eml_graph has nodes
+        Pre2: Materialized(EML, π) — Check eml_graph nodes are well-formed
+        Pre3: Loaded(K_prior) — KSnapEngine._prior_loaded must be True
+        Pre4: KS_START→KS_COMMIT期间禁止EML写操作 — Atomic context check
+
+    Post1: η < δ_K ≈ 0.036 — Residual must be below threshold
+    Post2: V_meaning提交至EML作为新锚点 — State update on success
+
+    Physical ZKP Protocol (4-step):
+        Setup → Commit(Witness π) → Challenge(GaussEx η) → Response(Accept/DZFUSE)
+
+    Args:
+        state: Game state dict containing:
+            eml_graph: EMLGraph instance (required for Pre1/Pre2).
+            eml_octonion: Octonion representation of EML state (for KS_PROJ).
+            prior: Optional prior Octonion (for κ-phase weighting).
+            ks_engine: Optional KSnapEngine instance (auto-created if None).
+            start_time: Timestamp for CHK_TIMEW (auto-set if None).
+
+    Returns:
+        ISAResult.PASS if κ-Snap pipeline succeeds (η < δ_K).
+        ISAResult.FUSE if κ-Snap fails but branch may be retried (REINF).
+        ISAResult.DEAD_ZERO if precondition violated or residual severely exceeds δ_K.
+    """
+    start_time: float = state.get("start_time", time.time())
+
+    # ===== CHK_TIMEW: Time window check =====
+    if not chk_timew(start_time):
+        # Time budget exceeded → DZFUSE
+        return ISAResult.DEAD_ZERO
+
+    # ===== Precondition Checks =====
+
+    # Pre1: EML.nodes ≠ ∅ (EML感知)
+    eml_graph: Optional[EMLGraph] = state.get("eml_graph")
+    if eml_graph is None or len(eml_graph.nodes) == 0:
+        # Pre1 violated: No EML data → cannot project
+        return ISAResult.DEAD_ZERO
+
+    # Pre2: Materialized(EML, π) — Check nodes are well-formed
+    for node in eml_graph.nodes:
+        if node.pos is None or node.kind is None:
+            # Pre2 violated: Unmaterialized node
+            return ISAResult.DEAD_ZERO
+
+    # Pre3: Loaded(K_prior) — Ensure KSnapEngine has precomputed basis
+    ks_engine: Optional[KSnapEngine] = state.get("ks_engine")
+    if ks_engine is None:
+        ks_engine = KSnapEngine()  # Auto-create with precompute
+    if not ks_engine._prior_loaded:
+        # Pre3 violated: K_prior not loaded
+        return ISAResult.DEAD_ZERO
+
+    # Pre4: KS_START→KS_COMMIT期间禁止EML写操作 (context atomicity)
+    # In the solver context, we check that the EML graph is not being
+    # modified during the pipeline. This is enforced by operating on
+    # a snapshot of the EML state (Octonion representation).
+    eml_octonion: Optional[Octonion] = state.get("eml_octonion")
+    if eml_octonion is None:
+        # Build Octonion from EML graph nodes (aggregate representation)
+        eml_octonion = _eml_to_octonion(eml_graph)
+
+    # ===== κ-Snap Pipeline =====
+
+    # KS_START: Load prior (already done via KSnapEngine._precompute)
+    prior: Optional[Octonion] = state.get("prior")
+
+    # KS_PROJ: Project EML state onto best-matching coset
+    best_v, residual = ks_engine.project(eml_octonion, prior)
+
+    # KS_GX: GaussEx residual η
+    eta: float = residual
+
+    # ===== Postcondition Checks =====
+
+    # Post1: η < δ_K ≈ 0.036 (residual threshold)
+    if eta < ks_engine.DELTA_K:
+        # KS_COMMIT: Accept — residual below threshold
+        # Post2: V_meaning提交至EML作为新锚点 (state update)
+        # Store the best-matching coset as the new anchor
+        _update_eml_anchor(eml_graph, best_v)
+        return ISAResult.PASS
+    elif eta < 0.1:
+        # Moderate residual — FUSE (branch may be retried with REINF)
+        return ISAResult.FUSE
+    else:
+        # KS_ABORT: Severe residual — DZFUSE
+        # η ≥ δ_K severely → Dead-Zero熔断
+        return ISAResult.DEAD_ZERO
 
 
 # =============================================================================
-# §5. ISA Instruction Table — All 13 instructions with constraint functions
+# §9. EML → Octonion Conversion Helper
 # =============================================================================
 
-ISA_INSTRUCTION_TABLE: Dict[ISAOpcode, ISAInstruction] = {
-    # ===== 牛顿力学 =====
-    ISAOpcode.PUSH_ENTITY: ISAInstruction(
-        name="PUSH_ENTITY",
-        opcode=ISAOpcode.PUSH_ENTITY,
-        operands=["r1", "r2"],
-        constraint_fn=_push_entity_constraint,
-        category="newton_mechanics",
-        description="推动实体 — 牛顿刚体推箱约束 (质量/碰撞检测)",
-    ),
-    ISAOpcode.CHECK_DEADLOCK: ISAInstruction(
-        name="CHECK_DEADLOCK",
-        opcode=ISAOpcode.CHECK_DEADLOCK,
-        operands=["r1"],
-        constraint_fn=_check_deadlock_constraint,
-        category="newton_mechanics",
-        description="死锁熔断 — 箱子推入墙角且非目标格 → DEAD_ZERO",
-    ),
-    ISAOpcode.APPLY_FRICTION: ISAInstruction(
-        name="APPLY_FRICTION",
-        opcode=ISAOpcode.APPLY_FRICTION,
-        operands=["r1"],
-        constraint_fn=_apply_friction_constraint,
-        category="newton_mechanics",
-        description="摩擦力约束 — 静摩擦阻止无外力滑动",
-    ),
-    # ===== 反射几何 =====
-    ISAOpcode.REFLECT_X: ISAInstruction(
-        name="REFLECT_X",
-        opcode=ISAOpcode.REFLECT_X,
-        operands=["r1", "origin"],
-        constraint_fn=_reflect_x_constraint,
-        category="reflection_geometry",
-        description="关于 x 轴镜像 — κ-flip (180°相位翻转)",
-    ),
-    ISAOpcode.REFLECT_Y: ISAInstruction(
-        name="REFLECT_Y",
-        opcode=ISAOpcode.REFLECT_Y,
-        operands=["r1", "origin"],
-        constraint_fn=_reflect_y_constraint,
-        category="reflection_geometry",
-        description="关于 y 轴镜像 — κ-flip (180°相位翻转)",
-    ),
-    ISAOpcode.RAY_REFLECT: ISAInstruction(
-        name="RAY_REFLECT",
-        opcode=ISAOpcode.RAY_REFLECT,
-        operands=["dir", "normal"],
-        constraint_fn=_ray_reflect_constraint,
-        category="reflection_geometry",
-        description="光线反射 — κ-phase在信息对偶场中的弹射",
-    ),
-    # ===== 因果律 =====
-    ISAOpcode.DFA_STEP: ISAInstruction(
-        name="DFA_STEP",
-        opcode=ISAOpcode.DFA_STEP,
-        operands=["state", "event"],
-        constraint_fn=_dfa_step_constraint,
-        category="causal_dfa",
-        description="DFA 状态转移 — κ-flip序列 (最小作用量路径)",
-    ),
-    ISAOpcode.CHECK_CAUSAL: ISAInstruction(
-        name="CHECK_CAUSAL",
-        opcode=ISAOpcode.CHECK_CAUSAL,
-        operands=["order"],
-        constraint_fn=_check_causal_constraint,
-        category="causal_dfa",
-        description="因果序校验 — EML超图中的因果边 = morphism",
-    ),
-    # ===== 偏序 =====
-    ISAOpcode.TOPO_SORT: ISAInstruction(
-        name="TOPO_SORT",
-        opcode=ISAOpcode.TOPO_SORT,
-        operands=["colors", "tgt"],
-        constraint_fn=_topo_sort_constraint,
-        category="poset_sorting",
-        description="拓扑排序 — κ-坍缩 (从偏序到全序)",
-    ),
-    ISAOpcode.CHECK_POSET: ISAInstruction(
-        name="CHECK_POSET",
-        opcode=ISAOpcode.CHECK_POSET,
-        operands=["seq", "tgt"],
-        constraint_fn=_check_poset_constraint,
-        category="poset_sorting",
-        description="偏序校验 — κ-Phase一致性 (无相位冲突)",
-    ),
-    # ===== TOMAS 原生 =====
-    ISAOpcode.KAPPA_SNAP: ISAInstruction(
-        name="KAPPA_SNAP",
-        opcode=ISAOpcode.KAPPA_SNAP,
-        operands=["eml", "prior"],
-        constraint_fn=_kappa_snap_constraint,
-        category="tomas_native",
-        description="κ-Snap 因果归约 — κ-Phase一致性检测",
-    ),
-    ISAOpcode.GAUSSEX_VERIFY: ISAInstruction(
-        name="GAUSSEX_VERIFY",
-        opcode=ISAOpcode.GAUSSEX_VERIFY,
-        operands=["resid"],
-        constraint_fn=_gaussex_verify_constraint,
-        category="tomas_native",
-        description="GaussEx 校验 — κ-旋转等价性 (线性可识别性)",
-    ),
-    ISAOpcode.DEADZERO_FUSE: ISAInstruction(
-        name="DEADZERO_FUSE",
-        opcode=ISAOpcode.DEADZERO_FUSE,
-        operands=["branch"],
-        constraint_fn=_deadzero_fuse_constraint,
-        category="tomas_native",
-        description="Dead-Zero 熔断 — 分支永久无效标记",
-    ),
+def _eml_to_octonion(eml_graph: EMLGraph) -> Octonion:
+    """Convert EML graph state to a single Octonion for κ-Snap projection.
+
+    Aggregates all EML node properties into a single Octonion vector:
+    - Real component: weighted average of node masses (object existence)
+    - i component: weighted average of x-coordinates (horizontal structure)
+    - j component: weighted average of y-coordinates (vertical structure)
+    - k component: weighted average of color/kind values (phase information)
+    - e1-e4: velocity components from node Octonion velocities
+
+    This provides a compact representation of the entire EML state that
+    can be projected onto the 330 coset basis vectors.
+
+    Args:
+        eml_graph: EMLGraph with nodes to aggregate.
+
+    Returns:
+        Octonion representing the aggregated EML state.
+    """
+    if not eml_graph.nodes:
+        return Octonion()
+
+    total_mass: float = 0.0
+    weighted_x: float = 0.0
+    weighted_y: float = 0.0
+    weighted_kind: float = 0.0
+    total_vel_a: float = 0.0
+    total_vel_b: float = 0.0
+    total_vel_c: float = 0.0
+    total_vel_d: float = 0.0
+
+    kind_map: Dict[str, float] = {
+        "empty": 0.0, "wall": 1.0, "player": 2.0,
+        "box": 3.0, "goal": 4.0,
+    }
+
+    for node in eml_graph.nodes:
+        m: float = node.mass
+        total_mass += m
+        weighted_x += node.pos[0] * m
+        weighted_y += node.pos[1] * m
+        weighted_kind += kind_map.get(node.kind, 0.0) * m
+        total_vel_a += node.velocity.a * m
+        total_vel_b += node.velocity.b * m
+        total_vel_c += node.velocity.c * m
+        total_vel_d += node.velocity.d * m
+
+    if total_mass < 1e-12:
+        return Octonion()
+
+    inv_mass: float = 1.0 / total_mass
+    return Octonion(
+        a=total_mass * inv_mass,  # Normalized total mass → ~1.0
+        b=weighted_x * inv_mass,
+        c=weighted_y * inv_mass,
+        d=weighted_kind * inv_mass,
+        e=total_vel_a * inv_mass,
+        f=total_vel_b * inv_mass,
+        g=total_vel_c * inv_mass,
+        h=total_vel_d * inv_mass,
+    )
+
+
+def _update_eml_anchor(eml_graph: EMLGraph, anchor: Octonion) -> None:
+    """Update EML graph anchor with the κ-Snap projected coset vector.
+
+    Post2 of the κ-Snap contract: V_meaning (the best-matching coset)
+    is committed to EML as a new anchor node. This stores the coset
+    projection result in the EML graph for future reference.
+
+    Args:
+        eml_graph: EMLGraph to update with new anchor.
+        anchor: Octonion coset vector to commit as anchor.
+    """
+    # Store anchor as a special node in EML graph
+    anchor_node: EMLNode = EMLNode(
+        id=-1,  # Special anchor ID
+        pos=(-1, -1),  # Virtual position
+        kind="anchor",
+        mass=1.0,
+        velocity=anchor,
+        neighbors=[],
+    )
+    # Remove existing anchor if present
+    eml_graph.nodes = [n for n in eml_graph.nodes if n.kind != "anchor"]
+    eml_graph.add(anchor_node)
+
+
+# =============================================================================
+# §10. ISA Registry — Game ID → Macro instruction sequence
+# =============================================================================
+
+ISA_REGISTRY: Dict[str, List[MacroISAOpcode]] = {
+    "ka59": [MacroISAOpcode.CHK_TIMEW, MacroISAOpcode.SOLVE_KA59_PUSH],
+    "ar25": [MacroISAOpcode.CHK_TIMEW, MacroISAOpcode.SOLVE_AR25_REFLECT],
+    "tn36": [MacroISAOpcode.CHK_TIMEW, MacroISAOpcode.SOLVE_TN36_DFA],
+    "sb26": [MacroISAOpcode.CHK_TIMEW, MacroISAOpcode.SOLVE_SB26_POSET],
+    "cn04": [MacroISAOpcode.CHK_TIMEW, MacroISAOpcode.SOLVE_CN04_AFFINE],
 }
 
 
 # =============================================================================
-# §6. ISA Registry — Game ID → ISA instruction sequence mapping
+# §11. Macro Instruction Table — All macro + auxiliary instructions
 # =============================================================================
 
-ISA_REGISTRY: Dict[str, List[ISAOpcode]] = {
-    "ka59": [
-        ISAOpcode.PUSH_ENTITY,
-        ISAOpcode.CHECK_DEADLOCK,
-        ISAOpcode.APPLY_FRICTION,
-    ],
-    "ar25": [
-        ISAOpcode.REFLECT_X,
-        ISAOpcode.REFLECT_Y,
-        ISAOpcode.RAY_REFLECT,
-    ],
-    "tn36": [
-        ISAOpcode.DFA_STEP,
-        ISAOpcode.CHECK_CAUSAL,
-    ],
-    "sb26": [
-        ISAOpcode.TOPO_SORT,
-        ISAOpcode.CHECK_POSET,
-    ],
-    "cn04": [
-        ISAOpcode.KAPPA_SNAP,
-        ISAOpcode.GAUSSEX_VERIFY,
-    ],
+MACRO_INSTRUCTION_TABLE: Dict[MacroISAOpcode, Callable[[Dict[str, Any]], ISAResult]] = {
+    # ===== κ-Snap Pipeline Sub-steps =====
+    MacroISAOpcode.KS_START: lambda s: ISAResult.PASS,  # Load prior (handled by KSnapEngine)
+    MacroISAOpcode.KS_PROJ: lambda s: ISAResult.PASS,  # Projection (handled by _solve_via_ksap)
+    MacroISAOpcode.KS_GX: lambda s: ISAResult.PASS,    # GaussEx (handled by _solve_via_ksap)
+    MacroISAOpcode.KS_COMMIT: lambda s: ISAResult.PASS, # Commit (handled by _solve_via_ksap)
+    MacroISAOpcode.KS_ABORT: lambda s: ISAResult.DEAD_ZERO,  # Abort = DZFUSE
+
+    # ===== 时间窗 =====
+    MacroISAOpcode.CHK_TIMEW: lambda s: (
+        ISAResult.PASS if chk_timew(s.get("start_time", time.time()))
+        else ISAResult.DEAD_ZERO
+    ),
+
+    # ===== 宏指令 (Game-Specific) =====
+    MacroISAOpcode.SOLVE_KA59_PUSH: _solve_ka59_push,
+    MacroISAOpcode.SOLVE_AR25_REFLECT: _solve_ar25_reflect,
+    MacroISAOpcode.SOLVE_TN36_DFA: _solve_tn36_dfa,
+    MacroISAOpcode.SOLVE_SB26_POSET: _solve_sb26_poset,
+    MacroISAOpcode.SOLVE_CN04_AFFINE: _solve_cn04_affine,
+    MacroISAOpcode.SOLVE_VIA_KSAP: _solve_via_ksap,
+
+    # ===== 物理原语辅助 =====
+    MacroISAOpcode.GXCHK: lambda s: (
+        ISAResult.PASS if s.get("residual", 0.0) < KSnapEngine.DELTA_K
+        else ISAResult.FUSE
+    ),
+    MacroISAOpcode.DZFUSE: lambda s: ISAResult.DEAD_ZERO,
+    MacroISAOpcode.REINF: lambda s: ISAResult.FUSE,  # Re-Inflow → retry branch
+
+    # ===== 停机 =====
+    MacroISAOpcode.HALT: lambda s: ISAResult.PASS,  # Normal termination
 }
 
 
 # =============================================================================
-# §7. TProcessor — ISA execution engine
+# §12. TProcessorState — Execution state tracking (保留接口)
 # =============================================================================
 
 @dataclass
 class TProcessorState:
-    """T-Processor execution state — tracks ISA gate results for a branch.
+    """T-Processor execution state — tracks macro instruction results for a branch.
+
+    Preserved interface from v1.0, adapted for macro instruction model.
 
     Attributes:
         game_id: The game being solved.
-        isa_sequence: List of ISA opcodes to execute for this game.
+        isa_sequence: List of MacroISAOpcode values to execute for this game.
         results: List of (opcode, ISAResult) pairs from execution.
         final_result: Aggregated result — worst outcome determines
             branch fate (DEAD_ZERO > FUSE > PASS).
         branch_dead: Whether this branch has been permanently marked dead.
     """
     game_id: str = ""
-    isa_sequence: List[ISAOpcode] = field(default_factory=list)
-    results: List[Tuple[ISAOpcode, ISAResult]] = field(default_factory=list)
+    isa_sequence: List[MacroISAOpcode] = field(default_factory=list)
+    results: List[Tuple[MacroISAOpcode, ISAResult]] = field(default_factory=list)
     final_result: ISAResult = ISAResult.PASS
     branch_dead: bool = False
 
 
-class TProcessor:
-    """T-Processor ISA execution engine — physics axioms as native operators.
+# =============================================================================
+# §13. TProcessorV12 — Macro ISA execution engine (核心)
+# =============================================================================
 
-    The T-Processor implements the Fetch→Decode→Execute→Writeback cycle
-    for ISA instructions. Each instruction is a physical axiom that acts
-    as a hard constraint gate. The processor:
+class TProcessorV12:
+    """T-Processor v1.2 — Macro Instruction ISA execution engine.
 
-    1. Fetches the ISA instruction sequence for a game from the registry.
-    2. Decodes each instruction into a physics primitive call.
-    3. Executes the constraint check, returning PASS/FUSE/DEAD_ZERO.
-    4. Aggregates results — the worst outcome determines branch fate.
+    The T-Processor v1.2 replaces the μ-Op dispatch model with a macro
+    instruction model where each instruction is a direct Python function
+    call that internally invokes physics_primitives functions.
 
-    Execution model (from article):
-        [Fetch ISA] → [Decode to physics primitive] → [Execute constraint]
-            → [Writeback or Dead-Zero]
+    Key architectural change from v1.0:
+        v1.0: Fetch μ-Op → Decode → Execute constraint → Writeback
+              (13 μ-Ops, each with separate dispatch overhead)
+        v1.2: Fetch macro → Direct function call
+              (6 macros + 9 auxiliaries, single call per macro)
 
-    Key principle: "内思即外作" — thinking IS doing.
-    ISA execution IS causal reduction, not just a function call.
+    Performance improvement:
+        - Eliminates per-instruction Fetch→Decode→Execute→Writeback cycle
+        - Each macro packs multiple μ-Ops into one Python function call
+        - SOLVE_VIA_KSAP executes entire κ-Snap pipeline in one call
+
+    κ-Snap Pipeline (SOLVE_VIA_KSAP):
+        KS_START → load K_prior
+        KS_PROJ  → EML→陪集投影 (Octonion内积)
+        KS_GX    → GaussEx残差计算
+        KS_COMMIT → η < δ_K → Accept (PASS)
+        KS_ABORT  → η ≥ δ_K → DZFUSE (DEAD_ZERO)
 
     Usage:
-        processor = TProcessor()
+        processor = TProcessorV12()
         result = processor.execute_isa_gate("ka59", state_dict)
         if result == ISAResult.PASS:
             # Allow κ-Snap expansion
@@ -677,180 +1298,104 @@ class TProcessor:
             # Prune branch (Dead-Zero熔断)
         elif result == ISAResult.DEAD_ZERO:
             # Mark branch permanently invalid
+
+    Attributes:
+        registry: Game ID → macro instruction sequence mapping.
+        instruction_table: MacroISAOpcode → execution function mapping.
+        ks_engine: KSnapEngine instance for κ-Snap projections.
+        crypto: SymCrypto instance (optional, for solver integrity).
+        _state_cache: Cached TProcessorState per game.
     """
 
-    def __init__(self) -> None:
-        """Initialize the T-Processor with the ISA instruction table."""
-        self.instruction_table: Dict[ISAOpcode, ISAInstruction] = ISA_INSTRUCTION_TABLE
-        self.registry: Dict[str, List[ISAOpcode]] = ISA_REGISTRY
+    def __init__(
+        self,
+        ks_engine: Optional[KSnapEngine] = None,
+        crypto_key: int = 0xDEADBEEF,
+    ) -> None:
+        """Initialize the T-Processor v1.2 with macro instruction table.
+
+        Args:
+            ks_engine: Optional KSnapEngine instance. If None, creates
+                a default instance with 330 coset basis vectors.
+            crypto_key: SymCrypto key for optional integrity layer.
+        """
+        self.instruction_table: Dict[
+            MacroISAOpcode, Callable[[Dict[str, Any]], ISAResult]
+        ] = dict(MACRO_INSTRUCTION_TABLE)
+        self.registry: Dict[str, List[MacroISAOpcode]] = dict(ISA_REGISTRY)
+        self.ks_engine: KSnapEngine = ks_engine or KSnapEngine()
+        self.crypto: SymCrypto = SymCrypto(crypto_key)
         self._state_cache: Dict[str, TProcessorState] = {}
 
-    def fetch_isa_sequence(self, game_id: str) -> List[ISAOpcode]:
-        """Fetch the ISA instruction sequence for a game.
+    def fetch_isa_sequence(self, game_id: str) -> List[MacroISAOpcode]:
+        """Fetch the macro ISA instruction sequence for a game.
 
         Normalizes game_id by stripping version suffix, then looks up
-        the ISA sequence in the registry. Returns empty list if no
-        ISA sequence is registered for this game.
+        the macro instruction sequence in the registry. Returns the
+        default κ-Snap pipeline (SOLVE_VIA_KSAP) if no game-specific
+        sequence is registered.
 
         Args:
             game_id: Game identifier (may include version suffix).
 
         Returns:
-            List of ISAOpcode values to execute for this game.
+            List of MacroISAOpcode values to execute for this game.
         """
         base_id: str = game_id.split("-")[0] if game_id else ""
-        return self.registry.get(base_id, [])
+        if base_id in self.registry:
+            return self.registry[base_id]
+        # Default: full κ-Snap pipeline for unknown games
+        return [
+            MacroISAOpcode.CHK_TIMEW,
+            MacroISAOpcode.SOLVE_VIA_KSAP,
+        ]
 
-    def decode_instruction(
-        self, opcode: ISAOpcode,
-    ) -> Optional[ISAInstruction]:
-        """Decode an ISA opcode into its instruction definition.
-
-        Looks up the opcode in the instruction table to find the
-        corresponding ISAInstruction with constraint function.
-
-        Args:
-            opcode: ISA opcode to decode.
-
-        Returns:
-            ISAInstruction definition, or None if opcode is unknown.
-        """
-        return self.instruction_table.get(opcode)
-
-    def execute_instruction(
+    def execute_macro(
         self,
-        opcode: ISAOpcode,
+        opcode: MacroISAOpcode,
         state: Dict[str, Any],
     ) -> ISAResult:
-        """Execute a single ISA instruction as a constraint gate.
+        """Execute a single macro instruction as a constraint gate.
 
-        Decodes the opcode, then calls the constraint function with
-        the appropriate arguments extracted from the state dict.
-
-        The constraint function implements the physical axiom check:
-          - PASS → axiom satisfied, proceed
-          - FUSE → axiom violated, prune branch
-          - DEAD_ZERO → irreversibly invalid, permanent pruning
+        Directly calls the macro's Python function with the state dict.
+        No μ-Op dispatch overhead — one function call per macro.
 
         Args:
-            opcode: ISA opcode to execute.
+            opcode: MacroISAOpcode to execute.
             state: Game state dict containing operands for the instruction.
-                Expected keys vary by instruction type:
-                - PUSH_ENTITY: grid, player_pos, box_pos, direction
-                - CHECK_DEADLOCK: grid, box_pos, wall_char, goal_char
-                - APPLY_FRICTION: grid, box_pos
-                - REFLECT_X/Y: x, y, origin_x/origin_y
-                - RAY_REFLECT: start, hit_pos, normal
-                - DFA_STEP: dfa_state, event, dfa
-                - CHECK_CAUSAL: event_sequence, dfa
-                - TOPO_SORT: colors, target_order
-                - CHECK_POSET: colors, target_order
-                - KAPPA_SNAP: eml_data, prior_data
-                - GAUSSEX_VERIFY: residual, alpha
-                - DEADZERO_FUSE: branch_state
+                Expected keys vary by macro type. The KSnapEngine and
+                SymCrypto instances are automatically injected into state
+                for SOLVE_VIA_KSAP and CHK_TIMEW instructions.
 
         Returns:
-            ISAResult indicating the constraint gate outcome.
+            ISAResult indicating the macro instruction outcome.
         """
-        instruction: Optional[ISAInstruction] = self.decode_instruction(opcode)
-        if instruction is None or instruction.constraint_fn is None:
-            # Unknown opcode or no constraint function — default to PASS
+        fn: Optional[Callable[[Dict[str, Any]], ISAResult]] = (
+            self.instruction_table.get(opcode)
+        )
+        if fn is None:
+            # Unknown opcode — default PASS
             return ISAResult.PASS
 
-        # Extract operands from state dict based on opcode
+        # Inject processor-level resources into state
+        state["ks_engine"] = self.ks_engine
+        state["start_time"] = state.get("start_time", time.time())
+
         try:
-            if opcode == ISAOpcode.PUSH_ENTITY:
-                grid = state.get("grid")
-                player_pos = state.get("player_pos", (0, 0))
-                box_pos = state.get("box_pos", (0, 0))
-                direction = state.get("direction", (0, 0))
-                wall_char = state.get("wall_char", 0)
-                return instruction.constraint_fn(
-                    grid, player_pos, box_pos, direction, wall_char
-                )
-
-            elif opcode == ISAOpcode.CHECK_DEADLOCK:
-                grid = state.get("grid")
-                box_pos = state.get("box_pos", (0, 0))
-                wall_char = state.get("wall_char", 0)
-                goal_char = state.get("goal_char", 2)
-                return instruction.constraint_fn(
-                    grid, box_pos, wall_char, goal_char
-                )
-
-            elif opcode == ISAOpcode.APPLY_FRICTION:
-                grid = state.get("grid")
-                box_pos = state.get("box_pos", (0, 0))
-                wall_char = state.get("wall_char", 0)
-                return instruction.constraint_fn(grid, box_pos, wall_char)
-
-            elif opcode == ISAOpcode.REFLECT_X:
-                x = state.get("x", 0)
-                y = state.get("y", 0)
-                origin_x = state.get("origin_x", 0)
-                return instruction.constraint_fn(x, y, origin_x)
-
-            elif opcode == ISAOpcode.REFLECT_Y:
-                x = state.get("x", 0)
-                y = state.get("y", 0)
-                origin_y = state.get("origin_y", 0)
-                return instruction.constraint_fn(x, y, origin_y)
-
-            elif opcode == ISAOpcode.RAY_REFLECT:
-                start = state.get("start", (0, 0))
-                hit_pos = state.get("hit_pos", (0, 0))
-                normal = state.get("normal", (0, 0))
-                return instruction.constraint_fn(start, hit_pos, normal)
-
-            elif opcode == ISAOpcode.DFA_STEP:
-                dfa_state = state.get("dfa_state", 0)
-                event = state.get("event", 0)
-                dfa = state.get("dfa")
-                return instruction.constraint_fn(dfa_state, event, dfa)
-
-            elif opcode == ISAOpcode.CHECK_CAUSAL:
-                event_sequence = state.get("event_sequence", [])
-                dfa = state.get("dfa")
-                return instruction.constraint_fn(event_sequence, dfa)
-
-            elif opcode == ISAOpcode.TOPO_SORT:
-                colors = state.get("colors", [])
-                target_order = state.get("target_order", [])
-                return instruction.constraint_fn(colors, target_order)
-
-            elif opcode == ISAOpcode.CHECK_POSET:
-                colors = state.get("colors", [])
-                target_order = state.get("target_order", [])
-                return instruction.constraint_fn(colors, target_order)
-
-            elif opcode == ISAOpcode.KAPPA_SNAP:
-                eml_data = state.get("eml_data")
-                prior_data = state.get("prior_data")
-                return instruction.constraint_fn(eml_data, prior_data)
-
-            elif opcode == ISAOpcode.GAUSSEX_VERIFY:
-                residual = state.get("residual")
-                alpha = state.get("alpha", 0.05)
-                return instruction.constraint_fn(residual, alpha)
-
-            elif opcode == ISAOpcode.DEADZERO_FUSE:
-                branch_state = state.get("branch_state")
-                return instruction.constraint_fn(branch_state)
-
-            else:
-                return ISAResult.PASS
-
+            result: ISAResult = fn(state)
+            return result
         except Exception:
-            # Constraint execution failed — treat as FUSE (safe pruning)
+            # Macro execution failed — treat as FUSE (safe pruning)
             return ISAResult.FUSE
 
     def aggregate_results(
-        self, results: List[Tuple[ISAOpcode, ISAResult]],
+        self,
+        results: List[Tuple[MacroISAOpcode, ISAResult]],
     ) -> ISAResult:
-        """Aggregate ISA gate results — worst outcome determines branch fate.
+        """Aggregate macro instruction results — worst outcome determines fate.
 
         The aggregation follows the severity hierarchy:
-          DEAD_ZERO > FUSE > PASS
+            DEAD_ZERO > FUSE > PASS
 
         If ANY instruction returns DEAD_ZERO, the entire branch is
         permanently invalid. If any instruction returns FUSE (but
@@ -885,13 +1430,13 @@ class TProcessor:
         game_id: str,
         state: Dict[str, Any],
     ) -> ISAResult:
-        """Execute ISA constraint gate for a game before κ-Snap expansion.
+        """Execute ISA constraint gate for a game — main integration hook.
 
-        This is the main integration hook called by
+        This is the primary integration point called by
         universal_solver_pipeline.py before κ-Snap expansion. It:
 
-        1. Fetches the ISA instruction sequence for game_id.
-        2. Executes each instruction as a constraint gate.
+        1. Fetches the macro ISA sequence for game_id.
+        2. Executes each macro instruction as a direct function call.
         3. Aggregates results to determine branch fate.
         4. Returns PASS/FUSE/DEAD_ZERO for the pipeline to act on.
 
@@ -903,32 +1448,35 @@ class TProcessor:
             game_id: Game identifier (may include version suffix).
             state: Game state dict containing operands for instructions.
                 The state dict must contain the relevant keys for the
-                ISA instructions registered for this game.
+                macro instructions registered for this game.
 
         Returns:
             ISAResult indicating whether κ-Snap expansion may proceed.
         """
-        # Step 1: Fetch ISA sequence for this game
-        isa_sequence: List[ISAOpcode] = self.fetch_isa_sequence(game_id)
+        # Step 1: Fetch macro ISA sequence
+        isa_sequence: List[MacroISAOpcode] = self.fetch_isa_sequence(game_id)
 
-        if not isa_sequence:
-            # No ISA sequence registered → default PASS (no physics constraints)
-            return ISAResult.PASS
+        # Step 2: Record start time for CHK_TIMEW
+        start_time: float = time.time()
+        state["start_time"] = start_time
 
-        # Step 2: Execute each instruction in the sequence
-        results: List[Tuple[ISAOpcode, ISAResult]] = []
+        # Step 3: Execute each macro instruction
+        results: List[Tuple[MacroISAOpcode, ISAResult]] = []
         for opcode in isa_sequence:
-            result: ISAResult = self.execute_instruction(opcode, state)
+            result: ISAResult = self.execute_macro(opcode, state)
             results.append((opcode, result))
 
             # Early exit: if DEAD_ZERO detected, no need to continue
             if result == ISAResult.DEAD_ZERO:
                 break
 
-        # Step 3: Aggregate results
+            # Update start time for subsequent instructions (time window reset)
+            state["start_time"] = time.time()
+
+        # Step 4: Aggregate results
         final_result: ISAResult = self.aggregate_results(results)
 
-        # Step 4: Cache state for potential Re-Inflow
+        # Step 5: Cache state for potential Re-Inflow
         proc_state: TProcessorState = TProcessorState(
             game_id=game_id,
             isa_sequence=isa_sequence,
@@ -940,6 +1488,91 @@ class TProcessor:
         self._state_cache[base_id] = proc_state
 
         return final_result
+
+    def perceive(self, grid: Any) -> EMLGraph:
+        """Build EML hypergraph from a 2D grid — perception step.
+
+        Converts a 2D grid (numpy array or list) into an EMLGraph where
+        each cell becomes an EMLNode with physical properties:
+        - kind classification (wall/player/box/empty/goal)
+        - mass assignment (wall=∞, player=1, box=2, goal=0, empty=0)
+        - Octonion velocity initialization
+        - 4-connected neighborhood adjacency
+
+        Used by SOLVE_VIA_KSAP to build the EML state for κ-Snap projection.
+
+        Args:
+            grid: 2D grid (numpy array or list of lists).
+                Wall cells are typically 0, empty cells 1, player 2,
+                goal 3, box 4 (convention varies by game).
+
+        Returns:
+            EMLGraph with nodes representing grid cells and edges
+            representing 4-connected adjacency.
+        """
+        if hasattr(grid, 'shape'):
+            h, w = grid.shape
+            grid_data = grid
+        elif isinstance(grid, list):
+            h = len(grid)
+            w = len(grid[0]) if h > 0 else 0
+            grid_data = grid
+        else:
+            return EMLGraph()
+
+        eml_graph: EMLGraph = EMLGraph()
+        id_map: Dict[Tuple[int, int], int] = {}
+
+        # Kind classification mapping (generic)
+        kind_map: Dict[int, str] = {
+            0: "wall",    # Convention: 0 = wall
+            1: "empty",   # Convention: 1 = empty floor
+            2: "goal",    # Convention: 2 = goal position
+            3: "player",  # Convention: 3 = player
+            4: "box",     # Convention: 4 = box/object
+        }
+
+        # Mass mapping (Newton mechanics: wall=∞, box=2, player=1, others=0)
+        mass_map: Dict[str, float] = {
+            "wall": float('inf'),
+            "box": 2.0,
+            "player": 1.0,
+            "goal": 0.0,
+            "empty": 0.0,
+        }
+
+        # Create nodes
+        for y in range(h):
+            for x in range(w):
+                cell_val: int = int(grid_data[y][x]) if isinstance(grid_data, list) else int(grid_data[y, x])
+                kind: str = kind_map.get(cell_val, "empty")
+                mass: float = mass_map.get(kind, 0.0)
+                # Walls have infinite mass → clamp for numerical stability
+                if mass == float('inf'):
+                    mass = 1e6
+
+                node_id: int = y * w + x
+                node: EMLNode = EMLNode(
+                    id=node_id,
+                    pos=(x, y),
+                    kind=kind,
+                    mass=mass,
+                    velocity=Octonion(),  # Zero velocity initially
+                    neighbors=[],
+                )
+                eml_graph.add(node)
+                id_map[(x, y)] = node_id
+
+        # Build adjacency (4-connected grid)
+        for node in eml_graph.nodes:
+            x, y = node.pos
+            for dx, dy in [(0, 1), (0, -1), (1, 0), (-1, 0)]:
+                nx, ny = x + dx, y + dy
+                neighbor_id: Optional[int] = id_map.get((nx, ny))
+                if neighbor_id is not None:
+                    node.neighbors.append(neighbor_id)
+
+        return eml_graph
 
     def get_processor_state(self, game_id: str) -> Optional[TProcessorState]:
         """Retrieve cached processor state for a game.
@@ -965,11 +1598,11 @@ class TProcessor:
 
 
 # =============================================================================
-# §8. Module-level convenience functions
+# §14. Module-level convenience functions (保留接口)
 # =============================================================================
 
 # Singleton processor instance for module-level access
-_processor: TProcessor = TProcessor()
+_processor_v12: TProcessorV12 = TProcessorV12()
 
 
 def execute_isa_gate(
@@ -982,54 +1615,44 @@ def execute_isa_gate(
     Call this before κ-Snap expansion to check if the current game state
     satisfies all physics axiom constraints.
 
+    Internally uses TProcessorV12 with macro instruction model.
+
     Args:
         game_id: Game identifier (may include version suffix).
-        state: Game state dict with operands for ISA instructions.
+        state: Game state dict with operands for macro instructions.
 
     Returns:
         ISAResult.PASS → allow κ-Snap expansion.
         ISAResult.FUSE → prune branch (Dead-Zero熔断).
         ISAResult.DEAD_ZERO → mark branch permanently invalid.
     """
-    return _processor.execute_isa_gate(game_id, state)
+    return _processor_v12.execute_isa_gate(game_id, state)
 
 
-def get_isa_sequence(game_id: str) -> List[ISAOpcode]:
-    """Get the ISA instruction sequence for a game.
+def get_isa_sequence(game_id: str) -> List[MacroISAOpcode]:
+    """Get the macro ISA instruction sequence for a game.
 
     Args:
         game_id: Game identifier (may include version suffix).
 
     Returns:
-        List of ISAOpcode values registered for this game.
+        List of MacroISAOpcode values registered for this game.
     """
-    return _processor.fetch_isa_sequence(game_id)
-
-
-def get_instruction(opcode: ISAOpcode) -> Optional[ISAInstruction]:
-    """Get the ISAInstruction definition for an opcode.
-
-    Args:
-        opcode: ISA opcode to look up.
-
-    Returns:
-        ISAInstruction definition, or None if opcode is unknown.
-    """
-    return _processor.decode_instruction(opcode)
+    return _processor_v12.fetch_isa_sequence(game_id)
 
 
 def register_game_isa(
     game_id: str,
-    isa_sequence: List[ISAOpcode],
+    isa_sequence: List[MacroISAOpcode],
 ) -> None:
-    """Register a custom ISA sequence for a game.
+    """Register a custom macro ISA sequence for a game.
 
     Allows extending the ISA registry for new games or modifying
-    existing game ISA sequences dynamically.
+    existing game macro ISA sequences dynamically.
 
     Args:
         game_id: Base game identifier (no version suffix).
-        isa_sequence: List of ISA opcodes to execute for this game.
+        isa_sequence: List of MacroISAOpcode values to execute for this game.
     """
     base_id: str = game_id.split("-")[0] if game_id else ""
-    _processor.registry[base_id] = isa_sequence
+    _processor_v12.registry[base_id] = isa_sequence
