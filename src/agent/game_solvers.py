@@ -3377,13 +3377,13 @@ def solve_sc25(game: Any, level_idx: int) -> list | None:
 
 
 # ============================================================================
-# SB26 Solver: Item sorting
+# SB26 Solver: Item sorting — Poset physics-grounded strategy
 # ============================================================================
 
 def solve_sb26(game: Any, level_idx: int) -> list | None:
-    """Solve SB26: Color sorting game — arrange blocks in frames by target order.
+    """Solve SB26: Color sorting game — Poset physics-grounded strategy.
 
-    Game mechanics (v3.19.0 — proper sorting solver):
+    Game mechanics (v3.20.0 — Poset sorting solver):
         - Actions: [5,6,7] (SCAN/VALIDATE, CLICK_SELECT, UNDO)
         - Bottom blocks: tag='lngftsryyw' (also sys_click), 4 sprites
         - Frame slots: tag='susublrply' (also sys_click), 8 sprites
@@ -3391,149 +3391,363 @@ def solve_sb26(game: Any, level_idx: int) -> list | None:
         - Target colors: game.wcfyiodrx (sorted by y,x)
         - Bottom block colors: game.dkouqqads → lngftsryyw + sys_click
         - Frame slots: game.dewwplfix → susublrply + sys_click
-        - ACTION5: scan/validate
-        - ACTION6: click to select/swap
+        - ACTION5: scan/validate (submit final arrangement)
+        - ACTION6: click to select/swap (click block → click slot)
         - ACTION7: undo
         - Win: color chain matches all quhhhthrri entries
 
-    Strategy (v3.19.0 — structural sorting):
-        Stage 1: Read game structure — frames, targets, blocks, slots
-        Stage 2: Compute desired arrangement (target color → slot mapping)
-        Stage 3: Generate swap sequence — click block → click slot
+    Strategy (v3.20.0 — Poset physics-grounded sorting):
+        Stage 1: Extract game structure — target order, current colors, sprites
+        Stage 2: Compute swap plan via compute_swap_sequence() (PRIMARY)
+                 Verify each step with is_valid_poset_order() (Dead-Zero熔断)
+        Stage 3: Execute swaps as click pairs (ACTION6 block → ACTION6 slot)
         Stage 4: Submit with ACTION5
 
-    After each swap/move, game needs animation frames before accepting
-    next action. Uses _perform_action_safe pattern for animation handling.
+    Physics primitives (PRIMARY solver logic):
+        - compute_swap_sequence(current_colors, target_order) → minimal swap plan
+        - is_valid_poset_order(colors, target_order) → Dead-Zero熔断 gate
+        - topological_sort_colors(target_order) → full ordering from partial order
     """
     import time as _time
     from arcengine import GameAction
+    from .physics_primitives import (
+        compute_swap_sequence,
+        is_valid_poset_order,
+        topological_sort_colors,
+    )
 
     original_level = game._current_level_index
+    start_time = _time.time()
 
     # Quick check — already solved?
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Stage 1: Read game structure ──
-    # Target colors: game.wcfyiodrx attribute (sorted by y,x)
-    # Frame containers: game.qaagahahj (each has capacity from name[-1])
-    # Bottom blocks: game.dkouqqads (lngftsryyw sprites + sys_click)
-    # Frame slots: game.dewwplfix (susublrply sprites + sys_click)
-    target_colors = _get_attr(game, "wcfyiodrx", None)
-    frames_attr = _get_attr(game, "qaagahahj", None)
+    # ════════════════════════════════════════════════════════════════
+    # Stage 1: Extract game structure
+    # ════════════════════════════════════════════════════════════════
+
+    # ── 1a: Target order (the desired color sequence) ──
+    target_colors_attr = _get_attr(game, "wcfyiodrx", None)
+    target_order: list[int] = []
+
+    if target_colors_attr is not None:
+        if isinstance(target_colors_attr, list):
+            # List of color integers — direct target sequence
+            target_order = [int(c) for c in target_colors_attr]
+        elif isinstance(target_colors_attr, dict):
+            # Dict mapping position→color — extract sorted by position
+            sorted_keys = sorted(target_colors_attr.keys(),
+                                 key=lambda k: (k[1], k[0]) if isinstance(k, tuple) else k)
+            target_order = [int(target_colors_attr[k]) for k in sorted_keys]
+        elif hasattr(target_colors_attr, '__iter__'):
+            # Generic iterable — convert to list of ints
+            try:
+                target_order = [int(c) for c in target_colors_attr]
+            except (TypeError, ValueError):
+                target_order = []
+
+    # ── 1b: Current block colors (bottom blocks) ──
     bottom_blocks_attr = _get_attr(game, "dkouqqads", None)
+    current_block_colors: list[int] = []
+
+    if bottom_blocks_attr is not None:
+        if isinstance(bottom_blocks_attr, list):
+            current_block_colors = [int(c) for c in bottom_blocks_attr]
+        elif isinstance(bottom_blocks_attr, dict):
+            # Dict mapping sprite→color, extract by sorted sprite position
+            sorted_keys = sorted(bottom_blocks_attr.keys(),
+                                 key=lambda k: (getattr(k, 'y', 0), getattr(k, 'x', 0))
+                                 if hasattr(k, 'x') else k)
+            current_block_colors = [int(bottom_blocks_attr[k]) for k in sorted_keys]
+        elif hasattr(bottom_blocks_attr, '__iter__'):
+            try:
+                current_block_colors = [int(c) for c in bottom_blocks_attr]
+            except (TypeError, ValueError):
+                current_block_colors = []
+
+    # ── 1c: Current slot colors (frame slots) ──
     frame_slots_attr = _get_attr(game, "dewwplfix", None)
+    current_slot_colors: list[int] = []
 
-    # Sprite-based extraction
-    bottom_clicks = _get_sprites_by_tag(game, "lngftsryyw")
-    middle_clicks = _get_sprites_by_tag(game, "susublrply")
+    if frame_slots_attr is not None:
+        if isinstance(frame_slots_attr, list):
+            current_slot_colors = [int(c) for c in frame_slots_attr]
+        elif isinstance(frame_slots_attr, dict):
+            sorted_keys = sorted(frame_slots_attr.keys(),
+                                 key=lambda k: (getattr(k, 'y', 0), getattr(k, 'x', 0))
+                                 if hasattr(k, 'x') else k)
+            current_slot_colors = [int(frame_slots_attr[k]) for k in sorted_keys]
+        elif hasattr(frame_slots_attr, '__iter__'):
+            try:
+                current_slot_colors = [int(c) for c in frame_slots_attr]
+            except (TypeError, ValueError):
+                current_slot_colors = []
 
-    if not bottom_clicks and not middle_clicks:
-        # No tagged sprites found — try sys_click fallback
+    # ── 1d: Sprites (click targets for block/slot positions) ──
+    bottom_sprites = _get_sprites_by_tag(game, "lngftsryyw")
+    slot_sprites = _get_sprites_by_tag(game, "susublrply")
+
+    # Fallback: if tagged sprites not found, try sys_click
+    if not bottom_sprites and not slot_sprites:
         sys_clicks = _get_sprites_by_tag(game, "sys_click")
         if sys_clicks:
-            # Split sys_clicks into bottom and middle by y position
-            # Bottom blocks are typically in lower rows, frame slots in upper rows
             all_y = sorted(set(_sprite_pos(s)[1] for s in sys_clicks))
             if len(all_y) >= 2:
                 mid_y = all_y[len(all_y) // 2]
-                bottom_clicks = [s for s in sys_clicks if _sprite_pos(s)[1] >= mid_y]
-                middle_clicks = [s for s in sys_clicks if _sprite_pos(s)[1] < mid_y]
+                bottom_sprites = [s for s in sys_clicks if _sprite_pos(s)[1] >= mid_y]
+                slot_sprites = [s for s in sys_clicks if _sprite_pos(s)[1] < mid_y]
             else:
-                bottom_clicks = sys_clicks[:4] if len(sys_clicks) >= 4 else sys_clicks
-                middle_clicks = sys_clicks[4:] if len(sys_clicks) > 4 else []
+                bottom_sprites = sys_clicks[:4] if len(sys_clicks) >= 4 else sys_clicks
+                slot_sprites = sys_clicks[4:] if len(sys_clicks) > 4 else []
         else:
+            # No clickable sprites at all — cannot solve via physics primitives
             return None
 
-    # ── Stage 2: Compute desired arrangement ──
-    # Target: each slot should have a specific color block
-    # We need to figure out which color goes in which slot position
-    plan: list[tuple] = []
+    # Sort sprites by position for consistent index mapping
+    # Bottom blocks: sorted by (y, x) — left-to-right, top-to-bottom
+    bottom_sorted = sorted(bottom_sprites, key=lambda s: (_sprite_pos(s)[1], _sprite_pos(s)[0]))
+    # Frame slots: sorted by (y, x) — left-to-right, top-to-bottom
+    slot_sorted = sorted(slot_sprites, key=lambda s: (_sprite_pos(s)[1], _sprite_pos(s)[0]))
 
-    # Sort bottom blocks by position (x coordinate for horizontal layout)
-    bottom_sorted = sorted(bottom_clicks, key=lambda s: (_sprite_pos(s)[1], _sprite_pos(s)[0]))
-    # Sort middle slots by position (x coordinate for horizontal layout)
-    middle_sorted = sorted(middle_clicks, key=lambda s: (_sprite_pos(s)[1], _sprite_pos(s)[0]))
+    # Build index → display coordinate mappings
+    bottom_coords: list[tuple[int, int]] = [
+        _sprite_display_center(game, s) for s in bottom_sorted
+    ]
+    slot_coords: list[tuple[int, int]] = [
+        _sprite_display_center(game, s) for s in slot_sorted
+    ]
 
-    # Try to read target arrangement from game attributes
-    if target_colors is not None:
-        # target_colors contains the desired color sequence
-        try:
-            if isinstance(target_colors, list):
-                target_seq = target_colors
-            elif isinstance(target_colors, dict):
-                target_seq = list(target_colors.values())
-            else:
-                target_seq = []
-        except Exception:
-            target_seq = []
+    # Combined coordinate list: bottom blocks + frame slots
+    # compute_swap_sequence uses indices over the combined color arrangement
+    all_coords: list[tuple[int, int]] = bottom_coords + slot_coords
 
-    # ── Stage 2b: Determine frame capacities ──
-    # Frames: qaagahahj sprites, capacity = frame.name[-1]
-    # If we can read frame capacity, we know how many slots per frame
+    # ── 1e: Frame capacities (for slot grouping) ──
     frame_sprites = _get_sprites_by_tag(game, "qaagahahj")
     frame_caps: list[int] = []
     if frame_sprites:
         for frame in sorted(frame_sprites, key=lambda s: (_sprite_pos(s)[0], _sprite_pos(s)[1])):
             name = getattr(frame, "name", "")
-            # Capacity is last char of name (digit)
             if name and name[-1].isdigit():
                 frame_caps.append(int(name[-1]))
             else:
-                # Default capacity: 2 slots per frame
-                frame_caps.append(2)
+                frame_caps.append(2)  # default capacity
 
-    # ── Stage 3: Generate swap sequence ──
-    # Strategy: For each slot position (left to right), place the correct color
-    # Swap mechanics: click bottom block (select) → click frame slot (move)
-    #   OR click bottom block → click another bottom block (swap)
+    # ════════════════════════════════════════════════════════════════
+    # Stage 2: Compute swap plan via Poset physics primitives (PRIMARY)
+    # ════════════════════════════════════════════════════════════════
 
-    # Simulation-based approach: simulate clicking to determine swap sequence
-    # First try: just click all blocks and slots in sequence, then validate
-    sim_game = copy.deepcopy(game)
-    sim_plan: list[tuple] = []
+    # The combined current arrangement = bottom block colors + frame slot colors
+    # This represents the full sequence we need to sort into target_order
+    current_colors = current_block_colors + current_slot_colors
 
-    # Strategy 3a: Try all permutations of slot assignment (limited by frame capacity)
-    # For efficiency, use oracle click replay first
-    try:
-        oracle_plan = _solve_oracle_click_replay(game, "sb26", level_idx, max_steps=50, max_time=5.0)
-        if oracle_plan is not None:
-            return oracle_plan
-    except Exception:
-        pass
+    # If we couldn't read colors from attributes, try to extract from sprites
+    if not current_colors:
+        # Attempt to read color from each sprite
+        for s in bottom_sorted:
+            c = getattr(s, "color", getattr(s, "value", 0))
+            try:
+                current_block_colors.append(int(c))
+            except (TypeError, ValueError):
+                current_block_colors.append(0)
+        for s in slot_sorted:
+            c = getattr(s, "color", getattr(s, "value", 0))
+            try:
+                current_slot_colors.append(int(c))
+            except (TypeError, ValueError):
+                current_slot_colors.append(0)
+        current_colors = current_block_colors + current_slot_colors
 
-    # Strategy 3b: Intelligent sorting — click each block into each slot
-    # Use DFS with game simulation for precise click sequencing
-    try:
-        delta_plan = _solve_game_delta_state_bfs(game, "sb26", level_idx, max_time=8.0)
-        if delta_plan is not None:
-            return delta_plan
-    except Exception:
-        pass
+    # If no target_order was read, try topological_sort_colors on the
+    # current arrangement to derive a natural ordering
+    if not target_order and current_colors:
+        # Use the unique colors in their natural sorted order as target
+        unique_colors = sorted(set(current_colors))
+        target_order = topological_sort_colors(unique_colors)
 
-    # Strategy 3c: Fallback — systematic click all slots then blocks
-    # Click frame slots first (to clear/prepare), then click blocks into slots
-    for slot in middle_sorted:
-        pos = _sprite_display_center(game, slot)
-        sim_plan.append((GameAction.ACTION6, pos))
+    # ── 2a: Compute swap sequence using physics primitive ──
+    # compute_swap_sequence returns [('swap', i, j), ...] — minimal swaps
+    # to transform current_colors into target_order
+    swap_plan: list[tuple] | None = None
 
-    for block in bottom_sorted:
-        pos = _sprite_display_center(game, block)
-        sim_plan.append((GameAction.ACTION6, pos))
+    if current_colors and target_order:
+        # Align lengths: target_order may define ordering for subset
+        # If target is shorter, it defines order for available positions
+        if len(target_order) <= len(current_colors):
+            # Pad target with remaining colors in natural order
+            used = set(target_order)
+            remaining = [c for c in sorted(set(current_colors) - used)]
+            full_target = list(target_order) + remaining
+            # Extend to match current_colors length
+            while len(full_target) < len(current_colors):
+                full_target.append(current_colors[len(full_target)])
+            target_order = full_target
+        elif len(target_order) > len(current_colors):
+            # Truncate target to match current arrangement length
+            target_order = target_order[:len(current_colors)]
 
-    # Submit/validate
-    sim_plan.append((GameAction.ACTION5, None))
+        swap_plan = compute_swap_sequence(current_colors, target_order)
 
-    # Strategy 3d: κ-PS fallback — simulation-guided search
-    if sim_plan:
+    # ── 2b: Validate swap plan with Dead-Zero熔断 ──
+    # After each swap, the intermediate arrangement must satisfy
+    # is_valid_poset_order() — otherwise the swap creates a Dead-Zero
+    # state and must be skipped/reordered
+    validated_swaps: list[tuple] = []
+    if swap_plan:
+        sim_colors = list(current_colors)
+
+        for swap_entry in swap_plan:
+            # swap_entry = ('swap', i, j)
+            action_type = swap_entry[0]
+            i_idx = swap_entry[1]
+            j_idx = swap_entry[2]
+
+            # Bounds check
+            if i_idx >= len(sim_colors) or j_idx >= len(sim_colors):
+                continue
+
+            # Simulate the swap
+            sim_colors[i_idx], sim_colors[j_idx] = sim_colors[j_idx], sim_colors[i_idx]
+
+            # Dead-Zero熔断: validate that intermediate state satisfies target partial order
+            if not is_valid_poset_order(sim_colors, target_order):
+                # Invalid poset after swap — reverse and skip (Dead-Zero熔断)
+                sim_colors[i_idx], sim_colors[j_idx] = sim_colors[j_idx], sim_colors[i_idx]
+                continue
+
+            # Swap is valid — record it
+            validated_swaps.append(swap_entry)
+
+    # ════════════════════════════════════════════════════════════════
+    # Stage 3: Execute swaps as click pairs (ACTION6)
+    # ════════════════════════════════════════════════════════════════
+
+    plan: list[tuple] = []
+
+    if validated_swaps and all_coords:
+        # Each swap ('swap', i, j) maps to:
+        #   Click sprite at index i (select source)
+        #   Click sprite at index j (select destination)
+        # In SB26 mechanics: click block → click slot
+
+        for swap_entry in validated_swaps:
+            i_idx = swap_entry[1]
+            j_idx = swap_entry[2]
+
+            # Get display coordinates for source and destination
+            src_coord = all_coords[i_idx] if i_idx < len(all_coords) else None
+            dst_coord = all_coords[j_idx] if j_idx < len(all_coords) else None
+
+            if src_coord is None or dst_coord is None:
+                continue
+
+            # Click source (select block/item) — ACTION6
+            plan.append((GameAction.ACTION6, src_coord))
+
+            # Click destination (move to slot) — ACTION6
+            plan.append((GameAction.ACTION6, dst_coord))
+
+    # ── 3b: If physics swap plan didn't work, try direct placement ──
+    # Strategy: place each bottom block into the correct slot position
+    # This handles cases where compute_swap_sequence couldn't find a plan
+    if not plan and bottom_sorted and slot_sorted and target_order:
+        # Determine which block color should go to which slot
+        # For each slot position, find the block with the matching target color
+        num_slots = len(slot_sorted)
+        num_blocks = len(bottom_sorted)
+
+        # Build block→color mapping (sorted by position)
+        block_color_map: dict[int, int] = {}
+        for idx, s in enumerate(bottom_sorted):
+            c = current_block_colors[idx] if idx < len(current_block_colors) else 0
+            block_color_map[idx] = c
+
+        # Build slot→target_color mapping
+        # Slots should be filled left-to-right with target colors
+        slot_target_map: dict[int, int] = {}
+        for idx in range(min(num_slots, len(target_order))):
+            slot_target_map[idx] = target_order[idx]
+
+        # For each slot that needs a specific color, find the block with that color
+        # and create click pair: click block → click slot
+        used_blocks: set[int] = set()
+
+        for slot_idx, target_color in slot_target_map.items():
+            # Find an unused block with this color
+            block_idx = None
+            for b_idx, b_color in block_color_map.items():
+                if b_idx not in used_blocks and b_color == target_color:
+                    block_idx = b_idx
+                    break
+
+            if block_idx is not None:
+                used_blocks.add(block_idx)
+                block_coord = bottom_coords[block_idx]
+                slot_coord = slot_coords[slot_idx]
+
+                # Click block (select) → click slot (move)
+                plan.append((GameAction.ACTION6, block_coord))
+                plan.append((GameAction.ACTION6, slot_coord))
+
+        # Place remaining blocks into remaining slots
+        remaining_blocks = [i for i in range(num_blocks) if i not in used_blocks]
+        remaining_slots = [i for i in range(num_slots) if i not in slot_target_map or slot_target_map[i] == 0]
+
+        for b_idx, s_idx in zip(remaining_blocks, remaining_slots):
+            if b_idx < len(bottom_coords) and s_idx < len(slot_coords):
+                plan.append((GameAction.ACTION6, bottom_coords[b_idx]))
+                plan.append((GameAction.ACTION6, slot_coords[s_idx]))
+
+    # ════════════════════════════════════════════════════════════════
+    # Stage 4: Submit with ACTION5 (scan/validate)
+    # ════════════════════════════════════════════════════════════════
+
+    if plan:
+        plan.append((GameAction.ACTION5, None))
+
+    # ── Fallback: If physics-grounded plan is empty, try secondary strategies ──
+    # These are NOT the primary solver — they're fallback for edge cases
+    if not plan:
+        # Fallback A: Oracle click replay
         try:
-            kps_plan = solve_game_kps(game, max_depth=30, max_nodes=20000, max_time=5.0)
+            oracle_plan = _solve_oracle_click_replay(game, "sb26", level_idx, max_steps=50, max_time=5.0)
+            if oracle_plan is not None:
+                return oracle_plan
+        except Exception:
+            pass
+
+        # Fallback B: Delta-state BFS
+        elapsed = _time.time() - start_time
+        remaining_time = max(1.0, 8.0 - elapsed)
+        try:
+            delta_plan = _solve_game_delta_state_bfs(game, "sb26", level_idx, max_time=remaining_time)
+            if delta_plan is not None:
+                return delta_plan
+        except Exception:
+            pass
+
+        # Fallback C: κ-PS search
+        elapsed = _time.time() - start_time
+        remaining_time = max(0.5, 8.0 - elapsed)
+        try:
+            kps_plan = solve_game_kps(game, max_depth=30, max_nodes=20000, max_time=remaining_time)
             if kps_plan is not None:
                 return kps_plan
         except Exception:
             pass
 
-    return sim_plan if sim_plan else None
+        # Fallback D: Systematic click all slots then blocks + submit
+        fallback_plan: list[tuple] = []
+        for slot in slot_sorted:
+            pos = _sprite_display_center(game, slot)
+            fallback_plan.append((GameAction.ACTION6, pos))
+        for block in bottom_sorted:
+            pos = _sprite_display_center(game, block)
+            fallback_plan.append((GameAction.ACTION6, pos))
+        fallback_plan.append((GameAction.ACTION5, None))
+        return fallback_plan if fallback_plan else None
+
+    return plan
 
 
 # ============================================================================
