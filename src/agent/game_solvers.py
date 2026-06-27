@@ -68,6 +68,11 @@ from .neural_dsl import (
     estimate_alienation,
     estimate_structural_phase,
     yinlong_tensor_product,
+    # v3.20.0 — κ-Tsirelson causal reduction
+    KappaTsirelsonVerifier,
+    KappaCausalReductionDSL,
+    tsirelson_causal_reduction,
+    confidence_from_eta,
 )
 
 
@@ -2667,11 +2672,14 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
     # ── Phase 1: Extract game state and build CausalDFA ──
     start_time = _time.time()
 
-    # Extract clickable sprites (kntfjgchzd tag = state machine triggers)
-    clickable_sprites = _get_sprites_by_tag(game, "kntfjgchzd")
+    # Extract clickable sprites — TN36 uses "Maidxz" / "sys_click" tags
+    # NOT "kntfjgchzd" (that tag doesn't exist in current game version)
+    clickable_sprites = _get_sprites_by_tag(game, "Maidxz")
     if not clickable_sprites:
-        # Fallback: try sys_click tag and other known tags
-        for fallback_tag in ("sys_click", "Maidxz", "qqifsatqdo"):
+        clickable_sprites = _get_sprites_by_tag(game, "sys_click")
+    if not clickable_sprites:
+        # Fallback: try kntfjgchzd and other known tags
+        for fallback_tag in ("kntfjgchzd", "qqifsatqdo"):
             clickable_sprites = _get_sprites_by_tag(game, fallback_tag)
             if clickable_sprites:
                 break
@@ -2781,21 +2789,12 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
         sim_game = copy.deepcopy(saved_game)
         click_pos = sprite_positions.get(sprite_idx, (32, 32))
 
-        # Execute click on simulation
+        # Execute click on simulation — use perform_action(ActionInput) not step()
         try:
-            sim_game.step(GameAction.ACTION6, {"x": click_pos[0], "y": click_pos[1]})
+            ai = ActionInput(id=GameAction.ACTION6, data={"x": click_pos[0], "y": click_pos[1]})
+            sim_game.perform_action(ai)
         except (TypeError, ValueError, AttributeError):
-            # Try alternative step interface
-            try:
-                sim_game.step((GameAction.ACTION6, click_pos))
-            except Exception:
-                continue
-
-        # Check for animation/intermediate state — step again to settle
-        try:
-            sim_game.step(GameAction.ACTION6, {"x": 0, "y": 0})  # No-op to settle
-        except Exception:
-            pass
+            continue
 
         new_state_hash = _get_state_hash(sim_game)
 
@@ -2833,18 +2832,10 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
                 click_pos = sprite_positions.get(sprite_idx, (32, 32))
 
                 try:
-                    sim_game.step(GameAction.ACTION6, {"x": click_pos[0], "y": click_pos[1]})
+                    ai = ActionInput(id=GameAction.ACTION6, data={"x": click_pos[0], "y": click_pos[1]})
+                    sim_game.perform_action(ai)
                 except (TypeError, ValueError, AttributeError):
-                    try:
-                        sim_game.step((GameAction.ACTION6, click_pos))
-                    except Exception:
-                        continue
-
-                # Settle animation
-                try:
-                    sim_game.step(GameAction.ACTION6, {"x": 0, "y": 0})
-                except Exception:
-                    pass
+                    continue
 
                 new_state_hash = _get_state_hash(sim_game)
 
@@ -2889,17 +2880,10 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
             verify_game = copy.deepcopy(saved_game)
             for action, click_data in plan:
                 try:
-                    verify_game.step(action, {"x": click_data[0], "y": click_data[1]})
+                    ai = ActionInput(id=action, data={"x": click_data[0], "y": click_data[1]})
+                    verify_game.perform_action(ai)
                 except (TypeError, ValueError, AttributeError):
-                    try:
-                        verify_game.step((action, click_data))
-                    except Exception:
-                        break
-                # Settle animation
-                try:
-                    verify_game.step(GameAction.ACTION6, {"x": 0, "y": 0})
-                except Exception:
-                    pass
+                    break
 
             if _is_win_state(verify_game) or _is_level_solved(verify_game, original_level):
                 # Restore original game state (solver should not mutate input)
@@ -2940,18 +2924,10 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
                 click_pos = sprite_positions.get(sprite_idx, (32, 32))
 
                 try:
-                    test_game.step(GameAction.ACTION6, {"x": click_pos[0], "y": click_pos[1]})
+                    ai = ActionInput(id=GameAction.ACTION6, data={"x": click_pos[0], "y": click_pos[1]})
+                    test_game.perform_action(ai)
                 except (TypeError, ValueError, AttributeError):
-                    try:
-                        test_game.step((GameAction.ACTION6, click_pos))
-                    except Exception:
-                        continue
-
-                # Settle animation
-                try:
-                    test_game.step(GameAction.ACTION6, {"x": 0, "y": 0})
-                except Exception:
-                    pass
+                    continue
 
                 # Check win
                 if _is_win_state(test_game):
