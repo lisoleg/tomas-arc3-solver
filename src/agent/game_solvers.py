@@ -874,8 +874,21 @@ def solve_ka59(game: Any, level_idx: int) -> list | None:
     switcher_entities = adapter.switchers
 
     # ── Stage 2: Build wall grid ──
-    # Determine grid dimensions from adapter.grid_size
-    grid_dim = adapter.grid_size  # Typically 153 for KA59 (51*3)
+    # Determine grid dimensions from camera or game coordinate system
+    # KA59 uses game coordinates (e.g. player at (9,21), block at (2,23))
+    # Camera is 45x45, boundary wall spans 51 units (-3 to 48)
+    # Grid must encompass all game-coordinate positions
+    cam = getattr(game, "camera", None)
+    if cam is not None:
+        # Camera width/height gives the visible game coordinate range
+        # Add margin for boundary wall offset
+        cam_w = int(getattr(cam, "width", 51))
+        cam_h = int(getattr(cam, "height", 51))
+        grid_dim = max(cam_w, cam_h) + 6  # +6 for boundary offset (-3..+3)
+    elif adapter.grid_size and adapter.grid_size > 0 and adapter.grid_size < 200:
+        grid_dim = adapter.grid_size
+    else:
+        grid_dim = 51  # Default KA59 game coordinate space
 
     # Build binary wall grid (numpy array)
     # Grid convention: grid[y, x] where y=row, x=col
@@ -952,6 +965,32 @@ def solve_ka59(game: Any, level_idx: int) -> list | None:
                 py = gy + dy
                 if 0 <= px < grid_dim and 0 <= py < grid_dim:
                     grid[py, px] = GOAL_CHAR
+
+    # ── KA59 win condition fallback ──
+    # On L0 and some levels, there are no 0001uqqokjrptk goal sprites.
+    # The win condition is: all blocks (0010xzmuziohuf) overlap with
+    # player sprites (0022vrxelxosfy). So player positions ARE the goals.
+    if not goal_positions and switcher_entities:
+        # Use player sprite positions as goal positions
+        for s in switcher_entities:
+            sx = int(s.x)
+            sy = int(s.y)
+            sw = int(s.width)
+            sh = int(s.height)
+            scx = sx + sw // 2
+            scy = sy + sh // 2
+            sqx = (scx // STEP) * STEP
+            sqy = (scy // STEP) * STEP
+            sqx = max(STEP, min(grid_dim - STEP - 1, sqx))
+            sqy = max(STEP, min(grid_dim - STEP - 1, sqy))
+            goal_positions.add((sqx, sqy))
+            # Mark as goal in grid
+            for dy in range(0, sh, STEP):
+                for dx in range(0, sw, STEP):
+                    px = sx + dx
+                    py = sy + dy
+                    if 0 <= px < grid_dim and 0 <= py < grid_dim:
+                        grid[py, px] = GOAL_CHAR
 
     # Get player positions (all switchable players)
     player_pos: tuple[int, int] = (int(player_entity.x), int(player_entity.y))
@@ -2660,7 +2699,7 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
         5. Execute clicks in causal order computed by shortest path
     """
     import time as _time
-    from arcengine import GameAction
+    from arcengine import GameAction, ActionInput
     from .physics_primitives import CausalDFA
 
     original_level = game._current_level_index
@@ -2711,44 +2750,50 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
     def _get_state_hash(g: Any) -> int:
         """Compute a hash representing the current DFA state of the game.
 
-        Captures the state machine positions (htntnzkbzu, aqszntqeae)
-        and the vklyonlcrw win flag. This defines the DFA state space.
+        Captures the state machine numeric attributes (sjmtdfxdrc, rotation,
+        daiyaakser, xfbffsrbdz, ygsirzgzxw) and the vklyonlcrw win flag.
+        Uses numeric values instead of repr() which gives unstable object IDs.
         """
         fdks = getattr(g, "fdksqlmpki", None) or g
 
-        # Collect all state-defining attributes
+        # Collect all state-defining numeric attributes
         state_parts = []
 
-        # Left state machine (mvqheosngn) current selection
+        def _hash_sm_selection(sm_obj: Any, label: str) -> None:
+            """Hash a state machine's selection (htntnzkbzu) using numeric attrs."""
+            htnt = getattr(sm_obj, "htntnzkbzu", None)
+            if htnt is not None:
+                # Use stable numeric attributes instead of repr(object)
+                for attr_name in ("sjmtdfxdrc", "rotation", "daiyaakser",
+                                  "sjqqopsqvr", "ubescnrjpf", "xfbffsrbdz",
+                                  "ygsirzgzxw", "x", "y"):
+                    val = getattr(htnt, attr_name, None)
+                    if val is not None:
+                        state_parts.append((f"{label}_htnt_{attr_name}", val))
+
+            # Hash the target selection (aqszntqeae)
+            aqsz = getattr(sm_obj, "aqszntqeae", None)
+            if aqsz is not None:
+                for attr_name in ("sjmtdfxdrc", "dhqompvlco", "rotation",
+                                  "x", "y", "ygsirzgzxw"):
+                    val = getattr(aqsz, attr_name, None)
+                    if val is not None:
+                        state_parts.append((f"{label}_aqsz_{attr_name}", val))
+
+            # Win flag
+            vkly = getattr(sm_obj, "vklyonlcrw", None)
+            if vkly is not None:
+                state_parts.append((f"{label}_vklyonlcrw", vkly))
+
+        # Left state machine (mvqheosngn)
         left_sm = getattr(fdks, "mvqheosngn", None)
         if left_sm is not None:
-            htntnzkbzu = getattr(left_sm, "htntnzkbzu", None)
-            if htntnzkbzu is not None:
-                state_parts.append(("left_htntnzkbzu", repr(htntnzkbzu)))
+            _hash_sm_selection(left_sm, "left")
 
-        # Right state machine (bzirenxmrg) current selection + win
+        # Right state machine (bzirenxmrg)
         right_sm = getattr(fdks, "bzirenxmrg", None)
         if right_sm is not None:
-            htntnzkbzu = getattr(right_sm, "htntnzkbzu", None)
-            if htntnzkbzu is not None:
-                state_parts.append(("right_htntnzkbzu", repr(htntnzkbzu)))
-            aqszntqeae = getattr(right_sm, "aqszntqeae", None)
-            if aqszntqeae is not None:
-                state_parts.append(("right_aqszntqeae", repr(aqszntqeae)))
-            vklyonlcrw = getattr(right_sm, "vklyonlcrw", None)
-            state_parts.append(("vklyonlcrw", repr(vklyonlcrw)))
-
-        # Also hash sprite positions/programs for richer state
-        for i, s in enumerate(clickable_sprites):
-            prog = getattr(s, "program", None)
-            rot = getattr(s, "rotation", None)
-            sel = getattr(s, "htntnzkbzu", None)
-            if prog is not None:
-                state_parts.append(("spr_prog_%d" % i, repr(prog)))
-            if rot is not None:
-                state_parts.append(("spr_rot_%d" % i, repr(rot)))
-            if sel is not None:
-                state_parts.append(("spr_sel_%d" % i, repr(sel)))
+            _hash_sm_selection(right_sm, "right")
 
         return hash(tuple(state_parts))
 
@@ -3947,10 +3992,48 @@ def solve_sb26(game: Any, level_idx: int) -> list | None:
     target_colors_attr = _get_attr(game, "wcfyiodrx", None)
     target_order: list[int] = []
 
+    def _extract_color_from_sprite(s: Any) -> int:
+        """Extract the dominant color from a sprite's pixels.
+
+        SB26 sprites store colors in their pixel grids:
+        - quhhhthrri (target): border color = pixels[0,0] (the target color)
+        - lngftsryyw (blocks): inner color = pixels[1,1] (the block color)
+        - susublrply (slots): inner color = pixels[2,2] (the slot color)
+        Negative values (-1, -2) are transparent/background — skip them.
+        """
+        pixels = getattr(s, "pixels", None)
+        if pixels is not None:
+            # Try border color (pixels[0,0]) first — this is the target color
+            border_color = int(pixels[0, 0])
+            if border_color >= 0:
+                return border_color
+            # Try center color (pixels[1,1]) for block sprites
+            if pixels.shape[0] > 1 and pixels.shape[1] > 1:
+                center_color = int(pixels[1, 1])
+                if center_color >= 0:
+                    return center_color
+            # Scan for first non-negative color
+            for row in range(min(3, pixels.shape[0])):
+                for col in range(min(3, pixels.shape[1])):
+                    c = int(pixels[row, col])
+                    if c >= 0:
+                        return c
+        # Fallback: try sprite attributes
+        for attr in ("color", "value", "name"):
+            val = getattr(s, attr, None)
+            if val is not None:
+                try:
+                    return int(val)
+                except (TypeError, ValueError):
+                    pass
+        return 0
+
     if target_colors_attr is not None:
         if isinstance(target_colors_attr, list):
-            # List of color integers — direct target sequence
-            target_order = [int(c) for c in target_colors_attr]
+            # wcfyiodrx is a list of Sprite objects (quhhhthrri)
+            # Extract colors from sprite pixels, sorted by (y, x)
+            # The sprites are already sorted by (y, x) in the game
+            target_order = [_extract_color_from_sprite(c) for c in target_colors_attr]
         elif isinstance(target_colors_attr, dict):
             # Dict mapping position→color — extract sorted by position
             sorted_keys = sorted(target_colors_attr.keys(),
@@ -3959,7 +4042,7 @@ def solve_sb26(game: Any, level_idx: int) -> list | None:
         elif hasattr(target_colors_attr, '__iter__'):
             # Generic iterable — convert to list of ints
             try:
-                target_order = [int(c) for c in target_colors_attr]
+                target_order = [_extract_color_from_sprite(c) if hasattr(c, 'pixels') else int(c) for c in target_colors_attr]
             except (TypeError, ValueError):
                 target_order = []
 
@@ -3969,16 +4052,19 @@ def solve_sb26(game: Any, level_idx: int) -> list | None:
 
     if bottom_blocks_attr is not None:
         if isinstance(bottom_blocks_attr, list):
-            current_block_colors = [int(c) for c in bottom_blocks_attr]
+            # dkouqqads is a list of Sprite objects (lngftsryyw)
+            # Extract colors from sprite pixels (inner color = pixels[1,1])
+            # Sprites are already sorted by (y, x) in the game init
+            current_block_colors = [_extract_color_from_sprite(c) for c in bottom_blocks_attr]
         elif isinstance(bottom_blocks_attr, dict):
             # Dict mapping sprite→color, extract by sorted sprite position
             sorted_keys = sorted(bottom_blocks_attr.keys(),
                                  key=lambda k: (getattr(k, 'y', 0), getattr(k, 'x', 0))
                                  if hasattr(k, 'x') else k)
-            current_block_colors = [int(bottom_blocks_attr[k]) for k in sorted_keys]
+            current_block_colors = [_extract_color_from_sprite(bottom_blocks_attr[k]) if hasattr(bottom_blocks_attr[k], 'pixels') else int(bottom_blocks_attr[k]) for k in sorted_keys]
         elif hasattr(bottom_blocks_attr, '__iter__'):
             try:
-                current_block_colors = [int(c) for c in bottom_blocks_attr]
+                current_block_colors = [_extract_color_from_sprite(c) if hasattr(c, 'pixels') else int(c) for c in bottom_blocks_attr]
             except (TypeError, ValueError):
                 current_block_colors = []
 
@@ -3988,15 +4074,22 @@ def solve_sb26(game: Any, level_idx: int) -> list | None:
 
     if frame_slots_attr is not None:
         if isinstance(frame_slots_attr, list):
-            current_slot_colors = [int(c) for c in frame_slots_attr]
+            # dewwplfix is a list of Sprite objects (susublrply)
+            # These include BOTH frame slots AND hidden bottom slots
+            # Only extract the visible/top frame slots (y < midline)
+            # Extract colors from sprite pixels (inner color)
+            # Need to sort by (y, x) for consistent ordering
+            sorted_slots = sorted(frame_slots_attr,
+                                  key=lambda s: (getattr(s, 'y', 0), getattr(s, 'x', 0)))
+            current_slot_colors = [_extract_color_from_sprite(c) for c in sorted_slots]
         elif isinstance(frame_slots_attr, dict):
             sorted_keys = sorted(frame_slots_attr.keys(),
                                  key=lambda k: (getattr(k, 'y', 0), getattr(k, 'x', 0))
                                  if hasattr(k, 'x') else k)
-            current_slot_colors = [int(frame_slots_attr[k]) for k in sorted_keys]
+            current_slot_colors = [_extract_color_from_sprite(frame_slots_attr[k]) if hasattr(frame_slots_attr[k], 'pixels') else int(frame_slots_attr[k]) for k in sorted_keys]
         elif hasattr(frame_slots_attr, '__iter__'):
             try:
-                current_slot_colors = [int(c) for c in frame_slots_attr]
+                current_slot_colors = [_extract_color_from_sprite(c) if hasattr(c, 'pixels') else int(c) for c in frame_slots_attr]
             except (TypeError, ValueError):
                 current_slot_colors = []
 
@@ -4039,7 +4132,16 @@ def solve_sb26(game: Any, level_idx: int) -> list | None:
     all_coords: list[tuple[int, int]] = bottom_coords + slot_coords
 
     # ── 1e: Frame capacities (for slot grouping) ──
-    frame_sprites = _get_sprites_by_tag(game, "qaagahahj")
+    # qaagahahj is the game attribute name, but the actual tag is pkpgflvjel
+    frame_sprites = _get_sprites_by_tag(game, "pkpgflvjel")
+    if not frame_sprites:
+        # Fallback: try game attribute qaagahahj
+        qaag_attr = _get_attr(game, "qaagahahj", None)
+        if qaag_attr and isinstance(qaag_attr, list):
+            frame_sprites = qaag_attr
+        else:
+            # Last fallback: try qaagahahj tag (old naming)
+            frame_sprites = _get_sprites_by_tag(game, "qaagahahj")
     frame_caps: list[int] = []
     if frame_sprites:
         for frame in sorted(frame_sprites, key=lambda s: (_sprite_pos(s)[0], _sprite_pos(s)[1])):
