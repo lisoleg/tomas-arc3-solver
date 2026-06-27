@@ -6686,20 +6686,20 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
         for w in (start_adapter.walls or []):
             wall_positions.add((int(w.x), int(w.y)))
 
-        # Build changer position set — ALL changers must be avoided (Ψ-Cut)
-        changer_positions: set[tuple[int, int]] = set()
-        for dim_changers in (start_adapter.state_changers or {}).values():
-            for ch in dim_changers:
-                changer_positions.add((int(ch.x), int(ch.y)))
-
-        # Combine wall + changer + avoid_positions into blocked set
+        # Combine wall + avoid_positions into blocked set
+        # Ψ-Cut v3.18.2 fix: changer blocking is controlled by avoid_positions only.
+        # Do NOT auto-block all changer positions — target changer must be reachable.
+        # When navigating to goal: avoid_positions includes all changers.
+        # When navigating to changer: avoid_positions includes OTHER changers only.
         blocked_positions = set(wall_positions)
-        blocked_positions.update(changer_positions)
         if avoid_positions:
             blocked_positions.update(avoid_positions)
 
+        # Target position must NEVER be blocked (even if it's a changer/goal)
+        blocked_positions.discard((target_x, target_y))
+
         visited: set[tuple[int, int]] = {(start_px, start_py)}
-        visited.update(blocked_positions)  # wall/changer positions are "visited" = blocked
+        visited.update(blocked_positions)  # wall + specified avoid positions are "visited" = blocked
 
         # BFS on (x, y) positions — NO game copies
         # direction_map: id → (dx, dy) — UP=1(y-step), RIGHT=2(x+step), DOWN=3(y+step), LEFT=4(x-step)
@@ -6944,22 +6944,19 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
                 remaining_triggers -= 1
 
                 if remaining_triggers > 0:
-                    # BFS 回到 changer (避开其他 changer!)
-                    other_changer_positions: set[tuple[int, int]] = set()
-                    for dim, chs in state_changers.items():
-                        if dim != target_changer_dim:
-                            for ch in chs:
-                                other_changer_positions.add((int(ch.x), int(ch.y)))
-                    # 同时避开所有 changer (Ψ-Cut: 防止意外触发)
-                    all_changer_avoid: set[tuple[int, int]] = set()
+                    # BFS 回到 changer (避开其他 changer, 不避开目标 changer)
+                    # Ψ-Cut v3.18.2 fix: exclude target changer from avoid_positions
+                    retreat_avoid: set[tuple[int, int]] = set()
                     for dim, chs in state_changers.items():
                         for ch in chs:
-                            all_changer_avoid.add((int(ch.x), int(ch.y)))
+                            ch_pos = (int(ch.x), int(ch.y))
+                            if ch_pos != (target_changer_x, target_changer_y):
+                                retreat_avoid.add(ch_pos)
 
                     retreat_path = _lightweight_bfs(
                         sim, target_changer_x, target_changer_y,
                         max_steps=min(adapter.steps_remaining, 8),
-                        avoid_positions=all_changer_avoid,
+                        avoid_positions=retreat_avoid,
                     )
                     if retreat_path is not None:
                         for aid, data in retreat_path:
@@ -6993,15 +6990,18 @@ def _solve_ls20_delta_state_bfs(game: Any, level_idx: int) -> list[tuple] | None
 
             continue  # 多触发循环结束, 重新进入主循环
 
-        # ── BFS 导航到 changer (避开所有其他 changer) ──
-        all_changer_positions: set[tuple[int, int]] = set()
+        # ── BFS 导航到 changer (避开其他 changer, 不避开目标) ──
+        # Ψ-Cut v3.18.2 fix: exclude target changer from avoid_positions
+        other_changer_positions_nav: set[tuple[int, int]] = set()
         for dim, chs in state_changers.items():
             for ch in chs:
-                all_changer_positions.add((int(ch.x), int(ch.y)))
+                ch_pos = (int(ch.x), int(ch.y))
+                if ch_pos != (target_changer_x, target_changer_y):
+                    other_changer_positions_nav.add(ch_pos)
 
         path = _lightweight_bfs(
             sim, target_changer_x, target_changer_y,
-            avoid_positions=all_changer_positions,
+            avoid_positions=other_changer_positions_nav,
         )
         if path is not None:
             for aid, data in path:
