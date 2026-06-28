@@ -7,6 +7,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [3.31.0] — 2026-06-28
+
+### Added — Optics Physics Primitives + Δ-State Replay Full Adoption (AR25)
+
+- New `src/agent/physics_primitives.py`: Optics physics primitive engine
+  - `OpticsMirror` dataclass: x, y, orientation, width, height, movable, move_axis
+  - `OpticsTarget` dataclass: x, y
+  - `OpticsPiece` dataclass: x, y, orientation, width, height
+  - `optics_ray_trace()`: BFS ray tracing, max_bounces=12 (matches game source `ythhvclqmk`)
+  - `optics_coverage_map()`: Coverage map computation (matches `nloqvbouxu()`)
+  - `optics_check_win()`: Win condition — all targets coverage ≥ 0 (matches `vplrhaovhr()`)
+  - `optics_mirror_move_constraint()`: Dynamic movement constraints (replaces `VERT_MOVES/HORIZ_MOVES` hardcoded)
+  - `PHYSICS_PRIMITIVE_REGISTRY`: New `'optics'` entry
+
+### Changed — AR25 Solver Full Refactoring
+
+- `solve_ar25`: 3 deepcopy verification calls → Δ-State Replay verification
+  - Stage 1 BFS core logic fully refactored with optics primitives (no longer uses `mirror_point`/`reflect_ray`/`multi_mirror_trace`/`kappa_phase_consistency`)
+  - Legacy `mirror_specs` (pos, norm) tuple → `OpticsMirror` objects
+  - Legacy `compute_coverage()` → `optics_coverage_map()` + `optics_check_win()`
+  - Legacy `check_kappa_phase_consistency()` → removed (optics_coverage_map already matches game source precisely)
+  - Legacy `VERT_MOVES/HORIZ_MOVES` hardcoded → `optics_mirror_move_constraint()` dynamic constraints
+
+### Changed — TN36 deepcopy Status
+
+- `solve_tn36`: Already zero-copy direct computation (Phase 0-7 reads from game internals)
+- `_DEEPCOPY_SAFE_GAMES`: Correctly excludes TN36 (okllwtboml dict has lambda closures, deepcopy breaks cell references)
+
+### AR25 Source-Level Precise Mechanism Analysis
+
+- Mirror/Piece share sprite: `0003uqrdzdofso + 0054kgxrvfihgm/0002nuguepuujf`
+- Vertical mirror: x-axis reflection (`ref_x = 2*mirror_x - src_x`), moves only vertically
+- Horizontal mirror: y-axis reflection (`ref_y = 2*mirror_y - src_y`), moves only horizontally
+- Piece selection: `ayyvxqrhnzw = mirrors + pieces` (excluding fixed `0056icpryeujyf`)
+- Win condition: `vplrhaovhr()` → all targets have coverage map value ≥ 0
+
+### Documentation
+
+- Updated `docs/ARCH_v4.0.md`: C1 deepcopy elimination progress (AR25 completed), physics_primitives.py optics module description
+- Updated `papers/TOMAS_ARC_AGI3_Paper_CN.md`: Added §7.5 optics physics primitives + Δ-State Replay full adoption
+- Updated `papers/TOMAS_ARC_AGI3_Paper.md`: Added §5.10 optics physics primitives + Δ-State Replay full adoption
+
+---
+
 ## [3.2.1-dev] — 2026-06-25
 
 ### Fixed — NARGridEncoder Critical Bug Fixes

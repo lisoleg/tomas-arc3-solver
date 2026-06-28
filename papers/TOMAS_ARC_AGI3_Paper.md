@@ -404,6 +404,51 @@ Traditional library learning systems accumulate macros passively from successful
 
 ---
 
+## 5.10 Optics Physics Primitives and Full Δ-State Replay Adoption
+
+### 5.10.1 Motivation
+
+Prior to v3.31.0, the AR25 (optical reflection game) solver used 3 `deepcopy` calls for state snapshot verification, and the Stage 1 BFS core logic relied on hardcoded `mirror_point`/`reflect_ray`/`multi_mirror_trace`/`kappa_phase_consistency` functions. These implementations had semantic deviations from the game source code (`ythhvclqmk`), leading to imprecise coverage map computation and win-condition checking. This version introduces **optics physics primitives** (`physics_primitives.py`), fully refactoring the AR25 solver's BFS core logic with optics primitives and replacing all 3 deepcopy verification calls with Δ-State Replay verification.
+
+### 5.10.2 Optics Physics Primitives
+
+`physics_primitives.py` adds the following core components:
+
+| Primitive | Description | Source Code Match |
+|-----------|-------------|-------------------|
+| `OpticsMirror` dataclass | Contains x, y, orientation, width, height, movable, move_axis | Mirror/Piece share sprite (`0003uqrdzdofso + 0054kgxrvfihgm/0002nuguepuujf`) |
+| `OpticsTarget` dataclass | Contains x, y | Coverage map target points |
+| `OpticsPiece` dataclass | Contains x, y, orientation, width, height | Moveable optics pieces |
+| `optics_ray_trace()` | BFS ray tracing, max_bounces=12 | Matches `ythhvclqmk` |
+| `optics_coverage_map()` | Coverage map computation | Matches `nloqvbouxu()` |
+| `optics_check_win()` | Win condition: all targets have coverage map value ≥ 0 | Matches `vplrhaovhr()` |
+| `optics_mirror_move_constraint()` | Dynamic movement constraints | Replaces `VERT_MOVES/HORIZ_MOVES` hardcoded arrays |
+
+**Source-level precise mechanism analysis**:
+- Vertical mirror: x-axis reflection (`ref_x = 2*mirror_x - src_x`), moves only vertically
+- Horizontal mirror: y-axis reflection (`ref_y = 2*mirror_y - src_y`), moves only horizontally
+- Piece selection: `ayyvxqrhnzw = mirrors + pieces` (excluding fixed `0056icpryeujyf`)
+- Legacy `mirror_specs` (pos, norm) tuple → `OpticsMirror` objects
+- Legacy `compute_coverage()` → `optics_coverage_map()` + `optics_check_win()`
+- Legacy `check_kappa_phase_consistency()` → removed (`optics_coverage_map` already precisely matches game source code)
+- Legacy `VERT_MOVES/HORIZ_MOVES` hardcoded → `optics_mirror_move_constraint()` dynamic constraints
+
+`PHYSICS_PRIMITIVE_REGISTRY` gains a new `'optics'` entry alongside existing `'gravity'`, `'collision'` entries.
+
+### 5.10.3 Full Δ-State Replay Adoption Replacing deepcopy
+
+All 3 deepcopy verification calls in the AR25 solver are replaced by Δ-State Replay verification:
+- **Stage 1 BFS**: Uses `ReplayEngine.replay()` to reconstruct state from root_state; BFS nodes record only `Node(parent_id, action)` without deepcopying the game object
+- **Verification phase**: `_verify_plan()` now replays action sequences on ReplayEngine-materialized states, confirming level completion before execution
+- **Coverage map verification**: `optics_coverage_map()` + `optics_check_win()` replace legacy deepcopy-based coverage map snapshots
+
+TN36 deepcopy status:
+- `solve_tn36` already uses zero-copy direct computation (Phase 0-7 reads from game internals)
+- `_DEEPCOPY_SAFE_GAMES` correctly excludes TN36
+- TN36's `okllwtboml` dict contains lambda closures; deepcopy breaks cell references
+
+---
+
 ## 6. Experiments
 
 ### 6.1 Setup

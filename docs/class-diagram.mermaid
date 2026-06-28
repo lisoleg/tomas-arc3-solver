@@ -1,220 +1,212 @@
 classDiagram
-    %% ===== 核心数据结构 =====
-    class ProgramNode {
-        +DSLElement|None element
-        +list~ProgramNode~ children
-        +str combo_type
-        +int total_mdl
-        +apply(grid) ndarray
-        +compute_mdl() int
-        +flatten() list~DSLElement~
-        +clone() ProgramNode
-        +to_dict() dict
+    direction TB
+
+    class HybridSearchPipeline {
+        +_strategy_registry: Dict~str,type~
+        +_profile_registry: Dict~str,HybridGameProfile~
+        +solve(game, game_id, level_idx) list~tuple~|None
+        +_build_pipeline(profile) PipelineStrategies
+        +_execute_pipeline(game, strategies, profile) list~tuple~|None
+        +_verify_plan(plan, pristine_game) bool
+        +_register_all_strategies()
+        +_register_all_profiles()
     }
 
-    class DSLElement {
-        +str name
-        +dict params
-        +int mdl_cost
-        +str octonion_transform
-        +ProgramNode|None subtree
-        +apply(grid) ndarray
-        +clone() DSLElement
-        +to_dict() dict
-        +from_dict(d) DSLElement
+    class HybridGameProfile {
+        +game_id: str
+        +l1_strategy: str
+        +l2_strategy: str
+        +l3_strategy: str
+        +l4_strategy: str
+        +physics_primitives: list~str~
+        +oracle_adapter: str
+        +max_depth: int
+        +max_nodes: int
+        +max_time: float
+        +use_delta_replay: bool
+        +replay_mode: str
     }
 
-    %% ===== κ-Snap 搜索器 =====
-    class SnapResult {
-        <<enumeration>>
-        MANIFESTED
-        REJECT_DZ
-        SUSPEND_MUS
-        REJECT_FTEL
+    class PipelineStrategies {
+        +l1: L1CandidateStrategy
+        +l2: L2PruningStrategy
+        +l3: L3EvaluationStrategy
+        +l4: L4FusionStrategy
     }
 
-    class CandidateProgram {
-        +str candidate_id
-        +ProgramNode program
-        +float ftel_score
-        +float similarity
-        +bool is_dead_zero
-        +bool mus_conflict
-        +dict features
-        +timestamp float
+    class CandidateSet {
+        +nodes: Dict~int,Node~
+        +root_state: Any
+        +root_id: int
+        +candidates: List~int~
+        +action_space: ActionSpace
+        +replay_engine: ReplayEngine
+        +layout_cache: Dict~str,int~
+        +visited_global: Set~str~
+        +meta: Dict~str,Any~
     }
 
-    class ManifestedSolution {
-        +str solution_id
-        +ProgramNode program
-        +float ftel_score
-        +str psi_anchor
-        +float snap_timestamp
-        +dict verification_result
+    class EvaluatedCandidateSet {
+        +evaluations: Dict~int,Dict~str,Any~
     }
 
-    class SnapEvent {
-        +str event_id
-        +str candidate_id
-        +SnapResult result
-        +str reason
-        +float timestamp
-        +ManifestedSolution|None manifested
-        +to_dict() dict
+    class L1CandidateStrategy {
+        <<Protocol>>
+        +generate(game, profile, replay_engine) CandidateSet
     }
 
-    class KSnapAbductiveSearcher {
-        -KappaSnapSearcher _candidate_generator
-        -GaussExVerifier _verifier
-        -TopoHashFilter _topo_filter
-        -float _theta_ftel
-        -float _theta_dead_zero
-        -float _time_limit
-        -list~SnapEvent~ _causal_log
-        -dict~str, ManifestedSolution~ _manifested_solutions
-        -list~CandidateProgram~ _latent_pool
-        -float _start_time
-        +__init__(config, library, candidate_generator)
-        +search(demo_pairs) list~ProgramNode~
-        -_generate_candidates(demo_pairs) list~CandidateProgram~
-        -_compute_ftel(program, demo_pairs) float
-        -_check_dead_zero(program, demo_pairs) tuple~bool, str~
-        -_check_mus(candidates) dict~str, list~
-        -_execute_snap(candidate, demo_pairs) SnapEvent
-        -_batch_snap(candidates, demo_pairs) list~SnapEvent~
-        +get_causal_log() list~SnapEvent~
-        +get_stats() dict
-        -_is_timeout() bool
+    class L2PruningStrategy {
+        <<Protocol>>
+        +prune(candidates, profile) CandidateSet
     }
 
-    %% ===== Library Learning 升级 =====
-    class SubExpression {
-        +str canonical_hash
-        +ProgramNode subtree
-        +int frequency
-        +int mdl_gain
-        +int depth
-        +str signature
+    class L3EvaluationStrategy {
+        <<Protocol>>
+        +evaluate(candidates, profile, replay_engine) EvaluatedCandidateSet
     }
 
-    class LibraryLearning {
-        +dict library
-        +int frequency_threshold
-        +str persistence_path
-        +int max_abstractions
-        -dict _pattern_counts
-        -int max_ast_depth
-        -int max_total_subexprs
-        -int min_freq
-        -int mdl_gain_threshold
-        -int max_new_per_sleep
-        +extract_patterns(solved_programs) list~DSLElement~
-        +add_to_library(pattern) void
-        +match_library(deltaT) DSLElement|None
-        +save() void
-        +load() void
-        +get_abstractions() list~DSLElement~
-        +get_size() int
-        +clear() void
-        +extract_subexpressions(prog, max_ast_depth) list~SubExpression~
-        +compute_mdl_gain(subexpr, frequency) int
-        +sleep_step(solved_programs) list~DSLElement~
-        -_canonicalize_subtree(node) str
-        -_count_subexpressions(subexprs) dict~str, SubExpression~
-        -_filter_and_rank(subexprs) list~SubExpression~
-        -_register_new_primitive(subexpr) DSLElement
+    class L4FusionStrategy {
+        <<Protocol>>
+        +select(evaluated, profile) list~tuple~|None
     }
 
-    %% ===== 持续学习管线 =====
-    class EpochResult {
-        +int epoch
-        +float accuracy
-        +int solved_count
-        +int total_tasks
-        +int new_primitives_added
-        +int library_size
-        +float solve_time_seconds
-        +float sleep_time_seconds
-        +list~str~ solved_task_ids
-        +list~str~ failed_task_ids
+    class WallBFS {
+        +generate(game, profile, replay_engine) CandidateSet
     }
 
-    class ContinualSolver {
-        -KSnapAbductiveSearcher _searcher
-        -LibraryLearning _library
-        -GaussExVerifier _verifier
-        -dict _config
-        -list~EpochResult~ _epoch_history
-        -str _library_path
-        +__init__(config)
-        +run_continual_learning(tasks, epochs) dict
-        -_wake_phase(tasks) list~ProgramNode~
-        -_sleep_phase(solved_programs) list~DSLElement~
-        -_evaluate_accuracy(tasks) float
-        -_save_state() void
-        -_load_state() bool
-        +get_epoch_history() list~EpochResult~
-        +get_library() LibraryLearning
-        +get_stats() dict
+    class BFSPath {
+        +generate(game, profile, replay_engine) CandidateSet
     }
 
-    %% ===== 现有模块（参考，不修改核心逻辑）=====
-    class KappaSnapSearcher {
-        +search(demo_pairs) list~ProgramNode~
-        +two_phase_search(demo_pairs) list~ProgramNode~
+    class DFSEnumeration {
+        +generate(game, profile, replay_engine) CandidateSet
+    }
+
+    class DeltaStateReplay {
+        +generate(game, profile, replay_engine) CandidateSet
+    }
+
+    class DirectCompute {
+        +generate(game, profile, replay_engine) CandidateSet
+    }
+
+    class ComboSymmetry {
+        +prune(candidates, profile) CandidateSet
+    }
+
+    class PrimeSignature {
+        +prune(candidates, profile) CandidateSet
+    }
+
+    class MatroidConstraint {
+        +prune(candidates, profile) CandidateSet
+    }
+
+    class PassThrough {
+        +prune(candidates, profile) CandidateSet
+    }
+
+    class KappaSnapEvaluation {
+        +evaluate(candidates, profile, replay_engine) EvaluatedCandidateSet
+    }
+
+    class DeadZeroFuseEvaluation {
+        +evaluate(candidates, profile, replay_engine) EvaluatedCandidateSet
+    }
+
+    class GaussExEvaluation {
+        +evaluate(candidates, profile, replay_engine) EvaluatedCandidateSet
+    }
+
+    class AsymIndexEvaluation {
+        +evaluate(candidates, profile, replay_engine) EvaluatedCandidateSet
+    }
+
+    class KappaSelector {
+        +select(evaluated, profile) list~tuple~|None
+    }
+
+    class LiuPrioritySelector {
+        +select(evaluated, profile) list~tuple~|None
+    }
+
+    class ReplayEngine {
+        +root_state: Any
+        +node_map: Dict~int,Node~
+        +mode: str
+        +replay(target_id) Any
+        +_backtrack_path(target_id) list
+        +clear_cache()
+        +lookup(sig) Any|None
+        +store(sig, result)
+    }
+
+    class KSnapEngine {
+        +DELTA_K: float
+        +basis: List~Octonion~
+        +project(eml_state, prior) Tuple~Octonion,float~
     }
 
     class GaussExVerifier {
-        +verify_program(program, demo_pairs) bool
-        +verify_program_batch(programs, demo_pairs) list~ProgramNode~
-        +set_demo_pairs(demo_pairs) void
+        +threshold: float
+        +verify(grid, examples) Dict~str,Any~
+        +verify_node(node_id, replay_engine, examples) Dict~str,Any~
     }
 
-    class TopoHashFilter {
-        +quick_filter(candidates, demo_pairs) list
-        +compute_hash_for_grid(grid) str
+    class Node {
+        +id: int
+        +parent_id: int
+        +action: str
+        +depth: int
+        +meta: Dict~str,Any~
+        +signature() str
     }
 
-    class ParamInference {
-        +infer_candidates(demo_pairs) list~ProgramNode~
+    class ActionSpace {
+        +GAME_ACTIONS: Dict~int,str~
+        +GRID_PRIMITIVES: List~str~
+        +get_primitives() list
+        +apply(grid, action, params) ndarray
+        +apply_game_action(game, action_id, data)
     }
 
-    class OctonionHyperEdge {
-        +encode_grid(grid) ndarray
-        +decode_to_grid() ndarray
-        +compute_topo_invariants() dict
-    }
+    HybridSearchPipeline --> HybridGameProfile : "查找配置"
+    HybridSearchPipeline --> PipelineStrategies : "组装管线"
+    PipelineStrategies --> L1CandidateStrategy : "l1"
+    PipelineStrategies --> L2PruningStrategy : "l2"
+    PipelineStrategies --> L3EvaluationStrategy : "l3"
+    PipelineStrategies --> L4FusionStrategy : "l4"
 
-    class TOMASSolver {
-        +solve(task, mode) dict
-        +solve_continual(tasks, epochs) dict
-    }
+    L1CandidateStrategy <|.. WallBFS : "实现"
+    L1CandidateStrategy <|.. BFSPath : "实现"
+    L1CandidateStrategy <|.. DFSEnumeration : "实现"
+    L1CandidateStrategy <|.. DeltaStateReplay : "实现"
+    L1CandidateStrategy <|.. DirectCompute : "实现"
 
-    %% ===== 关系 =====
-    KSnapAbductiveSearcher --> KappaSnapSearcher : 复用候选生成
-    KSnapAbductiveSearcher --> GaussExVerifier : 投影验证
-    KSnapAbductiveSearcher --> TopoHashFilter : Ftel预过滤
-    KSnapAbductiveSearcher --> CandidateProgram : 生成
-    KSnapAbductiveSearcher --> SnapEvent : 产出
-    KSnapAbductiveSearcher --> ManifestedSolution : 显影
-    SnapEvent --> ManifestedSolution : 包含
-    CandidateProgram --> ProgramNode : 持有
-    ManifestedSolution --> ProgramNode : 持有
+    L2PruningStrategy <|.. ComboSymmetry : "实现"
+    L2PruningStrategy <|.. PrimeSignature : "实现"
+    L2PruningStrategy <|.. MatroidConstraint : "实现"
+    L2PruningStrategy <|.. PassThrough : "实现"
 
-    LibraryLearning --> SubExpression : 产出
-    LibraryLearning --> ProgramNode : 遍历AST
-    LibraryLearning --> DSLElement : 注册新原语
+    L3EvaluationStrategy <|.. KappaSnapEvaluation : "实现"
+    L3EvaluationStrategy <|.. DeadZeroFuseEvaluation : "实现"
+    L3EvaluationStrategy <|.. GaussExEvaluation : "实现"
+    L3EvaluationStrategy <|.. AsymIndexEvaluation : "实现"
 
-    ContinualSolver --> KSnapAbductiveSearcher : Wake阶段
-    ContinualSolver --> LibraryLearning : Sleep阶段
-    ContinualSolver --> GaussExVerifier : 验证
-    ContinualSolver --> EpochResult : 记录
+    L4FusionStrategy <|.. KappaSelector : "实现"
+    L4FusionStrategy <|.. LiuPrioritySelector : "实现"
 
-    TOMASSolver --> ContinualSolver : 集成
-    TOMASSolver --> KSnapAbductiveSearcher : 替代KappaSnapSearcher
-    KappaSnapSearcher --> ParamInference : 候选生成
-    KappaSnapSearcher --> TopoHashFilter : Phase A过滤
-    KappaSnapSearcher --> GaussExVerifier : Phase B验证
-    TopoHashFilter --> OctonionHyperEdge : 编码计算哈希
+    CandidateSet --> Node : "包含nodes"
+    CandidateSet --> ActionSpace : "引用"
+    CandidateSet --> ReplayEngine : "共享"
+    EvaluatedCandidateSet --|> CandidateSet : "继承"
 
-    ProgramNode --> DSLElement : 持有
+    KappaSnapEvaluation --> KSnapEngine : "调用project"
+    KappaSnapEvaluation --> GaussExVerifier : "调用verify"
+    GaussExEvaluation --> GaussExVerifier : "调用verify"
+    DeadZeroFuseEvaluation ..> physics_primitives : "调用is_deadlock_corner"
+
+    ReplayEngine --> Node : "回溯路径"
+    WallBFS --> ReplayEngine : "IDO物化"
+    DeltaStateReplay --> ReplayEngine : "IDO物化"
+    KappaSelector --> EvaluatedCandidateSet : "η排序选择"

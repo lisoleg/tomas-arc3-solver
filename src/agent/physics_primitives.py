@@ -125,6 +125,208 @@ def _grid_get(grid, y, x, default):
 
 
 # ============================================================
+# KA59 Wall-Ride Push 豁免 (文章 Appendix A.1/A.2)
+# ============================================================
+
+# κ-Phase: 推箱子贴墙时, 三面围死但不一定是死锁 —
+# 如果箱子正在沿着墙壁滑向目标, 应豁免死锁判定。
+# 这是κ-优选物理直觉的核心: 路径连续性 > 静态deadlock判定。
+
+# 四方向常量 (上/下/左/右)
+DIRS4: List[Tuple[int, int]] = [(0, -1), (0, 1), (-1, 0), (1, 0)]
+
+# 空地字符 (默认)
+EMPTY_CHAR: int = 1
+
+
+def _in_bounds(pos: Tuple[int, int], grid: Any) -> bool:
+    """检查坐标是否在grid边界内。
+
+    Args:
+        pos: 坐标(x, y)。
+        grid: 2D numpy array或列表。
+
+    Returns:
+        True如果在边界内, False否则。
+    """
+    x, y = pos
+    if hasattr(grid, 'shape'):
+        h, w = grid.shape
+        return 0 <= x < w and 0 <= y < h
+    elif isinstance(grid, list):
+        h = len(grid)
+        w = len(grid[0]) if h > 0 else 0
+        return 0 <= x < w and 0 <= y < h
+    return False
+
+
+def _add_pos(a: Tuple[int, int], b: Tuple[int, int]) -> Tuple[int, int]:
+    """向量加法: add(a, b) = (a.x+b.x, a.y+b.y)。"""
+    return (a[0] + b[0], a[1] + b[1])
+
+
+def _sub_pos(a: Tuple[int, int], b: Tuple[int, int]) -> Tuple[int, int]:
+    """向量减法: sub(a, b) = (a.x-b.x, a.y-b.y)。"""
+    return (a[0] - b[0], a[1] - b[1])
+
+
+def _neg_pos(d: Tuple[int, int]) -> Tuple[int, int]:
+    """方向取反: neg(d) = (-d.x, -d.y)。"""
+    return (-d[0], -d[1])
+
+
+def _manhattan(a: Tuple[int, int], b: Tuple[int, int]) -> int:
+    """曼哈顿距离: |a.x-b.x| + |a.y-b.y|。"""
+    return abs(a[0] - b[0]) + abs(a[1] - b[1])
+
+
+def is_wall_ride_push(
+    player: Tuple[int, int],
+    box: Tuple[int, int],
+    grid: Any,
+    goal: Optional[Tuple[int, int]] = None,
+    wall_char: int = 0,
+    box_chars: Set[int] = {3, 5},
+    empty_char: int = EMPTY_CHAR,
+) -> bool:
+    """KA59 Wall-Ride Push 豁免判定 (文章 Appendix A.1)。
+
+    箱子贴墙推时, 豁免三面围死误判。κ-优选核心洞察:
+    路径连续性 > 静态deadlock判定。如果箱子正在沿墙滑向目标,
+    即使三面围死也不应熔断。
+
+    判定逻辑:
+      1. 箱子相邻必须有墙 (adj_walls非空)
+      2. push_dir必须在DIRS4中 (标准四方向推)
+      3. 前方(push_dir方向)必须是空地
+      4. 后方(push反方向)不能是墙或另一箱 (玩家可达)
+      5. blocked≥3且非目标格 → 拒绝豁免 (真正死锁)
+      6. 如果有目标, push后距离不能远离目标超过1步
+
+    Args:
+        player: 玩家位置(x, y)。
+        box: 箱子位置(x, y)。
+        grid: 2D numpy array或列表。
+        goal: 目标位置(x, y), 可为None。
+        wall_char: 墙壁颜色值, 默认0。
+        box_chars: 箱子颜色值集合, 默认{3, 5}。
+        empty_char: 地颜色值, 默认1。
+
+    Returns:
+        True表示Wall-Ride豁免(允许推), False表示不豁免。
+    """
+    # Step 1: 检查箱子相邻是否有墙
+    adj_walls: List[Tuple[int, int]] = []
+    for d in DIRS4:
+        adj_pos: Tuple[int, int] = _add_pos(box, d)
+        if not _in_bounds(adj_pos, grid):
+            adj_walls.append(d)  # 越界=墙
+        else:
+            cell_val: int = _grid_get(grid, adj_pos[1], adj_pos[0], wall_char)
+            if cell_val == wall_char:
+                adj_walls.append(d)
+
+    if not adj_walls:
+        return False  # 箱子不贴墙 → 不触发Wall-Ride
+
+    # Step 2: 计算push方向 (从玩家到箱子的方向)
+    push_dir: Tuple[int, int] = _sub_pos(box, player)
+    if push_dir not in DIRS4:
+        return False  # 非标准四方向推 → 不豁免
+
+    # Step 3: 前方(push方向)必须是空地或目标
+    front_pos: Tuple[int, int] = _add_pos(box, push_dir)
+    if not _in_bounds(front_pos, grid):
+        return False  # 前方越界 → 不可推
+    front_val: int = _grid_get(grid, front_pos[1], front_pos[0], wall_char)
+    if front_val == wall_char or front_val in box_chars:
+        return False  # 前方是墙或箱 → 不可推
+
+    # Step 4: 后方(push反方向)不能是墙或箱 (玩家必须可达)
+    back_dir: Tuple[int, int] = _neg_pos(push_dir)
+    back_pos: Tuple[int, int] = _add_pos(box, back_dir)
+    if not _in_bounds(back_pos, grid):
+        return False  # 后方越界 → 玩家不可达
+    back_val: int = _grid_get(grid, back_pos[1], back_pos[0], wall_char)
+    if back_val == wall_char or back_val in box_chars:
+        return False  # 后方是墙或箱 → 玩家不可达
+
+    # Step 5: blocked≥3且非目标格 → 拒绝豁免 (真正死锁)
+    blocked: int = sum(
+        1 for d in DIRS4
+        if not _in_bounds(_add_pos(box, d), grid)
+        or _grid_get(grid, _add_pos(box, d)[1], _add_pos(box, d)[0], wall_char) in {wall_char, *box_chars}
+    )
+    if blocked >= 3 and not (goal and box == goal):
+        return False  # 三面围死且非目标 → 真正死锁, 不豁免
+
+    # Step 6: 如果有目标, push后不能远离目标超过1步
+    if goal is not None:
+        cur_d: int = _manhattan(box, goal)
+        new_box_pos: Tuple[int, int] = _add_pos(box, push_dir)
+        nxt_d: int = _manhattan(new_box_pos, goal)
+        if nxt_d > cur_d + 1:
+            return False  # 远离目标 → 不豁免
+
+    return True  # Wall-Ride豁免: 允许贴墙推
+
+
+def check_deadlock_with_wall_ride(
+    grid: Any,
+    box_pos: Tuple[int, int],
+    player_pos: Tuple[int, int],
+    goal: Optional[Tuple[int, int]] = None,
+    wall_char: int = 0,
+    goal_char: int = 2,
+    box_chars: Set[int] = {3, 5},
+) -> bool:
+    """CHK_DL修正版 — 含Wall-Ride豁免 (文章 Appendix A.2)。
+
+    升级版deadlock检查: 保留原有is_deadlock_corner判定,
+    但添加Wall-Ride豁免。当箱子贴墙推且正在滑向目标时,
+    即使看起来是"死锁"也不熔断。
+
+    κ-优选核心: 物理直觉 = 路径连续性优先于静态判断。
+    "箱子贴墙滑向目标" ≠ "箱子推入死角冻死"
+
+    Args:
+        grid: 2D numpy array或列表。
+        box_pos: 箱子位置(x, y)。
+        player_pos: 玩家位置(x, y)。
+        goal: 目标位置(x, y), 可为None。
+        wall_char: 墙壁颜色值, 默认0。
+        goal_char: 目标颜色值, 默认2。
+        box_chars: 箱子颜色值集合, 默认{3, 5}。
+
+    Returns:
+        True表示死锁(应熔断), False表示非死锁(允许推)。
+    """
+    # Step 1: 基础blocked计数
+    blocked: int = sum(
+        1 for d in DIRS4
+        if not _in_bounds(_add_pos(box_pos, d), grid)
+        or _grid_get(grid, _add_pos(box_pos, d)[1], _add_pos(box_pos, d)[0], wall_char) in {wall_char, *box_chars}
+    )
+
+    # Step 2: blocked≥3且非目标格 → 潜在死锁
+    cell_val: int = _grid_get(grid, box_pos[1], box_pos[0], wall_char)
+    if blocked >= 3 and not (goal and box_pos == goal and cell_val == goal_char):
+        # Step 3: Wall-Ride豁免检查
+        if is_wall_ride_push(player_pos, box_pos, grid, goal, wall_char, box_chars):
+            return False  # 豁免: 箱子正在贴墙滑向目标
+        return True  # 真正死锁: 三面围死且不豁免
+
+    # Step 4: 原有is_deadlock_corner检查 (角落判定)
+    if is_deadlock_corner(grid, box_pos, wall_char, goal_char):
+        # Wall-Ride豁免二次检查
+        if is_wall_ride_push(player_pos, box_pos, grid, goal, wall_char, box_chars):
+            return False  # 角落但豁免
+        return True
+
+    return False  # 非死锁
+
+
+# ============================================================
 # AR25: 反射几何 (八元数风格仿射镜像)
 # ============================================================
 
@@ -580,18 +782,295 @@ def _check_mirror_consistency(g1: np.ndarray, g2: np.ndarray) -> float:
 
 
 # ============================================================
+# AR25: 光学物理原语 (optics ray-tracing + coverage)
+# κ-Phase: 反射 = 光子在κ-相位面上的弹射
+# 光线覆盖游戏: 选择piece → 移动piece → 通过mirror反射覆盖target
+# ============================================================
+
+@dataclass
+class OpticsMirror:
+    """光学镜面 — κ-Phase反射面的软件模拟。
+
+    垂直镜面(vertical): 反射x轴 — ref_x = 2*mirror_x - src_x
+    水平镜面(horizontal): 反射y轴 — ref_y = 2*mirror_y - src_y
+    移动约束: vertical只上下移动, horizontal只左右移动
+    """
+    x: int
+    y: int
+    orientation: str  # 'vertical' or 'horizontal'
+    width: int = 1
+    height: int = 1
+    movable: bool = True
+    move_axis: str = 'vertical'  # vertical mirror只能上下, horizontal只能左右
+
+    @property
+    def tag(self) -> str:
+        """AR25 sprite tag for mirror identification."""
+        if self.orientation == 'vertical':
+            return '0054kgxrvfihgm'
+        else:
+            return '0002nuguepuujf'
+
+    def reflect(self, src_x: int, src_y: int) -> Tuple[int, int]:
+        """反射坐标 — 精确匹配AR25游戏源码nloqvbouxu()。
+
+        vertical mirror: ref_x = 2*mirror_x - src_x, ref_y = src_y
+        horizontal mirror: ref_x = src_x, ref_y = 2*mirror_y - src_y
+        """
+        if self.orientation == 'vertical':
+            return (2 * self.x - src_x, src_y)
+        else:
+            return (src_x, 2 * self.y - src_y)
+
+
+@dataclass
+class OpticsTarget:
+    """光学覆盖目标 — 需要被piece直接或反射覆盖的点。"""
+    x: int
+    y: int
+
+
+@dataclass
+class OpticsPiece:
+    """光学可移动piece — 可以选择并移动的sprite。
+
+    piece与mirror共享sprite (AR25特有):
+    0003uqrdzdofso + 0054kgxrvfihgm → vertical mirror/piece
+    0003uqrdzdofso + 0002nuguepuujf → horizontal mirror/piece
+    """
+    x: int
+    y: int
+    orientation: str  # 'vertical' (上下移动) or 'horizontal' (左右移动)
+    width: int = 1
+    height: int = 1
+
+
+def optics_ray_trace(
+    source: Tuple[int, int],
+    mirrors: List[OpticsMirror],
+    max_bounces: int = 12,
+    grid_width: int = 64,
+    grid_height: int = 64,
+) -> List[Tuple[int, int]]:
+    """光学光线追踪 — 精确匹配AR25游戏源码nloqvbouxu()的BFS反射逻辑。
+
+    从source出发, BFS遍历所有可达的反射点:
+    - 每个像素点尝试被每个mirror反射
+    - 反射后继续尝试新mirror
+    - 最大深度12 (ythhvclqmk = 12 in game source)
+    - 带过滤: reflect_horizontal_only只匹配horizontal mirror,
+               0038pnuzypawco只匹配vertical mirror
+
+    κ-Phase: 每次反射 = 光子在κ-相位面的弹射,
+    信息相位沿镜面法线方向翻转180°。
+
+    Args:
+        source: 光源坐标(piece/pixel位置)
+        mirrors: 所有镜面对象
+        max_bounces: 最大反射深度(游戏源码ythhvclqmk=12)
+        grid_width: 网格宽度
+        grid_height: 网格高度
+
+    Returns:
+        反射路径点列表(包含source和所有可达反射点)
+    """
+    from collections import deque
+
+    path_points: List[Tuple[int, int]] = []
+    visited: Set[Tuple[int, int]] = set()
+    bfs_queue: deque = deque()
+
+    # 初始点
+    sx, sy = source
+    if 0 <= sx < grid_width and 0 <= sy < grid_height:
+        visited.add((sx, sy))
+        bfs_queue.append(((sx, sy), 0))
+        path_points.append((sx, sy))
+
+    while bfs_queue:
+        current_pos, depth = bfs_queue.popleft()
+        if depth > max_bounces:
+            continue
+        cx, cy = current_pos
+
+        # 尝试被每个mirror反射
+        for mirror in mirrors:
+            # 反射计算 — 精确匹配游戏源码
+            if mirror.orientation == 'vertical':
+                ref_x = 2 * mirror.x - cx
+                ref_y = cy
+            else:
+                ref_x = cx
+                ref_y = 2 * mirror.y - cy
+
+            reflected = (ref_x, ref_y)
+
+            # 已访问则跳过(防止振荡)
+            if reflected in visited:
+                continue
+
+            visited.add(reflected)
+            bfs_queue.append((reflected, depth + 1))
+
+            # 只记录在网格内的反射点
+            if 0 <= ref_x < grid_width and 0 <= ref_y < grid_height:
+                path_points.append((ref_x, ref_y))
+
+    return path_points
+
+
+def optics_coverage_map(
+    piece_pixels: List[Tuple[int, int]],
+    mirrors: List[OpticsMirror],
+    max_bounces: int = 12,
+    grid_width: int = 64,
+    grid_height: int = 64,
+) -> np.ndarray:
+    """光学覆盖图 — 精确匹配AR25游戏源码nloqvbouxu()。
+
+    对每个piece的每个像素, 执行光线追踪(BFS反射),
+    最终合并所有反射结果生成覆盖图(jtowzmaffb)。
+
+    κ-Phase: 覆盖 = κ-Snap归约后的可达集合,
+    每个像素的反射路径 = κ-陪集中的因果链。
+
+    Args:
+        piece_pixels: piece的所有像素坐标列表[(x, y), ...]
+        mirrors: 所有镜面对象
+        max_bounces: 最大反射深度
+        grid_width: 网格宽度
+        grid_height: 网格高度
+
+    Returns:
+        覆盖图(int数组, -1=未覆盖, 非负=被覆盖)
+    """
+    from collections import deque
+
+    coverage = np.full((grid_height, grid_width), -1, dtype=int)
+    all_visited: Set[Tuple[int, int]] = set()
+
+    for px, py in piece_pixels:
+        # BFS光线追踪: 从piece像素出发, 反射可达的所有点
+        visited: Set[Tuple[int, int]] = set()
+        bfs_queue: deque = deque()
+
+        start = (px, py)
+        if start not in all_visited:
+            visited.add(start)
+            bfs_queue.append((start, 0))
+
+        while bfs_queue:
+            current_pos, depth = bfs_queue.popleft()
+            if depth > max_bounces:
+                continue
+            cx, cy = current_pos
+
+            for mirror in mirrors:
+                if mirror.orientation == 'vertical':
+                    ref_x = 2 * mirror.x - cx
+                    ref_y = cy
+                else:
+                    ref_x = cx
+                    ref_y = 2 * mirror.y - cy
+
+                reflected = (ref_x, ref_y)
+                if reflected in visited or reflected in all_visited:
+                    continue
+
+                visited.add(reflected)
+                bfs_queue.append((reflected, depth + 1))
+
+                if 0 <= ref_x < grid_width and 0 <= ref_y < grid_height:
+                    if coverage[ref_y, ref_x] < 0:
+                        coverage[ref_y, ref_x] = 0
+
+        # 标记piece像素本身
+        if 0 <= px < grid_width and 0 <= py < grid_height:
+            coverage[py, px] = 0
+
+        all_visited.update(visited)
+
+    return coverage
+
+
+def optics_check_win(
+    targets: List[OpticsTarget],
+    coverage: np.ndarray,
+) -> bool:
+    """光学胜判定 — 精确匹配AR25游戏源码vplrhaovhr()。
+
+    所有target的(x, y)在覆盖图中值 >= 0 → win
+
+    Args:
+        targets: 所有目标位置列表
+        coverage: 光学覆盖图
+
+    Returns:
+        True如果所有target被覆盖(值>=0)
+    """
+    for t in targets:
+        if 0 <= t.x < coverage.shape[1] and 0 <= t.y < coverage.shape[0]:
+            if coverage[t.y, t.x] < 0:
+                return False
+        else:
+            return False
+    return True
+
+
+def optics_mirror_move_constraint(
+    mirror: OpticsMirror,
+    action_id: int,
+) -> Tuple[int, int]:
+    """AR25镜面/piece移动约束 — 精确匹配游戏源码。
+
+    vertical mirror/piece (0054kgxrvfihgm): 只能上下移动
+      ACTION1(UP): dy=-1, ACTION2(DOWN): dy=+1, dx=0
+    horizontal mirror/piece (0002nuguepuujf): 只能左右移动
+      ACTION3(LEFT): dx=-1, ACTION4(RIGHT): dx=+1, dy=0
+
+    κ-Phase: 移动约束 = κ-相位守恒,
+    piece只能沿其反射轴的垂直方向移动(保持反射几何不变)。
+    """
+    dx, dy = 0, 0
+    if action_id == 1:  # UP
+        dy = -1
+    elif action_id == 2:  # DOWN
+        dy = 1
+    elif action_id == 3:  # LEFT
+        dx = -1
+    elif action_id == 4:  # RIGHT
+        dx = 1
+
+    # vertical mirror: 禁止左右移动
+    if mirror.orientation == 'vertical':
+        dx = 0
+    # horizontal mirror: 禁止上下移动
+    if mirror.orientation == 'horizontal':
+        dy = 0
+
+    return (dx, dy)
+
+
+# ============================================================
 # 导出
 # ============================================================
 
 PHYSICS_PRIMITIVE_REGISTRY = {
     'newton_push': {
-        'functions': [can_push_box, is_box_at, is_deadlock_corner],
-        'description': '牛顿刚体推箱 — 质量、摩擦、dead-lock冻结',
+        'functions': [can_push_box, is_box_at, is_deadlock_corner, is_wall_ride_push, check_deadlock_with_wall_ride],
+        'description': '牛顿刚体推箱 — 质量、摩擦、dead-lock冻结 + Wall-Ride豁免',
         'games': ['ka59'],
     },
     'mirror_geo': {
         'functions': [mirror_point, reflect_ray, multi_mirror_trace],
         'description': '反射几何 — 八元数仿射镜像、光线追踪',
+        'games': ['ar25'],
+    },
+    'optics': {
+        'functions': [OpticsMirror, OpticsTarget, OpticsPiece,
+                      optics_ray_trace, optics_coverage_map, optics_check_win,
+                      optics_mirror_move_constraint],
+        'description': '光学物理原语 — BFS光线追踪 + 覆盖图 + 镜面移动约束 (精确匹配AR25游戏源码)',
         'games': ['ar25'],
     },
     'dfa': {

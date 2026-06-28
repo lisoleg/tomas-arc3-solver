@@ -1,158 +1,78 @@
-%% κ-Snap 溯因搜索流程
 sequenceDiagram
-    participant Solver as TOMASSolver
-    participant KSnap as KSnapAbductiveSearcher
-    participant Gen as KappaSnapSearcher<br/>(候选生成器)
-    participant Verifier as GaussExVerifier
-    participant Topo as TopoHashFilter
-    participant Param as ParamInference
+    participant Caller as 调用方
+    participant SG as solve_game()
+    participant HSP as HybridSearchPipeline
+    participant GP as GameProfileRegistry
+    participant RE as ReplayEngine
+    participant L1 as L1Strategy
+    participant L2 as L2Strategy
+    participant L3 as L3Strategy
+    participant L4 as L4Strategy
+    participant KS as KSnapEngine
+    participant GX as GaussExVerifier
 
-    Solver->>KSnap: search(demo_pairs)
-    KSnap->>KSnap: _start_time = now()
-
-    KSnap->>Gen: two_phase_search(demo_pairs)
-    Gen->>Param: infer_candidates(demo_pairs)
-    Param-->>Gen: inferred_candidates[]
-    Gen->>Topo: quick_filter(brute_force_candidates, demo_pairs)
-    Topo-->>Gen: filtered_candidates[]
-    Gen->>Verifier: verify_program_batch(filtered, demo_pairs)
-    Verifier-->>Gen: valid_programs[]
-    Gen-->>KSnap: candidate_programs[]
-
-    loop 每个候选程序
-        KSnap->>KSnap: _compute_ftel(program, demo_pairs)
-        Note right of KSnap: Ftel = 输出相似度<br/>(匹配的demo对数 / 总对数)
-
-        alt Ftel < theta_ftel
-            KSnap->>KSnap: SnapEvent(REJECT_FTEL)
-            KSnap->>KSnap: latent_pool.append(candidate)
-        else Ftel >= theta_ftel
-            KSnap->>KSnap: _check_dead_zero(program, demo_pairs)
-            alt Dead-Zero (崩溃或全零)
-                KSnap->>KSnap: SnapEvent(REJECT_DZ)
-                KSnap->>KSnap: latent_pool.append(candidate)
-            else 存活
-                KSnap->>KSnap: _check_mus(candidates_at_same_depth)
-                alt MUS 冲突 (同深度不同输出)
-                    KSnap->>KSnap: SnapEvent(SUSPEND_MUS)
-                    Note right of KSnap: 挂起，等待更高MDL候选裁决
-                else 无冲突
-                    KSnap->>Verifier: verify_program(program, ALL demo_pairs)
-                    alt 全部验证通过
-                        KSnap->>KSnap: SnapEvent(MANIFESTED)
-                        KSnap->>KSnap: manifested_solutions[id] = solution
-                    else 验证失败
-                        KSnap->>KSnap: 记录失败原因
-                    end
-                end
-            end
-        end
+    Caller->>SG: solve_game(game, game_id, level_idx)
+    SG->>HSP: solve(game, game_id, level_idx)
+    
+    Note over HSP: 1. 查找GameProfile配置
+    HSP->>GP: get_profile(game_id)
+    GP-->>HSP: HybridGameProfile(l1="wall_bfs", l2="combo_symmetry", ...)
+    
+    Note over HSP: 2. 组装四层管线策略
+    HSP->>HSP: _build_pipeline(profile)
+    Note over HSP: L1=WallBFS, L2=ComboSymmetry, L3=KappaSnapEvaluation, L4=KappaSelector
+    
+    Note over HSP: 3. 初始化ReplayEngine (替代deepcopy)
+    HSP->>RE: ReplayEngine.from_game(game, mode="game")
+    RE-->>HSP: replay_engine (root_state=game)
+    
+    Note over HSP: 4. L1候选生成
+    HSP->>L1: generate(game, profile, replay_engine)
+    Note over L1: Wall-BFS扩展Node树, 零拷贝: 只记录(parent_id, action)
+    L1-->>HSP: CandidateSet(nodes, candidates=[n1,n2,...])
+    
+    Note over HSP: 5. L2结构剪枝
+    HSP->>L2: prune(candidates, profile)
+    Note over L2: 组合对称去重, 4方向旋转等价状态只保留一个
+    L2-->>HSP: CandidateSet(pruned_candidates=[n1,n5,...])
+    
+    Note over HSP: 6. L3残差评估
+    HSP->>L3: evaluate(candidates, profile, replay_engine)
+    
+    Note over L3: 对每个候选节点:
+    loop 每个候选node_id
+        L3->>RE: replay(node_id)
+        RE->>RE: _backtrack_path → deepcopy(root) → perform_action序列
+        RE-->>L3: materialized_state(game/grid)
+        
+        L3->>KS: project(eml_state, prior)
+        KS-->>L3: (best_v, η残差)
+        
+        L3->>GX: verify(grid, examples)
+        GX-->>L3: GEX详情(passed, max_error, margin)
+        
+        Note over L3: evaluations[node_id] = {eta, isa_result, gex_result}
     end
+    
+    L3-->>HSP: EvaluatedCandidateSet(evaluations)
+    
+    Note over HSP: 7. L4 κ-优选决策融合
+    HSP->>L4: select(evaluated, profile)
+    
+    Note over L4: κ-优选η升序最小残差选择, 1.过滤DEAD_ZERO, 2.η升序排序, 3.top-1验证 → 返回plan
+    L4->>HSP: _verify_plan(best_plan)
+    HSP->>HSP: deepcopy(pristine_game) → replay plan → check win
+    HSP-->>L4: verified=True
+    
+    L4-->>HSP: best_plan [(action1, data1), (action2, data2), ...]
+    
+    HSP-->>SG: best_plan
+    SG-->>Caller: best_plan
 
-    KSnap-->>Solver: manifested_programs[] (按Ftel降序)
-
-%% Wake-Sleep 持续学习流程
-sequenceDiagram
-    participant User
-    participant CS as ContinualSolver
-    participant KSnap as KSnapAbductiveSearcher
-    participant Lib as LibraryLearning
-    participant Verifier as GaussExVerifier
-    participant DSL as DSLElement Registry
-
-    User->>CS: run_continual_learning(tasks, epochs=3)
-
-    loop 每个 epoch (0..epochs-1)
-        Note over CS: ===== Wake Phase =====
-
-        CS->>CS: solved_programs = []
-        CS->>CS: epoch_start = now()
-
-        loop 每个 task
-            CS->>KSnap: search(task.demo_pairs)
-            KSnap-->>CS: manifested_programs[]
-
-            alt 找到有效程序
-                CS->>Verifier: verify_program(best, task.demo_pairs)
-                alt 验证通过
-                    CS->>CS: solved_programs.append(best)
-                end
-            end
-        end
-
-        CS->>CS: accuracy = solved / total
-        Note over CS: Epoch {e}: accuracy={acc}
-
-        Note over CS: ===== Sleep Phase =====
-
-        CS->>Lib: sleep_step(solved_programs)
-
-        Note over Lib: Step 1: AST递归抽取子式
-        Lib->>Lib: extract_subexpressions(prog, max_ast_depth=3)
-        loop 每个已解程序
-            Lib->>Lib: 递归遍历 ProgramNode.children
-            Lib->>Lib: 规范化哈希 → SubExpression
-            Note right of Lib: max_total_subexprs=5000 截断
-        end
-
-        Note over Lib: Step 2: 频率过滤
-        Lib->>Lib: 过滤 frequency < min_freq(3)
-
-        Note over Lib: Step 3: MDL收益排序
-        Lib->>Lib: compute_mdl_gain(subexpr, frequency)
-        Note right of Lib: gain = Len(old) - Len(compressed)
-        Lib->>Lib: 过滤 gain < mdl_gain_threshold(5)
-        Lib->>Lib: 按 gain 降序排序
-
-        Note over Lib: Step 4: 自动注册 (max_new=15)
-        loop 前 max_new 个子式
-            Lib->>Lib: _register_new_primitive(subexpr)
-            Lib->>DSL: DSLElement(name, params)
-            Lib->>DSL: 注册到 _registry
-            Note right of DSL: Theorem 4: ⟨𝓛ₑ₊₁⟩ ⊇ ⟨𝓛ₑ⟩<br/>覆盖度单调不减
-        end
-
-        Lib-->>CS: new_primitives[]
-
-        CS->>Lib: save() (持久化)
-        CS->>CS: epoch_result = EpochResult(...)
-        CS->>CS: _epoch_history.append(epoch_result)
+    Note over HSP,RE: 特殊路径: direct模式(tn36)
+    alt game_id == "tn36" (l1_strategy="direct")
+        HSP->>L1: DirectCompute.generate()
+        Note over L1: 不做搜索，直接从game内部读取DFA状态机计算plan
+        L1-->>HSP: CandidateSet(direct_plan)
+        HSP->>HSP: 跳过L2/L3/L4 → 直接返回plan
     end
-
-    CS->>CS: _save_state()
-    CS-->>User: {accuracy_history, library_size, stats}
-
-%% 集成层数据流
-sequenceDiagram
-    participant Task as ARC Task
-    participant Oct as OctonionHyperEdge
-    participant Topo as TopoHashFilter
-    participant KSnap as KSnapAbductiveSearcher
-    participant Gauss as GaussExVerifier
-    participant Lib as LibraryLearning
-    participant CS as ContinualSolver
-
-    Note over CS: 集成层：八元数→拓扑哈希→κ-Snap→GaussEx→Library
-
-    Task->>Oct: encode_grid(input_grid)
-    Oct-->>Oct: 8-component octonion vectors
-    Oct->>Oct: compute_topo_invariants()
-    Note right of Oct: betti0, symmetry_residual,<br/>color_permutation_group
-
-    Oct->>Topo: compute_hash_for_grid(predicted)
-    Topo->>Topo: compare with output hash
-    Topo-->>KSnap: filtered_candidates (Phase A)
-
-    KSnap->>KSnap: Ftel = similarity(predicted, expected)
-    KSnap->>KSnap: Dead-Zero check (crash/zero)
-    KSnap->>KSnap: MUS check (conflict detection)
-    KSnap->>Gauss: verify_program(candidate, all_demos)
-    Note right of Gauss: Fiber(D) ⊕ Noise(ψ)<br/>行为纤维交集验证
-    Gauss-->>KSnap: verified (True/False)
-    KSnap->>KSnap: MANIFESTED → solution
-
-    KSnap-->>CS: solved_programs
-    CS->>Lib: sleep_step(solved_programs)
-    Lib-->>Lib: new DSL primitives registered
-    Lib-->>CS: expanded DSL for next epoch
-    CS->>KSnap: next epoch search with expanded DSL

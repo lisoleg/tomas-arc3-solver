@@ -16,7 +16,7 @@
 
 | # | 挑战 | 说明 | 解决方案 |
 |---|------|------|----------|
-| C1 | **83处deepcopy全面消除** | game_solvers.py 58处 + universal_solver_pipeline.py 20处 + neural_dsl.py 3处 + delta_state.py 1处 + 其他2处；涉及game engine deepcopy（复杂对象）和grid deepcopy（numpy）两种场景 | (1) Game mode: 仅在ReplayEngine.replay()中做一次性deepcopy(root_game)，BFS扩展阶段全部用Node(parent_id, action)；(2) Grid mode: 用numpy view + transformation sequence，不拷贝原始grid；(3) delta_state.py自身残留的1处deepcopy改为root_only_copy标记 |
+| C1 | **83处deepcopy全面消除** | game_solvers.py 58处 + universal_solver_pipeline.py 20处 + neural_dsl.py 3处 + delta_state.py 1处 + 其他2处；涉及game engine deepcopy（复杂对象）和grid deepcopy（numpy）两种场景 | (1) Game mode: 仅在ReplayEngine.replay()中做一次性deepcopy(root_game)，BFS扩展阶段全部用Node(parent_id, action)；(2) Grid mode: 用numpy view + transformation sequence，不拷贝原始grid；(3) delta_state.py自身残留的1处deepcopy改为root_only_copy标记；(4) **v3.31.0**: AR25 solver 3处deepcopy验证全部替换为Δ-State Replay验证，Stage 1 BFS用optics primitives重构；TN36已是零拷贝直接计算（`_DEEPCOPY_SAFE_GAMES`正确排除TN36） |
 | C2 | **五阶段组合优化管线** | 从当前单阶段κ-PS搜索升级为群论→SAT/SMT→次模→分支定界→EML同构的五阶段pipeline；各阶段有不同数据流和接口 | ComboPipeline统一调度五阶段Stage；每Stage有标准接口`solve(task) → StageResult`；阶段间通过`StageResult.candidates`传递候选集，逐步缩减搜索空间 |
 | C3 | **LS20 L3~L6通关** | L3在v3.18.6超时69.8s无plan；L4~L6未尝试；需探查游戏结构（click vs keyboard） | (1) L3: 引入五阶段管线缩短搜索路径（群论轨道化简→SAT约束→次模贪心）；(2) L4~L6: 通过arc_agi SDK探查game结构后选择对应Stage组合；(3) 通用fallback: universal_solver_pipeline作为兜底 |
 | C4 | **刘机制S_rel注入κ-Snap** | 当前κ-PS用传统启发式排序；需替换为S_rel = αM + βH + γP_noself | SubmodularOptimizer.compute_s_rel()计算S_rel评分；Stage3输出按S_rel排序的候选列表；Stage4 BranchBoundSearcher用S_rel作为容许启发式h(n) |
@@ -66,6 +66,7 @@ src/agent/
 ├── submodular_optimizer.py         # [新增] 次模优化+S_rel (≤400行)
 ├── branch_bound_search.py          # [新增] 分支定界+A*+共识验证 (≤500行)
 ├── eml_iso_pruner.py               # [新增] EML图同构剪枝 (≤400行)
+├── physics_primitives.py           # [新增] 物理原语引擎 (≤600行) [v3.31.0新增]
 ├── jsn_interface.py                # JSN接口 (≤200行) [保留]
 ├── jsn_store.py                    # JSN存储 (≤930行) [保留]
 ├── jsn_matroid.py                  # JSN拟阵 (≤590行) [保留]
@@ -91,7 +92,7 @@ src/agent/
 
 | 类别 | 文件 | 操作 |
 |------|------|------|
-| **新增** | combo_pipeline.py, group_orbit.py, sat_smt_solver.py, submodular_optimizer.py, branch_bound_search.py, eml_iso_pruner.py | 新建 |
+| **新增** | combo_pipeline.py, group_orbit.py, sat_smt_solver.py, submodular_optimizer.py, branch_bound_search.py, eml_iso_pruner.py, physics_primitives.py | 新建 |
 | **大幅修改** | game_solvers.py (9458→≤2500), tomas_learner.py (10670→≤2000), delta_state.py (1118→≤1200), universal_solver_pipeline.py (2069→并入combo_pipeline) | 精简+重构 |
 | **中度修改** | neural_dsl.py (扩展TernaryMask), tomas_core.py (精简接口), __init__.py (导出v4.0) | 扩展+更新 |
 | **保留** | rhae_controller.py, game_configs.py, game_profiles.py, oracle_adapters.py, jsn_*, perception/*, reasoning/*, memory/*, world_model/*, planner/* | 不变 |
@@ -101,10 +102,10 @@ src/agent/
 
 | 类别 | 行数 |
 |------|------|
-| 新增6个Stage模块 | ~2700行 |
+| 新增7个模块(6 Stage+physics_primitives) | ~3300行 |
 | 大幅修改精简后 | ~5100行(vs 原来24700行) |
 | 保留不变 | ~4600行 |
-| 总计核心模块 | ~12400行(vs 原来27582行核心+40文件) |
+| 总计核心模块 | ~13000行(vs 原来27582行核心+40文件) |
 
 ---
 
