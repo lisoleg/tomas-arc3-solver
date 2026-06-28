@@ -4,7 +4,7 @@ TOMAS κ-Phase 物理原语纯软件模拟
 IDO/TOMAS: 物理直觉的本质是κ-相位感知
 ARC-AGI-3 智能体必须识别网格变换中的κ-相位一致性
 
-十二类物理/几何原语:
+二十二类物理/几何原语:
 - newton_push: 牛顿刚体推箱 (KA59 Sokoban) — 质量、摩擦、dead-lock冻结
 - mirror_geo: 反射几何 (AR25 镜像覆盖) — 八元数仿射镜像、光线追踪
 - optics: 光学物理 (AR25 光线追踪) — BFS光线追踪+覆盖图+镜面移动约束
@@ -17,13 +17,24 @@ ARC-AGI-3 智能体必须识别网格变换中的κ-相位一致性
 - wave: 波动力学原语 — 离散波传播、干涉检测、叠加原理
 - euclidean_geometry: 欧几里得几何原语 — 距离度量、线段交点、凸包、几何相似性
 - trigonometry_discrete: 离散三角函数原语 — 方向角、向量分解、极坐标转换
+- lever_mechanics: 初中力学原语 — 杠杆原理、滑轮组、浮力、压强、液压机、密度
+- ohm_circuit: 初中电学原语 — 欧姆定律、串并联电阻、电功率、分压分流
+- lens_optics: 初中光学原语 — 薄透镜公式、放大率、折射定律、临界角、成像距离
+- thermal_basic: 初中热学原语 — 比热容、热平衡、潜热、相变总能量
+- circular_motion: 高中力学原语 — 向心力、角速度、万有引力、轨道速度、开普勒第三定律、逃逸速度
+- electromagnetism: 高中电磁学原语 — 法拉第感应、安培力、洛伦兹力、电容、电容储能、直导线磁场
+- wave_interference: 高中波动光学原语 — 双缝干涉、衍射光栅、折射率、条纹级数、单缝衍射
+- ideal_gas: 高中热力学扩展原语 — 理想气体状态方程、卡诺效率、气体压强、等温做功、绝热关系
+- algebra_solver: 初中数学原语 — 勾股定理、一元二次方程、比例运算、圆面积周长、扇形面积、三角形面积
+- analytic_geometry: 高中数学原语 — 直线方程、点线距离、排列组合、数值微积分、椭圆面积、等差等比数列
 
 核心架构: solve_via_pipeline() + SBInjector.physics_primitives → κ-Snap搜索调用原语做Dead-Zero剪枝
 """
 
 from dataclasses import dataclass, field
-from typing import List, Tuple, Optional, Dict, Set, Any
+from typing import List, Tuple, Optional, Dict, Set, Any, Union
 import numpy as np
+import math
 
 # ============================================================
 # 基本类型
@@ -2096,6 +2107,1633 @@ def discrete_cos(angle_steps: int, total_steps: int = 8) -> float:
 
 
 # ============================================================
+# 初中力学原语 (Lever Mechanics)
+# κ-Phase: 杠杆/浮力/压强 = κ-相位平衡/位移/分布的力学模拟
+# =================================================================
+
+GRAVITY_DEFAULT: float = 9.8  # m/s²，默认重力加速度
+
+
+def lever_balance(F1: Union[float, np.ndarray],
+                  L1: Union[float, np.ndarray],
+                  F2: Union[float, np.ndarray],
+                  L2: Union[float, np.ndarray]
+                  ) -> Union[bool, np.ndarray]:
+    """
+    杠杆原理 — F1×L1 == F2×L2
+
+    κ-Phase: 杠杆平衡 = κ-相位力矩平衡的力学模拟
+    力矩相等时杠杆处于平衡态
+
+    Args:
+        F1: 左侧力
+        L1: 左侧力臂
+        F2: 右侧力
+        L2: 右侧力臂
+
+    Returns:
+        是否平衡（布尔或布尔数组）
+    """
+    F1 = np.asarray(F1, dtype=float)
+    L1 = np.asarray(L1, dtype=float)
+    F2 = np.asarray(F2, dtype=float)
+    L2 = np.asarray(L2, dtype=float)
+    torque1 = F1 * L1
+    torque2 = F2 * L2
+    return np.isclose(torque1, torque2)
+
+
+def pulley_advantage(n_pulleys: Union[int, np.ndarray]
+                     ) -> Union[float, np.ndarray]:
+    """
+    滑轮组省力倍数 — n_pulleys根绳子的省力倍数
+
+    κ-Phase: 滑轮省力 = κ-相位力分配的机械模拟
+    n根绳子分担重物，每根绳子只需1/n的力
+
+    Args:
+        n_pulleys: 动滑轮上绳子根数（省力倍数）
+
+    Returns:
+        省力倍数（拉力 = 重力 / n_pulleys）
+    """
+    n = np.asarray(n_pulleys, dtype=float)
+    return n
+
+
+def archimedes_buoyancy(density_obj: Union[float, np.ndarray],
+                         density_fluid: Union[float, np.ndarray],
+                         V_obj: Union[float, np.ndarray],
+                         g: float = GRAVITY_DEFAULT
+                         ) -> Union[float, np.ndarray]:
+    """
+    阿基米德浮力 — ρ_fluid × V_obj × g
+
+    κ-Phase: 浮力 = κ-相位流体排斥力的力学模拟
+    物体浸入流体所受浮力等于排开流体的重力
+
+    Args:
+        density_obj: 物体密度 (kg/m³)
+        density_fluid: 流体密度 (kg/m³)
+        V_obj: 物体体积 (m³)
+        g: 重力加速度 (m/s²)
+
+    Returns:
+        浮力 (N)
+    """
+    density_fluid = np.asarray(density_fluid, dtype=float)
+    V_obj = np.asarray(V_obj, dtype=float)
+    return density_fluid * V_obj * g
+
+
+def pressure_calc(F: Union[float, np.ndarray],
+                  area: Union[float, np.ndarray]
+                  ) -> Union[float, np.ndarray]:
+    """
+    压强计算 — P = F/S
+
+    κ-Phase: 压强 = κ-相位力分布密度的力学模拟
+    单位面积上承受的力
+
+    Args:
+        F: 力 (N)
+        area: 受力面积 (m²)
+
+    Returns:
+        压强 (Pa)
+    """
+    F = np.asarray(F, dtype=float)
+    area = np.asarray(area, dtype=float)
+    result = np.where(area > 0, F / area, np.inf)
+    return result
+
+
+def hydraulic_press(F1: Union[float, np.ndarray],
+                    A1: Union[float, np.ndarray],
+                    A2: Union[float, np.ndarray]
+                    ) -> Union[float, np.ndarray]:
+    """
+    液压机原理 — F2 = F1 × A2/A1
+
+    κ-Phase: 液压机 = κ-相位帕斯卡定律的力学模拟
+    密闭液体传递压强，大活塞面积越大出力越大
+
+    Args:
+        F1: 小活塞受力 (N)
+        A1: 小活塞面积 (m²)
+        A2: 大活塞面积 (m²)
+
+    Returns:
+        大活塞出力 F2 (N)
+    """
+    F1 = np.asarray(F1, dtype=float)
+    A1 = np.asarray(A1, dtype=float)
+    A2 = np.asarray(A2, dtype=float)
+    return F1 * A2 / A1
+
+
+def density_calc(mass: Union[float, np.ndarray],
+                 volume: Union[float, np.ndarray]
+                 ) -> Union[float, np.ndarray]:
+    """
+    密度计算 — ρ = m/V
+
+    κ-Phase: 密度 = κ-相位质量分布密度的力学模拟
+    单位体积内含的质量
+
+    Args:
+        mass: 质量 (kg)
+        volume: 体积 (m³)
+
+    Returns:
+        密度 (kg/m³)
+    """
+    mass = np.asarray(mass, dtype=float)
+    volume = np.asarray(volume, dtype=float)
+    result = np.where(volume > 0, mass / volume, np.inf)
+    return result
+
+
+# ============================================================
+# 初中电学原语 (Ohm Circuit)
+# κ-Phase: 欧姆/串并联 = κ-相位电流/阻抗关系的电路模拟
+# =================================================================
+
+
+def ohm_law(V: Optional[Union[float, np.ndarray]] = None,
+            I: Optional[Union[float, np.ndarray]] = None,
+            R: Optional[Union[float, np.ndarray]] = None
+            ) -> Union[float, np.ndarray]:
+    """
+    欧姆定律 — V = IR，任意给两个求第三个
+
+    κ-Phase: 欧姆定律 = κ-相位电压-电流-阻抗关系的电路模拟
+    已知两个量可推算第三个量
+
+    Args:
+        V: 电压 (V)，可选
+        I: 电流 (A)，可选
+        R: 电阻 (Ω)，可选
+
+    Returns:
+        未知量（电压/电流/电阻）
+
+    Raises:
+        ValueError: 必须提供至少两个参数
+    """
+    provided = sum(x is not None for x in (V, I, R))
+    if provided < 2:
+        raise ValueError("欧姆定律需要至少两个参数")
+    if V is not None and I is not None:
+        V_arr = np.asarray(V, dtype=float)
+        I_arr = np.asarray(I, dtype=float)
+        return V_arr / I_arr  # R = V/I
+    if V is not None and R is not None:
+        V_arr = np.asarray(V, dtype=float)
+        R_arr = np.asarray(R, dtype=float)
+        return V_arr / R_arr  # I = V/R
+    # I and R given
+    I_arr = np.asarray(I, dtype=float)
+    R_arr = np.asarray(R, dtype=float)
+    return I_arr * R_arr  # V = IR
+
+
+def series_resistance(resistors: Union[List[float], np.ndarray]
+                      ) -> Union[float, np.ndarray]:
+    """
+    串联电阻 — R_total = ΣRi
+
+    κ-Phase: 串联电阻 = κ-相位阻抗串联叠加的电路模拟
+    串联各电阻累加
+
+    Args:
+        resistors: 各电阻值列表/数组 (Ω)
+
+    Returns:
+        总电阻 (Ω)
+    """
+    resistors = np.asarray(resistors, dtype=float)
+    return np.sum(resistors)
+
+
+def parallel_resistance(resistors: Union[List[float], np.ndarray]
+                        ) -> Union[float, np.ndarray]:
+    """
+    并联电阻 — 1/R_total = Σ(1/Ri)
+
+    κ-Phase: 并联电阻 = κ-相位阻抗并联分配的电路模拟
+    并联各电阻倒数之和的倒数
+
+    Args:
+        resistors: 各电阻值列表/数组 (Ω)
+
+    Returns:
+        总电阻 (Ω)
+    """
+    resistors = np.asarray(resistors, dtype=float)
+    # 避免0电阻导致无穷大
+    safe_resistors = np.where(resistors > 0, resistors, np.inf)
+    reciprocal_sum = np.sum(1.0 / safe_resistors)
+    result = np.where(reciprocal_sum > 0, 1.0 / reciprocal_sum, 0.0)
+    return float(result)
+
+
+def power_electric(V: Union[float, np.ndarray],
+                   I: Union[float, np.ndarray]
+                   ) -> Union[float, np.ndarray]:
+    """
+    电功率 — P = V×I
+
+    κ-Phase: 电功率 = κ-相位能量传输速率的电路模拟
+    电压与电流之积为功率
+
+    Args:
+        V: 电压 (V)
+        I: 电流 (A)
+
+    Returns:
+        电功率 (W)
+    """
+    V = np.asarray(V, dtype=float)
+    I = np.asarray(I, dtype=float)
+    return V * I
+
+
+def voltage_divider(V_source: Union[float, np.ndarray],
+                    R1: Union[float, np.ndarray],
+                    R2: Union[float, np.ndarray]
+                    ) -> Union[float, np.ndarray]:
+    """
+    分压电路 — V2 = V × R2/(R1+R2)
+
+    κ-Phase: 分压器 = κ-相位电压按阻抗比例分配的电路模拟
+    R2上的电压等于总电压乘R2占比
+
+    Args:
+        V_source: 源电压 (V)
+        R1: 上位电阻 (Ω)
+        R2: 下位电阻 (Ω)
+
+    Returns:
+        R2上的电压 (V)
+    """
+    V_source = np.asarray(V_source, dtype=float)
+    R1 = np.asarray(R1, dtype=float)
+    R2 = np.asarray(R2, dtype=float)
+    total = R1 + R2
+    result = np.where(total > 0, V_source * R2 / total, 0.0)
+    return result
+
+
+def current_divider(I_source: Union[float, np.ndarray],
+                    R1: Union[float, np.ndarray],
+                    R2: Union[float, np.ndarray]
+                    ) -> Union[float, np.ndarray]:
+    """
+    分流电路 — I1 = I × R2/(R1+R2)
+
+    κ-Phase: 分流器 = κ-相位电流按阻抗反比分配的电路模拟
+    R1上的电流等于总电流乘对侧电阻占比
+
+    Args:
+        I_source: 源电流 (A)
+        R1: 分支1电阻 (Ω)
+        R2: 分支2电阻 (Ω)
+
+    Returns:
+        R1上的电流 (A)
+    """
+    I_source = np.asarray(I_source, dtype=float)
+    R1 = np.asarray(R1, dtype=float)
+    R2 = np.asarray(R2, dtype=float)
+    total = R1 + R2
+    result = np.where(total > 0, I_source * R2 / total, 0.0)
+    return result
+
+
+# ============================================================
+# 初中光学原语 (Lens Optics)
+# κ-Phase: 透镜/折射 = κ-相位光路变换的光学模拟
+# =================================================================
+
+
+def thin_lens_equation(f: Optional[Union[float, np.ndarray]] = None,
+                       u: Optional[Union[float, np.ndarray]] = None,
+                       v: Optional[Union[float, np.ndarray]] = None
+                       ) -> Union[float, np.ndarray]:
+    """
+    薄透镜公式 — 1/f = 1/u + 1/v，任意给两个求第三个
+
+    κ-Phase: 薄透镜 = κ-相位光路焦距-物距-像距关系的模拟
+    凸透镜成像的基本公式
+
+    Args:
+        f: 焦距 (m)，可选
+        u: 物距 (m)，可选（正值表示实物）
+        v: 像距 (m)，可选（正值表示实像）
+
+    Returns:
+        未知量（焦距/物距/像距）
+
+    Raises:
+        ValueError: 必须提供至少两个参数
+    """
+    provided = sum(x is not None for x in (f, u, v))
+    if provided < 2:
+        raise ValueError("薄透镜公式需要至少两个参数")
+    if f is not None and u is not None:
+        f_arr = np.asarray(f, dtype=float)
+        u_arr = np.asarray(u, dtype=float)
+        # 1/v = 1/f - 1/u
+        inv_v = 1.0 / f_arr - 1.0 / u_arr
+        result = np.where(np.abs(inv_v) > 1e-10, 1.0 / inv_v, np.inf)
+        return result
+    if f is not None and v is not None:
+        f_arr = np.asarray(f, dtype=float)
+        v_arr = np.asarray(v, dtype=float)
+        # 1/u = 1/f - 1/v
+        inv_u = 1.0 / f_arr - 1.0 / v_arr
+        result = np.where(np.abs(inv_u) > 1e-10, 1.0 / inv_u, np.inf)
+        return result
+    # u and v given
+    u_arr = np.asarray(u, dtype=float)
+    v_arr = np.asarray(v, dtype=float)
+    # 1/f = 1/u + 1/v
+    inv_f = 1.0 / u_arr + 1.0 / v_arr
+    result = np.where(np.abs(inv_f) > 1e-10, 1.0 / inv_f, np.inf)
+    return result
+
+
+def magnification(u: Union[float, np.ndarray],
+                  v: Union[float, np.ndarray]
+                  ) -> Union[float, np.ndarray]:
+    """
+    放大率 — m = v/u
+
+    κ-Phase: 放大率 = κ-相位像与物尺寸比例的光学模拟
+    像距与物距之比等于像与物的尺寸比
+
+    Args:
+        u: 物距 (m)
+        v: 像距 (m)
+
+    Returns:
+        放大率 m
+    """
+    u = np.asarray(u, dtype=float)
+    v = np.asarray(v, dtype=float)
+    result = np.where(np.abs(u) > 1e-10, v / u, np.inf)
+    return result
+
+
+def snell_law(n1: Union[float, np.ndarray],
+              theta1: Union[float, np.ndarray],
+              n2: Union[float, np.ndarray]
+              ) -> Union[float, np.ndarray]:
+    """
+    折射定律 — n1×sinθ1 = n2×sinθ2，已知入射角求折射角
+
+    κ-Phase: 折射定律 = κ-相位光路界面偏折的光学模拟
+    光从一种介质进入另一种介质时方向改变
+
+    Args:
+        n1: 入射介质折射率
+        theta1: 入射角 (度)
+        n2: 折射介质折射率
+
+    Returns:
+        折射角 θ2 (度)；若发生全反射返回None（标量输入）或nan（数组输入）
+    """
+    n1 = np.asarray(n1, dtype=float)
+    theta1_rad = np.radians(np.asarray(theta1, dtype=float))
+    n2 = np.asarray(n2, dtype=float)
+    sin_theta2 = n1 * np.sin(theta1_rad) / n2
+    # 全反射检测: sin_theta2 > 1
+    if sin_theta2.ndim == 0:
+        if float(sin_theta2) > 1.0:
+            return float('nan')
+        return float(np.degrees(np.arcsin(float(sin_theta2))))
+    result = np.where(sin_theta2 <= 1.0,
+                      np.degrees(np.arcsin(np.clip(sin_theta2, -1.0, 1.0))),
+                      np.nan)
+    return result
+
+
+def critical_angle(n1: Union[float, np.ndarray],
+                   n2: Union[float, np.ndarray]
+                   ) -> Union[float, np.ndarray]:
+    """
+    临界角 — θ_c = arcsin(n2/n1)
+
+    κ-Phase: 临界角 = κ-相位全反射阈值角度的光学模拟
+    当入射角超过临界角时发生全反射
+
+    Args:
+        n1: 光密介质折射率
+        n2: 光疏介质折射率
+
+    Returns:
+        临界角 (度)；若 n2 >= n1（无全反射）返回nan
+    """
+    n1 = np.asarray(n1, dtype=float)
+    n2 = np.asarray(n2, dtype=float)
+    ratio = n2 / n1
+    if ratio.ndim == 0:
+        if float(ratio) >= 1.0:
+            return float('nan')
+        return float(np.degrees(np.arcsin(float(ratio))))
+    result = np.where(ratio < 1.0,
+                      np.degrees(np.arcsin(np.clip(ratio, 0.0, 1.0))),
+                      np.nan)
+    return result
+
+
+def image_distance(f: Union[float, np.ndarray],
+                   object_dist: Union[float, np.ndarray]
+                   ) -> Union[float, np.ndarray]:
+    """
+    凸透镜成像距离 — 1/v = 1/f - 1/u
+
+    κ-Phase: 成像距离 = κ-相位透镜焦点对像位置约束的光学模拟
+    根据焦距和物距计算像距，涵盖凸透镜三种成像情况
+
+    Args:
+        f: 焦距 (m)，正值表示凸透镜
+        object_dist: 物距 (m)，正值表示实物在透镜前方
+
+    Returns:
+        像距 (m)；正值=实像，负值=虚像，inf=像在无穷远
+    """
+    f = np.asarray(f, dtype=float)
+    object_dist = np.asarray(object_dist, dtype=float)
+    inv_v = 1.0 / f - 1.0 / object_dist
+    result = np.where(np.abs(inv_v) > 1e-10, 1.0 / inv_v, np.inf)
+    return result
+
+
+# ============================================================
+# 初中热学原语 (Thermal Basic)
+# κ-Phase: 比热/相变 = κ-相位热能量转移的热学模拟
+# =================================================================
+
+
+def heat_capacity(Q: Optional[Union[float, np.ndarray]] = None,
+                  m: Optional[Union[float, np.ndarray]] = None,
+                  delta_T: Optional[Union[float, np.ndarray]] = None,
+                  c: Optional[Union[float, np.ndarray]] = None
+                  ) -> Union[float, np.ndarray]:
+    """
+    比热容公式 — Q = c×m×ΔT，任意给三个求第四个
+
+    κ-Phase: 比热容 = κ-相位热容-温升关系的热学模拟
+    热量 = 比热容 × 质量 × 温度变化
+
+    Args:
+        Q: 热量 (J)，可选
+        m: 质量 (kg)，可选
+        delta_T: 温度变化 (K)，可选
+        c: 比热容 (J/(kg·K))，可选
+
+    Returns:
+        未知量
+
+    Raises:
+        ValueError: 必须提供至少三个参数
+    """
+    provided = sum(x is not None for x in (Q, m, delta_T, c))
+    if provided < 3:
+        raise ValueError("比热容公式需要至少三个参数")
+    if Q is not None and m is not None and delta_T is not None:
+        Q_arr = np.asarray(Q, dtype=float)
+        m_arr = np.asarray(m, dtype=float)
+        dT_arr = np.asarray(delta_T, dtype=float)
+        denom = m_arr * dT_arr
+        return np.where(np.abs(denom) > 1e-10, Q_arr / denom, np.inf)
+    if c is not None and m is not None and delta_T is not None:
+        c_arr = np.asarray(c, dtype=float)
+        m_arr = np.asarray(m, dtype=float)
+        dT_arr = np.asarray(delta_T, dtype=float)
+        return c_arr * m_arr * dT_arr
+    if Q is not None and c is not None and delta_T is not None:
+        Q_arr = np.asarray(Q, dtype=float)
+        c_arr = np.asarray(c, dtype=float)
+        dT_arr = np.asarray(delta_T, dtype=float)
+        denom = c_arr * dT_arr
+        return np.where(np.abs(denom) > 1e-10, Q_arr / denom, np.inf)
+    # Q, c, m given → delta_T
+    Q_arr = np.asarray(Q, dtype=float)
+    c_arr = np.asarray(c, dtype=float)
+    m_arr = np.asarray(m, dtype=float)
+    denom = c_arr * m_arr
+    return np.where(np.abs(denom) > 1e-10, Q_arr / denom, np.inf)
+
+
+def thermal_equilibrium(m1: Union[float, np.ndarray],
+                        c1: Union[float, np.ndarray],
+                        T1: Union[float, np.ndarray],
+                        m2: Union[float, np.ndarray],
+                        c2: Union[float, np.ndarray],
+                        T2: Union[float, np.ndarray]
+                        ) -> Union[float, np.ndarray]:
+    """
+    热平衡混合温度 — T_eq = (m1c1T1 + m2c2T2) / (m1c1 + m2c2)
+
+    κ-Phase: 热平衡 = κ-相位热流趋于稳态的热学模拟
+    两物体混合后达到的共同温度
+
+    Args:
+        m1: 物体1质量 (kg)
+        c1: 物体1比热容 (J/(kg·K))
+        T1: 物体1初温 (K)
+        m2: 物体2质量 (kg)
+        c2: 物体2比热容 (J/(kg·K))
+        T2: 物体2初温 (K)
+
+    Returns:
+        混合平衡温度 (K)
+    """
+    m1 = np.asarray(m1, dtype=float)
+    c1 = np.asarray(c1, dtype=float)
+    T1 = np.asarray(T1, dtype=float)
+    m2 = np.asarray(m2, dtype=float)
+    c2 = np.asarray(c2, dtype=float)
+    T2 = np.asarray(T2, dtype=float)
+    numerator = m1 * c1 * T1 + m2 * c2 * T2
+    denominator = m1 * c1 + m2 * c2
+    result = np.where(np.abs(denominator) > 1e-10, numerator / denominator, 0.0)
+    return result
+
+
+def latent_heat(m: Union[float, np.ndarray],
+                L: Union[float, np.ndarray]
+                ) -> Union[float, np.ndarray]:
+    """
+    潜热计算 — Q = m×L
+
+    κ-Phase: 潜热 = κ-相位相变能量释放的热学模拟
+    物质在相变过程中吸收或释放的热量
+
+    Args:
+        m: 质量 (kg)
+        L: 潜热系数 (J/kg)，熔化潜热或汽化潜热
+
+    Returns:
+        相变热量 (J)
+    """
+    m = np.asarray(m, dtype=float)
+    L = np.asarray(L, dtype=float)
+    return m * L
+
+
+def phase_transition_energy(m: Union[float, np.ndarray],
+                            c: Union[float, np.ndarray],
+                            L: Union[float, np.ndarray],
+                            T_start: Union[float, np.ndarray],
+                            T_end: Union[float, np.ndarray],
+                            T_phase: Union[float, np.ndarray]
+                            ) -> Union[float, np.ndarray]:
+    """
+    相变总能量 — 升温到相变点 + 相变潜热 + 继续升温
+
+    κ-Phase: 相变总能量 = κ-相位温度-相变-再升温三段能量累加的热学模拟
+    Q_total = c×m×(T_phase - T_start) + m×L + c×m×(T_end - T_phase)
+
+    Args:
+        m: 质量 (kg)
+        c: 比热容 (J/(kg·K))
+        L: 潜热系数 (J/kg)
+        T_start: 初温 (K)
+        T_end: 终温 (K)
+        T_phase: 相变温度 (K)
+
+    Returns:
+        总热量 (J)
+    """
+    m = np.asarray(m, dtype=float)
+    c = np.asarray(c, dtype=float)
+    L = np.asarray(L, dtype=float)
+    T_start = np.asarray(T_start, dtype=float)
+    T_end = np.asarray(T_end, dtype=float)
+    T_phase = np.asarray(T_phase, dtype=float)
+    Q_heat_before = c * m * (T_phase - T_start)
+    Q_phase = m * L
+    Q_heat_after = c * m * (T_end - T_phase)
+    return Q_heat_before + Q_phase + Q_heat_after
+
+
+# ============================================================
+# 高中力学原语 (Circular Motion & Gravitation)
+# κ-Phase: 圆周/引力 = κ-相位旋转/轨道的力学模拟
+# =================================================================
+
+G_CONST: float = 6.674e-11  # 万有引力常数 N·m²/kg²
+
+
+def centripetal_force(m: Union[float, np.ndarray],
+                      v: Union[float, np.ndarray],
+                      r: Union[float, np.ndarray]
+                      ) -> Union[float, np.ndarray]:
+    """
+    向心力 — F = mv²/r
+
+    κ-Phase: 向心力 = κ-相位圆周运动约束力的力学模拟
+    维持圆周运动所需的指向圆心的力
+
+    Args:
+        m: 质量 (kg)
+        v: 速度 (m/s)
+        r: 半径 (m)
+
+    Returns:
+        向心力 (N)
+    """
+    m = np.asarray(m, dtype=float)
+    v = np.asarray(v, dtype=float)
+    r = np.asarray(r, dtype=float)
+    result = np.where(r > 0, m * v ** 2 / r, np.inf)
+    return result
+
+
+def angular_velocity(T_or_v: Union[float, np.ndarray],
+                     r: Optional[Union[float, np.ndarray]] = None,
+                     mode: str = 'period'
+                     ) -> Union[float, np.ndarray]:
+    """
+    角速度 — ω = 2π/T 或 ω = v/r
+
+    κ-Phase: 角速度 = κ-相位旋转速率的力学模拟
+    可由周期或线速度计算
+
+    Args:
+        T_or_v: 周期 (s) 或线速度 (m/s)
+        r: 半径 (m)，mode='velocity'时必需
+        mode: 'period' 从周期计算，'velocity' 从线速度计算
+
+    Returns:
+        角速度 ω (rad/s)
+    """
+    T_or_v = np.asarray(T_or_v, dtype=float)
+    if mode == 'period':
+        result = np.where(np.abs(T_or_v) > 1e-10, 2.0 * np.pi / T_or_v, np.inf)
+        return result
+    if r is None:
+        raise ValueError("mode='velocity'时需要提供半径r")
+    r = np.asarray(r, dtype=float)
+    result = np.where(r > 0, T_or_v / r, np.inf)
+    return result
+
+
+def gravitational_force(m1: Union[float, np.ndarray],
+                        m2: Union[float, np.ndarray],
+                        r: Union[float, np.ndarray],
+                        G: float = G_CONST
+                        ) -> Union[float, np.ndarray]:
+    """
+    万有引力 — F = Gm1m2/r²
+
+    κ-Phase: 万有引力 = κ-相位质量间远程吸引力的力学模拟
+    两物体间的引力与质量积成正比，与距离平方成反比
+
+    Args:
+        m1: 物体1质量 (kg)
+        m2: 物体2质量 (kg)
+        r: 距离 (m)
+        G: 万有引力常数 (N·m²/kg²)
+
+    Returns:
+        引力 (N)
+    """
+    m1 = np.asarray(m1, dtype=float)
+    m2 = np.asarray(m2, dtype=float)
+    r = np.asarray(r, dtype=float)
+    result = np.where(r > 0, G * m1 * m2 / r ** 2, np.inf)
+    return result
+
+
+def orbital_velocity(M: Union[float, np.ndarray],
+                     r: Union[float, np.ndarray],
+                     G: float = G_CONST
+                     ) -> Union[float, np.ndarray]:
+    """
+    轨道速度 — v = √(GM/r)
+
+    κ-Phase: 轨道速度 = κ-相位环绕天体匀速圆周运动的力学模拟
+    在引力场中做圆周运动的速度
+
+    Args:
+        M: 中心天体质量 (kg)
+        r: 轨道半径 (m)
+        G: 万有引力常数 (N·m²/kg²)
+
+    Returns:
+        轨道速度 (m/s)
+    """
+    M = np.asarray(M, dtype=float)
+    r = np.asarray(r, dtype=float)
+    result = np.where(r > 0, np.sqrt(G * M / r), 0.0)
+    return result
+
+
+def kepler_third_law(T1: Union[float, np.ndarray],
+                     r1: Union[float, np.ndarray],
+                     r2: Union[float, np.ndarray]
+                     ) -> Union[float, np.ndarray]:
+    """
+    开普勒第三定律 — T2²/T1² = r2³/r1³ → T2 = T1×(r2/r1)^1.5
+
+    κ-Phase: 开普勒第三定律 = κ-相位轨道周期-半径关系的力学模拟
+    轨道周期的平方与半径的立方成正比
+
+    Args:
+        T1: 已知轨道周期 (s)
+        r1: 已知轨道半径 (m)
+        r2: 待求轨道半径 (m)
+
+    Returns:
+        待求轨道周期 T2 (s)
+    """
+    T1 = np.asarray(T1, dtype=float)
+    r1 = np.asarray(r1, dtype=float)
+    r2 = np.asarray(r2, dtype=float)
+    ratio = np.where(r1 > 0, r2 / r1, 0.0)
+    return T1 * ratio ** 1.5
+
+
+def escape_velocity(M: Union[float, np.ndarray],
+                    r: Union[float, np.ndarray],
+                    G: float = G_CONST
+                    ) -> Union[float, np.ndarray]:
+    """
+    逃逸速度 — v_esc = √(2GM/r)
+
+    κ-Phase: 逃逸速度 = κ-相位脱离引力束缚的力学模拟
+    物体脱离天体引力场的最小速度
+
+    Args:
+        M: 天体质量 (kg)
+        r: 天体半径 (m)
+        G: 万有引力常数 (N·m²/kg²)
+
+    Returns:
+        逃逸速度 (m/s)
+    """
+    M = np.asarray(M, dtype=float)
+    r = np.asarray(r, dtype=float)
+    result = np.where(r > 0, np.sqrt(2.0 * G * M / r), 0.0)
+    return result
+
+
+# ============================================================
+# 高中电磁学原语 (Electromagnetism)
+# κ-Phase: 电磁感应/安培力 = κ-相位电磁场-力的耦合模拟
+# =================================================================
+
+MU_0: float = 4e-7 * np.pi  # 真空磁导率 μ₀ T·m/A
+
+
+def faraday_induction(N: Union[float, np.ndarray],
+                      delta_Phi: Union[float, np.ndarray],
+                      delta_t: Union[float, np.ndarray]
+                      ) -> Union[float, np.ndarray]:
+    """
+    法拉第电磁感应 — ε = -N×ΔΦ/Δt
+
+    κ-Phase: 法拉第感应 = κ-相位磁通变化生电的电磁模拟
+    磁通量变化率决定感应电动势大小
+
+    Args:
+        N: 线圈匝数
+        delta_Phi: 磁通量变化 (Wb)
+        delta_t: 时间变化 (s)
+
+    Returns:
+        感应电动势绝对值 |ε| (V)
+    """
+    N = np.asarray(N, dtype=float)
+    delta_Phi = np.asarray(delta_Phi, dtype=float)
+    delta_t = np.asarray(delta_t, dtype=float)
+    result = np.where(np.abs(delta_t) > 1e-10, N * np.abs(delta_Phi) / delta_t, np.inf)
+    return result
+
+
+def ampere_force(I: Union[float, np.ndarray],
+                 L: Union[float, np.ndarray],
+                 B: Union[float, np.ndarray],
+                 angle: Union[float, np.ndarray] = 90.0
+                 ) -> Union[float, np.ndarray]:
+    """
+    安培力 — F = BILsinθ
+
+    κ-Phase: 安培力 = κ-相位电流在磁场中受力的电磁模拟
+    通电导线在磁场中所受的力
+
+    Args:
+        I: 电流 (A)
+        L: 导线长度 (m)
+        B: 磁感应强度 (T)
+        angle: 导线与磁场方向的夹角 (度)，默认90°(最大力)
+
+    Returns:
+        安培力 (N)
+    """
+    I = np.asarray(I, dtype=float)
+    L = np.asarray(L, dtype=float)
+    B = np.asarray(B, dtype=float)
+    angle_rad = np.radians(np.asarray(angle, dtype=float))
+    return np.abs(I) * L * B * np.sin(angle_rad)
+
+
+def lorentz_force(q: Union[float, np.ndarray],
+                  v: Union[float, np.ndarray],
+                  B: Union[float, np.ndarray]
+                  ) -> Union[float, np.ndarray]:
+    """
+    洛伦兹力 — F = qvB (垂直磁场方向)
+
+    κ-Phase: 洛伦兹力 = κ-相位电荷在磁场中偏转的电磁模拟
+    运动电荷在磁场中所受的力（速度垂直磁场时）
+
+    Args:
+        q: 电荷量 (C)
+        v: 速度 (m/s)
+        B: 磁感应强度 (T)
+
+    Returns:
+        洛伦兹力 (N)
+    """
+    q = np.asarray(q, dtype=float)
+    v = np.asarray(v, dtype=float)
+    B = np.asarray(B, dtype=float)
+    return np.abs(q) * v * B
+
+
+def capacitance(Q: Union[float, np.ndarray],
+                V: Union[float, np.ndarray]
+                ) -> Union[float, np.ndarray]:
+    """
+    电容 — C = Q/V
+
+    κ-Phase: 电容 = κ-相位电荷存储能力的电磁模拟
+    电容器储存电荷的能力
+
+    Args:
+        Q: 电荷量 (C)
+        V: 电压 (V)
+
+    Returns:
+        电容 (F)
+    """
+    Q = np.asarray(Q, dtype=float)
+    V = np.asarray(V, dtype=float)
+    result = np.where(np.abs(V) > 1e-10, Q / V, np.inf)
+    return result
+
+
+def capacitor_energy(C: Union[float, np.ndarray],
+                     V: Union[float, np.ndarray]
+                     ) -> Union[float, np.ndarray]:
+    """
+    电容储能 — E = CV²/2
+
+    κ-Phase: 电容储能 = κ-相位电场能量存储的电磁模拟
+    电容器存储的能量
+
+    Args:
+        C: 电容 (F)
+        V: 电压 (V)
+
+    Returns:
+        储能 (J)
+    """
+    C = np.asarray(C, dtype=float)
+    V = np.asarray(V, dtype=float)
+    return C * V ** 2 / 2.0
+
+
+def magnetic_field_wire(I: Union[float, np.ndarray],
+                        r: Union[float, np.ndarray]
+                        ) -> Union[float, np.ndarray]:
+    """
+    无限长直导线磁场 — B = μ₀I/(2πr)
+
+    κ-Phase: 直导线磁场 = κ-相位电流产生环形磁场的电磁模拟
+    直导线周围磁感应强度与电流成正比、与距离成反比
+
+    Args:
+        I: 电流 (A)
+        r: 到导线的距离 (m)
+
+    Returns:
+        磁感应强度 B (T)
+    """
+    I = np.asarray(I, dtype=float)
+    r = np.asarray(r, dtype=float)
+    result = np.where(r > 0, MU_0 * I / (2.0 * np.pi * r), np.inf)
+    return result
+
+
+# ============================================================
+# 高中波动光学原语 (Wave Interference)
+# κ-Phase: 干涉/衍射 = κ-相位波叠加的光学模拟
+# =================================================================
+
+C_LIGHT: float = 3e8  # 光速 m/s
+
+
+def double_slit_spacing(d: Union[float, np.ndarray],
+                        L: Union[float, np.ndarray],
+                        lambda_wave: Union[float, np.ndarray]
+                        ) -> Union[float, np.ndarray]:
+    """
+    双缝干涉条纹间距 — Δy = λL/d
+
+    κ-Phase: 双缝间距 = κ-相位波叠加周期性的光学模拟
+    相邻明/暗条纹中心间距
+
+    Args:
+        d: 双缝间距 (m)
+        L: 缝到屏距离 (m)
+        lambda_wave: 光波长 (m)
+
+    Returns:
+        条纹间距 Δy (m)
+    """
+    d = np.asarray(d, dtype=float)
+    L = np.asarray(L, dtype=float)
+    lambda_wave = np.asarray(lambda_wave, dtype=float)
+    result = np.where(d > 0, lambda_wave * L / d, np.inf)
+    return result
+
+
+def diffraction_grating(d: Union[float, np.ndarray],
+                        n: Union[int, np.ndarray],
+                        lambda_wave: Union[float, np.ndarray]
+                        ) -> Union[float, np.ndarray]:
+    """
+    衍射光栅 — d×sinθ = nλ → θ = arcsin(nλ/d)
+
+    κ-Phase: 衍射光栅 = κ-相位多缝波叠加角度的光学模拟
+    光栅衍射明纹方向角
+
+    Args:
+        d: 光栅常数 (m)
+        n: 衍射级数
+        lambda_wave: 光波长 (m)
+
+    Returns:
+        衍射角 θ (度)；若 nλ/d > 1 返回nan
+    """
+    d = np.asarray(d, dtype=float)
+    n = np.asarray(n, dtype=float)
+    lambda_wave = np.asarray(lambda_wave, dtype=float)
+    sin_theta = n * lambda_wave / d
+    if sin_theta.ndim == 0:
+        if float(sin_theta) > 1.0:
+            return float('nan')
+        return float(np.degrees(np.arcsin(float(sin_theta))))
+    result = np.where(sin_theta <= 1.0,
+                      np.degrees(np.arcsin(np.clip(sin_theta, -1.0, 1.0))),
+                      np.nan)
+    return result
+
+
+def refractive_index(v_medium: Union[float, np.ndarray],
+                     c: float = C_LIGHT
+                     ) -> Union[float, np.ndarray]:
+    """
+    折射率 — n = c/v
+
+    κ-Phase: 折射率 = κ-相位光速降低比例的光学模拟
+    介质折射率等于真空光速与介质光速之比
+
+    Args:
+        v_medium: 介质中光速 (m/s)
+        c: 真空光速 (m/s)
+
+    Returns:
+        折射率 n
+    """
+    v_medium = np.asarray(v_medium, dtype=float)
+    result = np.where(v_medium > 0, c / v_medium, np.inf)
+    return result
+
+
+def interference_order(d: Union[float, np.ndarray],
+                       theta: Union[float, np.ndarray],
+                       lambda_wave: Union[float, np.ndarray]
+                       ) -> Union[float, np.ndarray]:
+    """
+    干涉条纹级数 — n = d×sinθ/λ
+
+    κ-Phase: 条纹级数 = κ-相位干涉序号的光学模拟
+    给定角度处的干涉条纹级数
+
+    Args:
+        d: 双缝/光栅间距 (m)
+        theta: 角度 (度)
+        lambda_wave: 光波长 (m)
+
+    Returns:
+        干涉级数 n（整数部分）
+    """
+    d = np.asarray(d, dtype=float)
+    theta_rad = np.radians(np.asarray(theta, dtype=float))
+    lambda_wave = np.asarray(lambda_wave, dtype=float)
+    result = np.where(lambda_wave > 0, d * np.sin(theta_rad) / lambda_wave, 0.0)
+    return result
+
+
+def single_slit_width(a: Union[float, np.ndarray],
+                      lambda_wave: Union[float, np.ndarray],
+                      theta: Union[float, np.ndarray]
+                      ) -> Union[int, np.ndarray]:
+    """
+    单缝衍射暗纹条件 — a×sinθ = mλ → m = a×sinθ/λ
+
+    κ-Phase: 单缝衍射 = κ-相位单缝波叠加暗纹的光学模拟
+    计算给定角度处的暗纹级数m
+
+    Args:
+        a: 缝宽 (m)
+        lambda_wave: 光波长 (m)
+        theta: 角度 (度)
+
+    Returns:
+        暗纹级数 m（整数）
+    """
+    a = np.asarray(a, dtype=float)
+    lambda_wave = np.asarray(lambda_wave, dtype=float)
+    theta_rad = np.radians(np.asarray(theta, dtype=float))
+    result = np.where(lambda_wave > 0, a * np.sin(theta_rad) / lambda_wave, 0.0)
+    return np.round(result).astype(int) if result.ndim > 0 else int(round(float(result)))
+
+
+# ============================================================
+# 高中热力学扩展原语 (Ideal Gas)
+# κ-Phase: 理想气体/卡诺 = κ-相位气体状态/热机效率的热学模拟
+# =================================================================
+
+R_GAS: float = 8.314  # 理想气体常数 J/(mol·K)
+
+
+def ideal_gas_PV(n: Union[float, np.ndarray],
+                 R: float = R_GAS,
+                 T: Union[float, np.ndarray] = None
+                 ) -> Union[float, np.ndarray]:
+    """
+    理想气体状态方程 — PV = nRT → 给定n和T求PV值
+
+    κ-Phase: 理想气体PV = κ-相位气体宏观状态的热学模拟
+    理想气体的压强-体积-温度关系
+
+    Args:
+        n: 摩尔数 (mol)
+        R: 理想气体常数 (J/(mol·K))
+        T: 温度 (K)
+
+    Returns:
+        PV值 (J)
+    """
+    n = np.asarray(n, dtype=float)
+    T = np.asarray(T, dtype=float)
+    return n * R * T
+
+
+def carnot_efficiency(T_hot: Union[float, np.ndarray],
+                      T_cold: Union[float, np.ndarray]
+                      ) -> Union[float, np.ndarray]:
+    """
+    卡诺效率 — η = 1 - T_cold/T_hot
+
+    κ-Phase: 卡诺效率 = κ-相位热机最高效率的热学模拟
+    理想热机在两热源间的最大效率
+
+    Args:
+        T_hot: 高温热源温度 (K)
+        T_cold: 低温热源温度 (K)
+
+    Returns:
+        卡诺效率 (0~1)
+    """
+    T_hot = np.asarray(T_hot, dtype=float)
+    T_cold = np.asarray(T_cold, dtype=float)
+    result = np.where(T_hot > 0, 1.0 - T_cold / T_hot, 0.0)
+    return np.clip(result, 0.0, 1.0)
+
+
+def gas_pressure(V: Union[float, np.ndarray],
+                 n: Union[float, np.ndarray],
+                 T: Union[float, np.ndarray],
+                 R: float = R_GAS
+                 ) -> Union[float, np.ndarray]:
+    """
+    气体压强 — P = nRT/V
+
+    κ-Phase: 气体压强 = κ-相位气体微观碰撞宏观表现的热学模拟
+    由摩尔数、温度和体积计算压强
+
+    Args:
+        V: 体积 (m³)
+        n: 摩尔数 (mol)
+        T: 温度 (K)
+        R: 理想气体常数 (J/(mol·K))
+
+    Returns:
+        压强 (Pa)
+    """
+    V = np.asarray(V, dtype=float)
+    n = np.asarray(n, dtype=float)
+    T = np.asarray(T, dtype=float)
+    result = np.where(V > 0, n * R * T / V, np.inf)
+    return result
+
+
+def isothermal_work(P1: Union[float, np.ndarray],
+                    V1: Union[float, np.ndarray],
+                    V2: Union[float, np.ndarray]
+                    ) -> Union[float, np.ndarray]:
+    """
+    等温做功 — W = P1V1 × ln(V2/V1) = nRT × ln(V2/V1)
+
+    κ-Phase: 等温做功 = κ-相位恒温膨胀做功的热学模拟
+    等温过程中气体做的功
+
+    Args:
+        P1: 初始压强 (Pa)
+        V1: 初始体积 (m³)
+        V2: 终末体积 (m³)
+
+    Returns:
+        做功 (J)
+    """
+    P1 = np.asarray(P1, dtype=float)
+    V1 = np.asarray(V1, dtype=float)
+    V2 = np.asarray(V2, dtype=float)
+    ratio = np.where(V1 > 0, V2 / V1, 1.0)
+    return P1 * V1 * np.log(ratio)
+
+
+def adiabatic_relation(P1: Union[float, np.ndarray],
+                       V1: Union[float, np.ndarray],
+                       P2: Optional[Union[float, np.ndarray]] = None,
+                       V2: Optional[Union[float, np.ndarray]] = None,
+                       gamma: float = 5.0 / 3.0
+                       ) -> Union[float, np.ndarray]:
+    """
+    绝热关系 — P1V1^γ = P2V2^γ，已知三个求第四个
+
+    κ-Phase: 绝热关系 = κ-相位无热交换过程的热学模拟
+    绝热过程中压强和体积的关系
+
+    Args:
+        P1: 初始压强 (Pa)
+        V1: 初始体积 (m³)
+        P2: 终末压强 (Pa)，可选
+        V2: 终末体积 (m³)，可选
+        gamma: 绝热指数 (默认5/3，单原子理想气体)
+
+    Returns:
+        未知量（P2或V2）
+
+    Raises:
+        ValueError: 必须提供P2或V2中的一个
+    """
+    P1 = np.asarray(P1, dtype=float)
+    V1 = np.asarray(V1, dtype=float)
+    P1V1_gamma = P1 * V1 ** gamma  # 常量
+    if P2 is not None and V2 is None:
+        # 求 V2: V2 = (P1V1^γ / P2)^(1/γ)
+        P2 = np.asarray(P2, dtype=float)
+        result = np.where(P2 > 0, (P1V1_gamma / P2) ** (1.0 / gamma), np.inf)
+        return result
+    if V2 is not None and P2 is None:
+        # 求 P2: P2 = P1V1^γ / V2^γ
+        V2 = np.asarray(V2, dtype=float)
+        result = np.where(V2 > 0, P1V1_gamma / V2 ** gamma, np.inf)
+        return result
+    raise ValueError("绝热关系需要提供P2或V2中的一个")
+
+
+# ============================================================
+# 初中数学原语 (Algebra Solver)
+# κ-Phase: 勾股/二次方程 = κ-相位代数求解的数学模拟
+# =================================================================
+
+
+def pythagorean_theorem(a: Union[float, np.ndarray],
+                        b: Union[float, np.ndarray]
+                        ) -> Union[float, np.ndarray]:
+    """
+    勾股定理 — c = √(a²+b²)
+
+    κ-Phase: 勾股定理 = κ-相位直角三角形边长关系的数学模拟
+    直角三角形斜边等于两直角边平方和的根
+
+    Args:
+        a: 直角边1
+        b: 直角边2
+
+    Returns:
+        斜边 c
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    return np.sqrt(a ** 2 + b ** 2)
+
+
+def quadratic_equation(a: Union[float, np.ndarray],
+                       b: Union[float, np.ndarray],
+                       c: Union[float, np.ndarray]
+                       ) -> List[float]:
+    """
+    一元二次方程 — x = (-b±√(b²-4ac))/(2a)
+
+    κ-Phase: 一元二次方程 = κ-相位二次型根求解的数学模拟
+    求方程 ax²+bx+c=0 的实根
+
+    Args:
+        a: 二次项系数
+        b: 一次项系数
+        c: 常数项系数
+
+    Returns:
+        实根列表；判别式<0时返回空列表，=0时返回单根，>0时返回双根
+    """
+    a_val = float(np.asarray(a, dtype=float))
+    b_val = float(np.asarray(b, dtype=float))
+    c_val = float(np.asarray(c, dtype=float))
+    if abs(a_val) < 1e-10:
+        # 退化为一元一次方程 bx + c = 0
+        if abs(b_val) < 1e-10:
+            return []  # 无解
+        return [-c_val / b_val]
+    discriminant = b_val ** 2 - 4.0 * a_val * c_val
+    if discriminant < -1e-10:
+        return []  # 无实根
+    if abs(discriminant) < 1e-10:
+        return [-b_val / (2.0 * a_val)]  # 单根
+    sqrt_d = float(np.sqrt(discriminant))
+    x1 = (-b_val + sqrt_d) / (2.0 * a_val)
+    x2 = (-b_val - sqrt_d) / (2.0 * a_val)
+    return [x1, x2]
+
+
+def ratio_calc(a: Union[float, np.ndarray],
+               b: Union[float, np.ndarray],
+               c: Union[float, np.ndarray]
+               ) -> Union[float, np.ndarray]:
+    """
+    比例运算 — a:b = c:x → x = b×c/a
+
+    κ-Phase: 比例运算 = κ-相位比例关系求解的数学模拟
+    已知比例中的三项求第四项
+
+    Args:
+        a: 比例第一项
+        b: 比例第二项
+        c: 比例第三项
+
+    Returns:
+        第四项 x
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    c = np.asarray(c, dtype=float)
+    result = np.where(np.abs(a) > 1e-10, b * c / a, np.inf)
+    return result
+
+
+def circle_area(radius: Union[float, np.ndarray]
+                ) -> Union[float, np.ndarray]:
+    """
+    圆面积 — A = πr²
+
+    κ-Phase: 圆面积 = κ-相位圆域幅度的数学模拟
+
+    Args:
+        radius: 半径
+
+    Returns:
+        面积
+    """
+    radius = np.asarray(radius, dtype=float)
+    return np.pi * radius ** 2
+
+
+def circle_circumference(radius: Union[float, np.ndarray]
+                         ) -> Union[float, np.ndarray]:
+    """
+    圆周长 — C = 2πr
+
+    κ-Phase: 圆周长 = κ-相位圆边界长度的数学模拟
+
+    Args:
+        radius: 半径
+
+    Returns:
+        周长
+    """
+    radius = np.asarray(radius, dtype=float)
+    return 2.0 * np.pi * radius
+
+
+def sector_area(radius: Union[float, np.ndarray],
+                angle_deg: Union[float, np.ndarray]
+                ) -> Union[float, np.ndarray]:
+    """
+    扇形面积 — A = πr²×θ/360
+
+    κ-Phase: 扇形面积 = κ-相位圆域部分幅度的数学模拟
+
+    Args:
+        radius: 半径
+        angle_deg: 圆心角 (度)
+
+    Returns:
+        扇形面积
+    """
+    radius = np.asarray(radius, dtype=float)
+    angle_deg = np.asarray(angle_deg, dtype=float)
+    return np.pi * radius ** 2 * angle_deg / 360.0
+
+
+def triangle_area_by_base(base: Union[float, np.ndarray],
+                          height: Union[float, np.ndarray]
+                          ) -> Union[float, np.ndarray]:
+    """
+    三角形面积 — A = bh/2
+
+    κ-Phase: 三角形面积 = κ-相位三角域幅度的数学模拟
+
+    Args:
+        base: 底边长
+        height: 底边上的高
+
+    Returns:
+        面积
+    """
+    base = np.asarray(base, dtype=float)
+    height = np.asarray(height, dtype=float)
+    return base * height / 2.0
+
+
+# ============================================================
+# 高中数学原语 (Analytic Geometry)
+# κ-Phase: 解析几何/排列组合/数值微积分 = κ-相位坐标-计数-逼近的数学模拟
+# =================================================================
+
+
+def line_equation(x1: Union[float, np.ndarray],
+                  y1: Union[float, np.ndarray],
+                  x2: Union[float, np.ndarray],
+                  y2: Union[float, np.ndarray]
+                  ) -> Tuple[float, float, float]:
+    """
+    直线方程 — 由两点求斜率k和方程 ax+by+c=0
+
+    κ-Phase: 直线方程 = κ-相位两点确定线性约束的数学模拟
+
+    Args:
+        x1, y1: 点1坐标
+        x2, y2: 点2坐标
+
+    Returns:
+        (a, b, c) 标准方程系数；a对应x, b对应y
+    """
+    x1_v = float(np.asarray(x1, dtype=float))
+    y1_v = float(np.asarray(y1, dtype=float))
+    x2_v = float(np.asarray(x2, dtype=float))
+    y2_v = float(np.asarray(y2, dtype=float))
+    # ax + by + c = 0 形式
+    a = y1_v - y2_v
+    b = x2_v - x1_v
+    c = x1_v * y2_v - x2_v * y1_v
+    return (a, b, c)
+
+
+def point_line_distance(x0: Union[float, np.ndarray],
+                        y0: Union[float, np.ndarray],
+                        a: Union[float, np.ndarray],
+                        b: Union[float, np.ndarray],
+                        c: Union[float, np.ndarray]
+                        ) -> Union[float, np.ndarray]:
+    """
+    点到直线距离 — d = |ax0+by0+c|/√(a²+b²)
+
+    κ-Phase: 点线距离 = κ-相位偏离线性约束的距离度量
+
+    Args:
+        x0, y0: 点坐标
+        a, b, c: 直线方程 ax+by+c=0 的系数
+
+    Returns:
+        距离 d
+    """
+    x0 = np.asarray(x0, dtype=float)
+    y0 = np.asarray(y0, dtype=float)
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    c = np.asarray(c, dtype=float)
+    numerator = np.abs(a * x0 + b * y0 + c)
+    denominator = np.sqrt(a ** 2 + b ** 2)
+    result = np.where(denominator > 1e-10, numerator / denominator, np.inf)
+    return result
+
+
+def combination(n: int, k: int) -> int:
+    """
+    组合数 — C(n,k) = n!/(k!(n-k)!)
+
+    κ-Phase: 组合数 = κ-相位无序选择计数的数学模拟
+    使用math.comb避免溢出
+
+    Args:
+        n: 总数
+        k: 选取数
+
+    Returns:
+        组合数 C(n,k)
+    """
+    if k < 0 or k > n:
+        return 0
+    return math.comb(n, k)
+
+
+def permutation(n: int, k: int) -> int:
+    """
+    排列数 — P(n,k) = n!/(n-k)!
+
+    κ-Phase: 排列数 = κ-相位有序选择计数的数学模拟
+    使用math.perm避免溢出
+
+    Args:
+        n: 总数
+        k: 选取数
+
+    Returns:
+        排列数 P(n,k)
+    """
+    if k < 0 or k > n:
+        return 0
+    return math.perm(n, k)
+
+
+def numerical_derivative(f_values: Union[List[float], np.ndarray],
+                         x_values: Union[List[float], np.ndarray]
+                         ) -> np.ndarray:
+    """
+    数值微分（中心差分法） — f'(x) ≈ (f(x+h) - f(x-h)) / (2h)
+
+    κ-Phase: 数值微分 = κ-相位函数变化率逼近的数学模拟
+    用中心差分法计算函数在各点的导数近似值
+
+    Args:
+        f_values: 函数值序列
+        x_values: 对应x坐标序列
+
+    Returns:
+        导数近似值数组（长度比输入少2，因两端无法中心差分）
+    """
+    f_arr = np.asarray(f_values, dtype=float)
+    x_arr = np.asarray(x_values, dtype=float)
+    if len(f_arr) < 3 or len(x_arr) < 3:
+        return np.array([], dtype=float)
+    # 中心差分: f'(x_i) = (f_{i+1} - f_{i-1}) / (x_{i+1} - x_{i-1})
+    df = f_arr[2:] - f_arr[:-2]
+    dx = x_arr[2:] - x_arr[:-2]
+    result = np.where(np.abs(dx) > 1e-10, df / dx, 0.0)
+    return result
+
+
+def numerical_integral(f_values: Union[List[float], np.ndarray],
+                       x_values: Union[List[float], np.ndarray],
+                       method: str = 'simpson'
+                       ) -> float:
+    """
+    数值积分 — 梯形法或辛普森法
+
+    κ-Phase: 数值积分 = κ-相位面积逼近的数学模拟
+    trapezoidal: Σ (f_i + f_{i+1})/2 × Δx
+    simpson: Σ (f_{i-1} + 4f_i + f_{i+1})/6 × Δx（需偶数区间）
+
+    Args:
+        f_values: 函数值序列
+        x_values: 对应x坐标序列
+        method: 'trapezoidal' 或 'simpson'
+
+    Returns:
+        积分近似值
+    """
+    f_arr = np.asarray(f_values, dtype=float)
+    x_arr = np.asarray(x_values, dtype=float)
+    if len(f_arr) < 2:
+        return 0.0
+    if method == 'trapezoidal':
+        dx = np.diff(x_arr)
+        avg_f = (f_arr[:-1] + f_arr[1:]) / 2.0
+        return float(np.sum(avg_f * dx))
+    # Simpson's rule (需要至少3个点且偶数区间)
+    if len(f_arr) < 3:
+        # 退化到梯形法
+        dx = np.diff(x_arr)
+        avg_f = (f_arr[:-1] + f_arr[1:]) / 2.0
+        return float(np.sum(avg_f * dx))
+    n_intervals = len(f_arr) - 1
+    h = float(x_arr[-1] - x_arr[0]) / n_intervals
+    if n_intervals % 2 == 0:
+        # 偶数区间: 标准辛普森法
+        s = f_arr[0] + f_arr[-1]
+        s += 4.0 * np.sum(f_arr[1:-1:2])
+        s += 2.0 * np.sum(f_arr[2:-2:2])
+        return s * h / 3.0
+    # 奇数区间: 前一段辛普森 + 最后一段梯形
+    # 前 n_intervals-1 个区间用辛普森 (偶数)
+    m = n_intervals - 1
+    if m >= 2:
+        h_sub = float(x_arr[m] - x_arr[0]) / m
+        s = f_arr[0] + f_arr[m]
+        s += 4.0 * np.sum(f_arr[1:m:2])
+        s += 2.0 * np.sum(f_arr[2:m-1:2])
+        simpson_part = s * h_sub / 3.0
+    else:
+        simpson_part = 0.0
+    # 最后一个区间用梯形
+    trap_part = (f_arr[m] + f_arr[m + 1]) / 2.0 * h
+    return simpson_part + trap_part
+
+
+def ellipse_area(a: Union[float, np.ndarray],
+                 b: Union[float, np.ndarray]
+                 ) -> Union[float, np.ndarray]:
+    """
+    椭圆面积 — A = πab
+
+    κ-Phase: 椭圆面积 = κ-相位椭圆域幅度的数学模拟
+
+    Args:
+        a: 半长轴
+        b: 半短轴
+
+    Returns:
+        面积
+    """
+    a = np.asarray(a, dtype=float)
+    b = np.asarray(b, dtype=float)
+    return np.pi * a * b
+
+
+def arithmetic_sum(a1: Union[float, np.ndarray],
+                   d: Union[float, np.ndarray],
+                   n: Union[int, np.ndarray]
+                   ) -> Union[float, np.ndarray]:
+    """
+    等差数列求和 — S = na₁ + n(n-1)d/2
+
+    κ-Phase: 等差数列求和 = κ-相位线性递增累加的数学模拟
+
+    Args:
+        a1: 首项
+        d: 公差
+        n: 项数
+
+    Returns:
+        前n项和
+    """
+    a1 = np.asarray(a1, dtype=float)
+    d = np.asarray(d, dtype=float)
+    n = np.asarray(n, dtype=float)
+    return n * a1 + n * (n - 1) * d / 2.0
+
+
+def geometric_sum(a1: Union[float, np.ndarray],
+                   r: Union[float, np.ndarray],
+                   n: Union[int, np.ndarray]
+                   ) -> Union[float, np.ndarray]:
+    """
+    等比数列求和 — S = a₁(1-rⁿ)/(1-r)
+
+    κ-Phase: 等比数列求和 = κ-相位指数递增累加的数学模拟
+    r=1时 S = na₁
+
+    Args:
+        a1: 首项
+        r: 公比
+        n: 项数
+
+    Returns:
+        前n项和
+    """
+    a1 = np.asarray(a1, dtype=float)
+    r = np.asarray(r, dtype=float)
+    n = np.asarray(n, dtype=float)
+    # r接近1时用极限公式 S = n*a1
+    result = np.where(np.abs(r - 1.0) > 1e-10,
+                      a1 * (1.0 - r ** n) / (1.0 - r),
+                      n * a1)
+    return result
+
+
+# ============================================================
 # 导出
 # ============================================================
 
@@ -2171,6 +3809,68 @@ PHYSICS_PRIMITIVE_REGISTRY = {
                       discrete_sin, discrete_cos],
         'description': '离散三角函数原语 — 8方向编码/解码、极坐标↔笛卡尔、向量夹角、向量分解、离散sin/cos表',
         'games': [],  # 通用原语，适用于方向/角度类推理
+    },
+    'lever_mechanics': {
+        'functions': [lever_balance, pulley_advantage, archimedes_buoyancy,
+                      pressure_calc, hydraulic_press, density_calc],
+        'description': '初中力学原语 — 杠杆原理、滑轮组、浮力、压强、液压机、密度',
+        'games': [],  # 通用原语，适用于力学直觉剪枝
+    },
+    'ohm_circuit': {
+        'functions': [ohm_law, series_resistance, parallel_resistance,
+                      power_electric, voltage_divider, current_divider],
+        'description': '初中电学原语 — 欧姆定律、串并联电阻、电功率、分压分流',
+        'games': [],  # 通用原语，适用于电路直觉剪枝
+    },
+    'lens_optics': {
+        'functions': [thin_lens_equation, magnification, snell_law,
+                      critical_angle, image_distance],
+        'description': '初中光学原语 — 薄透镜公式、放大率、折射定律、临界角、凸透镜成像距离',
+        'games': [],  # 通用原语，适用于光学直觉剪枝
+    },
+    'thermal_basic': {
+        'functions': [heat_capacity, thermal_equilibrium, latent_heat,
+                      phase_transition_energy],
+        'description': '初中热学原语 — 比热容、热平衡混合温度、潜热、相变总能量',
+        'games': [],  # 通用原语，适用于热学直觉剪枝
+    },
+    'circular_motion': {
+        'functions': [centripetal_force, angular_velocity, gravitational_force,
+                      orbital_velocity, kepler_third_law, escape_velocity],
+        'description': '高中力学原语 — 向心力、角速度、万有引力、轨道速度、开普勒第三定律、逃逸速度',
+        'games': [],  # 通用原语，适用于圆周/引力直觉剪枝
+    },
+    'electromagnetism': {
+        'functions': [faraday_induction, ampere_force, lorentz_force,
+                      capacitance, capacitor_energy, magnetic_field_wire],
+        'description': '高中电磁学原语 — 法拉第感应、安培力、洛伦兹力、电容、电容储能、直导线磁场',
+        'games': [],  # 通用原语，适用于电磁直觉剪枝
+    },
+    'wave_interference': {
+        'functions': [double_slit_spacing, diffraction_grating, refractive_index,
+                      interference_order, single_slit_width],
+        'description': '高中波动光学原语 — 双缝干涉间距、衍射光栅、折射率、干涉级数、单缝衍射',
+        'games': [],  # 通用原语，适用于波动光学直觉剪枝
+    },
+    'ideal_gas': {
+        'functions': [ideal_gas_PV, carnot_efficiency, gas_pressure,
+                      isothermal_work, adiabatic_relation],
+        'description': '高中热力学扩展原语 — 理想气体PV=nRT、卡诺效率、气体压强、等温做功、绝热关系',
+        'games': [],  # 通用原语，适用于气体/热机直觉剪枝
+    },
+    'algebra_solver': {
+        'functions': [pythagorean_theorem, quadratic_equation, ratio_calc,
+                      circle_area, circle_circumference, sector_area,
+                      triangle_area_by_base],
+        'description': '初中数学原语 — 勾股定理、一元二次方程、比例运算、圆面积周长、扇形面积、三角形面积',
+        'games': [],  # 通用原语，适用于数学直觉剪枝
+    },
+    'analytic_geometry': {
+        'functions': [line_equation, point_line_distance, combination, permutation,
+                      numerical_derivative, numerical_integral, ellipse_area,
+                      arithmetic_sum, geometric_sum],
+        'description': '高中数学原语 — 直线方程、点线距离、排列组合、数值微分积分、椭圆面积、等差等比数列',
+        'games': [],  # 通用原语，适用于解析几何/数值直觉剪枝
     },
 }
 
