@@ -4,11 +4,19 @@ TOMAS κ-Phase 物理原语纯软件模拟
 IDO/TOMAS: 物理直觉的本质是κ-相位感知
 ARC-AGI-3 智能体必须识别网格变换中的κ-相位一致性
 
-四类物理原语:
+十二类物理/几何原语:
 - newton_push: 牛顿刚体推箱 (KA59 Sokoban) — 质量、摩擦、dead-lock冻结
 - mirror_geo: 反射几何 (AR25 镜像覆盖) — 八元数仿射镜像、光线追踪
+- optics: 光学物理 (AR25 光线追踪) — BFS光线追踪+覆盖图+镜面移动约束
 - dfa: 离散因果状态机 (TN36 点击编程) — DFA因果链、最小作用量路径
 - poset: 偏序颜色排序 (SB26 物品排序) — Poset拓扑排序、偏序验证
+- affine_transform: 仿射变换 (CN04) — κ-旋转+κ-平移 (D4群×位移)
+- kinematics: 运动学原语 — 轨迹、速度向量、加速度、抛物线弹道
+- collision: 碰撞检测原语 — 刚体碰撞、动量守恒、弹性/非弹性碰撞
+- thermodynamics: 热力学原语 — 熵计算、能量梯度、网格热扩散、最小能量路径
+- wave: 波动力学原语 — 离散波传播、干涉检测、叠加原理
+- euclidean_geometry: 欧几里得几何原语 — 距离度量、线段交点、凸包、几何相似性
+- trigonometry_discrete: 离散三角函数原语 — 方向角、向量分解、极坐标转换
 
 核心架构: solve_via_pipeline() + SBInjector.physics_primitives → κ-Snap搜索调用原语做Dead-Zero剪枝
 """
@@ -1052,6 +1060,1042 @@ def optics_mirror_move_constraint(
 
 
 # ============================================================
+# 运动学原语 (Kinematics) — 轨迹、速度向量、加速度
+# κ-Phase: 运动学 = κ-时间相位序列的离散化
+# ARC网格中的运动是离散的，但遵守经典力学约束
+# ============================================================
+
+@dataclass
+class TrajectoryPoint:
+    """轨迹点 — 离散化的κ-时间相位"""
+    x: int
+    y: int
+    t: int = 0           # 离散时间步
+    vx: float = 0.0      # 速度分量
+    vy: float = 0.0
+
+
+def compute_trajectory(start: Tuple[int, int], velocity: Tuple[float, float],
+                       steps: int, bounds: Optional[Tuple[int, int, int, int]] = None
+                       ) -> List[TrajectoryPoint]:
+    """
+    计算离散轨迹 — 匀速运动模型
+
+    κ-Phase: trajectory = κ-时间序列上位置相位的等间隔采样
+
+    Args:
+        start: (x, y) 起始位置
+        velocity: (vx, vy) 速度向量
+        steps: 预测步数
+        bounds: (x_min, y_min, x_max, y_max) 边界限制
+
+    Returns:
+        轨迹点列表 (包含起始点)
+    """
+    points = []
+    x, y = float(start[0]), float(start[1])
+    vx, vy = velocity
+    for t in range(steps):
+        pt = TrajectoryPoint(x=int(round(x)), y=int(round(y)), t=t, vx=vx, vy=vy)
+        if bounds:
+            x_min, y_min, x_max, y_max = bounds
+            pt.x = max(x_min, min(x_max, pt.x))
+            pt.y = max(y_min, min(y_max, pt.y))
+        points.append(pt)
+        x += vx
+        y += vy
+    return points
+
+
+def compute_parabolic_trajectory(start: Tuple[int, int], v0: Tuple[float, float],
+                                  gravity: float = 1.0, steps: int = 20,
+                                  bounds: Optional[Tuple[int, int, int, int]] = None
+                                  ) -> List[TrajectoryPoint]:
+    """
+    抛物线弹道 — 带重力加速度的离散轨迹
+
+    κ-Phase: parabola = κ-时间序列上的二次相位偏移
+    重力使vy随时间线性递增，轨迹呈抛物线
+
+    Args:
+        start: (x, y) 起始位置
+        v0: (vx, vy0) 初速度
+        gravity: 重力加速度（每步vy增量）
+        steps: 预测步数
+        bounds: 边界限制
+
+    Returns:
+        轨迹点列表
+    """
+    points = []
+    x, y = float(start[0]), float(start[1])
+    vx, vy = v0[0], v0[1]
+    for t in range(steps):
+        pt = TrajectoryPoint(x=int(round(x)), y=int(round(y)), t=t, vx=vx, vy=vy)
+        if bounds:
+            x_min, y_min, x_max, y_max = bounds
+            pt.x = max(x_min, min(x_max, pt.x))
+            pt.y = max(y_min, min(y_max, pt.y))
+        points.append(pt)
+        x += vx
+        vy += gravity  # 重力加速
+        y += vy
+    return points
+
+
+def predict_intercept_position(target_traj: List[TrajectoryPoint],
+                                interceptor_speed: float,
+                                interceptor_start: Tuple[int, int]
+                                ) -> Optional[Tuple[int, int]]:
+    """
+    拦截位置预测 — 找到最快拦截点
+
+    κ-Phase: intercept = κ-时间序列对齐点（两个相位序列的最早交叉）
+
+    Args:
+        target_traj: 目标轨迹
+        interceptor_speed: 拦截者速度（曼哈距离每步）
+        interceptor_start: 拦截者起始位置
+
+    Returns:
+        拦截点坐标 (x, y)，或 None
+    """
+    ix, iy = interceptor_start
+    for pt in target_traj:
+        dist = abs(pt.x - ix) + abs(pt.y - iy)
+        if dist <= interceptor_speed * pt.t:
+            return (pt.x, pt.y)
+    return None
+
+
+def velocity_from_displacement(positions: List[Tuple[int, int]],
+                                dt: int = 1
+                                ) -> List[Tuple[float, float]]:
+    """
+    从位移序列推导速度向量
+
+    κ-Phase: velocity = Δposition / Δt = κ-相位差分的标准形式
+
+    Args:
+        positions: 位置序列 [(x0,y0), (x1,y1), ...]
+        dt: 时间步长
+
+    Returns:
+        速度向量序列 [(vx0,vy0), ...]
+    """
+    velocities = []
+    for i in range(len(positions) - 1):
+        dx = positions[i+1][0] - positions[i][0]
+        dy = positions[i+1][1] - positions[i][1]
+        velocities.append((dx / dt, dy / dt))
+    return velocities
+
+
+# ============================================================
+# 碰撞检测原语 (Collision) — 刚体碰撞、动量守恒
+# κ-Phase: 碰撞 = κ-相位交汇点，动量守恒是κ-总量不变约束
+# ============================================================
+
+@dataclass
+class CollisionResult:
+    """碰撞结果 — κ-相位交汇点"""
+    collided: bool
+    position: Tuple[int, int]        # 碰撞发生位置
+    v1_post: Tuple[float, float]     # 对象1碰后速度
+    v2_post: Tuple[float, float]     # 对象2碰后速度
+
+
+def check_rect_collision(r1: Tuple[int, int, int, int],
+                          r2: Tuple[int, int, int, int]) -> bool:
+    """
+    矩形碰撞检测 — AABB (Axis-Aligned Bounding Box)
+
+    κ-Phase: 碰撞 = κ-相位域重叠（两个实体的相位窗口交集非空）
+
+    Args:
+        r1: (x1, y1, w1, h1) 矩形1
+        r2: (x2, y2, w2, h2) 矩形2
+
+    Returns:
+        True如果两个矩形重叠
+    """
+    x1, y1, w1, h1 = r1
+    x2, y2, w2, h2 = r2
+    return not (x1 + w1 <= x2 or x2 + w2 <= x1 or
+                y1 + h1 <= y2 or y2 + h2 <= y1)
+
+
+def elastic_collision_1d(v1: float, m1: float, v2: float, m2: float
+                         ) -> Tuple[float, float]:
+    """
+    一维弹性碰撞 — 动量+能量守恒
+
+    κ-Phase: elastic = κ-总量完全守恒（相位总量和幅值总量都不变）
+    v1' = ((m1-m2)*v1 + 2*m2*v2) / (m1+m2)
+    v2' = ((m2-m1)*v2 + 2*m1*v1) / (m1+m2)
+
+    Args:
+        v1, m1: 对象1速度和质量
+        v2, m2: 对象2速度和质量
+
+    Returns:
+        (v1_post, v2_post) 碰后速度
+    """
+    total_m = m1 + m2
+    if total_m == 0:
+        return v1, v2
+    v1_post = ((m1 - m2) * v1 + 2 * m2 * v2) / total_m
+    v2_post = ((m2 - m1) * v2 + 2 * m1 * v1) / total_m
+    return v1_post, v2_post
+
+
+def inelastic_collision_1d(v1: float, m1: float, v2: float, m2: float,
+                            restitution: float = 0.5
+                            ) -> Tuple[float, float]:
+    """
+    一维非弹性碰撞 — 动量守恒，能量损失由恢复系数控制
+
+    κ-Phase: inelastic = κ-幅值部分耗散（相位守恒但幅值衰减）
+    恢复系数 e: 1.0=完全弹性, 0.0=完全非弹性
+
+    Args:
+        restitution: 恢复系数 (0~1)
+
+    Returns:
+        (v1_post, v2_post)
+    """
+    total_m = m1 + m2
+    if total_m == 0:
+        return v1, v2
+    v_common = (m1 * v1 + m2 * v2) / total_m
+    v1_post = v_common + restitution * m2 * (v2 - v1) / total_m
+    v2_post = v_common - restitution * m1 * (v2 - v1) / total_m
+    return v1_post, v2_post
+
+
+def grid_collision_detect(grid: Any, moving_pos: Tuple[int, int],
+                          direction: Tuple[int, int],
+                          obstacle_chars: Set[int] = None
+                          ) -> Optional[Tuple[int, int]]:
+    """
+    网格碰撞检测 — 检查移动方向上的第一个障碍物
+
+    κ-Phase: 网格碰撞 = κ-相位序列上的不可穿越相位壁
+
+    Args:
+        grid: 2D网格 (numpy array or list)
+        moving_pos: 移动实体位置
+        direction: (dx, dy) 移动方向
+        obstacle_chars: 障碍物颜色集合
+
+    Returns:
+        碰撞位置 (x, y)，或 None（无碰撞）
+    """
+    if obstacle_chars is None:
+        obstacle_chars = {0}  # 默认：0=墙
+
+    dx, dy = direction
+    x, y = moving_pos
+
+    if hasattr(grid, 'shape'):
+        h, w = grid.shape
+    elif isinstance(grid, list):
+        h = len(grid)
+        w = len(grid[0]) if h > 0 else 0
+    else:
+        return None
+
+    nx, ny = x + dx, y + dy
+    if not (0 <= nx < w and 0 <= ny < h):
+        return (nx, ny)  # 边界碰撞
+
+    cell = int(grid[ny, nx]) if hasattr(grid, 'shape') else grid[ny][nx]
+    if cell in obstacle_chars:
+        return (nx, ny)
+
+    return None
+
+
+# ============================================================
+# 热力学原语 (Thermodynamics) — 熵、能量梯度、热扩散
+# κ-Phase: 熵 = κ-相位分布的离散度，热扩散 = κ-相位均衡化过程
+# ============================================================
+
+def compute_grid_entropy(grid: Any) -> float:
+    """
+    网格熵计算 — 颜色分布的Shannon熵
+
+    κ-Phase: 熵 = κ-相位分布的不确定性度量
+    高熵 = κ-相位均匀分布（多种颜色混杂）
+    低熵 = κ-相位集中分布（少数颜色主导）
+
+    Args:
+        grid: 2D网格
+
+    Returns:
+        Shannon熵值 (0.0 ~ log(n_colors))
+    """
+    if hasattr(grid, 'shape'):
+        arr = np.array(grid).flatten()
+    else:
+        arr = np.array(grid).flatten()
+
+    if len(arr) == 0:
+        return 0.0
+
+    # 频率统计
+    unique, counts = np.unique(arr, return_counts=True)
+    probs = counts / len(arr)
+    # Shannon熵: H = -Σ p_i * log2(p_i)
+    entropy = -np.sum(probs * np.log2(probs + 1e-10))
+    return float(entropy)
+
+
+def compute_energy_gradient(grid: Any, energy_fn: Optional[callable] = None
+                           ) -> np.ndarray:
+    """
+    能量梯度场 — 网格每点的局部能量变化率
+
+    κ-Phase: 能量梯度 = κ-相位场的方向导数
+    最小能量路径是κ-相位坍缩的自然路径
+
+    Args:
+        grid: 2D网格
+        energy_fn: 可选自定义能量函数，默认使用颜色值
+
+    Returns:
+        梯度数组 (2, H, W) — [∂E/∂x, ∂E/∂y]
+    """
+    arr = np.array(grid, dtype=float)
+    if energy_fn is not None:
+        arr = energy_fn(arr)
+
+    # 中心差分梯度
+    grad_x = np.zeros_like(arr)
+    grad_y = np.zeros_like(arr)
+
+    if arr.ndim == 2:
+        h, w = arr.shape
+        # ∂E/∂x: 水平梯度
+        grad_x[:, 1:-1] = (arr[:, 2:] - arr[:, :-2]) / 2.0
+        grad_x[:, 0] = arr[:, 1] - arr[:, 0]
+        grad_x[:, -1] = arr[:, -1] - arr[:, -2]
+        # ∂E/∂y: 垂直梯度
+        grad_y[1:-1, :] = (arr[2:, :] - arr[:-2, :]) / 2.0
+        grad_y[0, :] = arr[1, :] - arr[0, :]
+        grad_y[-1, :] = arr[-1, :] - arr[-2, :]
+
+    return np.stack([grad_x, grad_y], axis=0)
+
+
+def grid_heat_diffusion(grid: Any, iterations: int = 5,
+                         diffusion_rate: float = 0.25,
+                         source_mask: Optional[np.ndarray] = None
+                         ) -> np.ndarray:
+    """
+    网格热扩散 — 离散化的Fourier热传导方程
+
+    κ-Phase: 热扩散 = κ-相位均衡化过程
+    每步: T[i,j] += α * Σ_neighbors(T[n] - T[i,j])
+    稳态解 = κ-相位场的全局均衡态
+
+    Args:
+        grid: 2D网格（初始温度场）
+        iterations: 扩散步数
+        diffusion_rate: 扩散系数α (0~0.25, 保证稳定性)
+        source_mask: 持续热源掩模（True=固定热源，不随扩散变化）
+
+    Returns:
+        扩散后的温度场
+    """
+    T = np.array(grid, dtype=float)
+    if source_mask is None:
+        source_mask = np.zeros_like(T, dtype=bool)
+
+    for _ in range(iterations):
+        T_new = T.copy()
+        # 四邻居差分
+        T_new[1:, :] += diffusion_rate * (T[:-1, :] - T[1:, :])   # 上
+        T_new[:-1, :] += diffusion_rate * (T[1:, :] - T[:-1, :])   # 下
+        T_new[:, 1:] += diffusion_rate * (T[:, :-1] - T[:, 1:])    # 左
+        T_new[:, :-1] += diffusion_rate * (T[:, 1:] - T[:, :-1])   # 右
+        # 热源位置保持不变
+        T_new[source_mask] = T[source_mask]
+        T = T_new
+
+    return T
+
+
+def minimum_energy_path(grid: Any, start: Tuple[int, int],
+                         end: Tuple[int, int],
+                         obstacle_chars: Set[int] = None
+                         ) -> Optional[List[Tuple[int, int]]]:
+    """
+    最小能量路径 — 梯度引导的Dijkstra最短路径
+
+    κ-Phase: 最小能量路径 = κ-相位场中的自然坍缩路径
+    能量 = 颜色值权重 + 曼哈距离 + 障碍惩罚
+
+    Args:
+        grid: 2D网格
+        start: 起点 (x, y)
+        end: 终点 (x, y)
+        obstacle_chars: 障碍物颜色集合
+
+    Returns:
+        路径坐标列表，或 None
+    """
+    if obstacle_chars is None:
+        obstacle_chars = {0}
+
+    arr = np.array(grid) if hasattr(grid, 'shape') else np.array(grid)
+    h, w = arr.shape
+
+    # Dijkstra with energy-weighted edges
+    import heapq
+    dist_map = {}
+    prev_map = {}
+    sx, sy = start
+    ex, ey = end
+
+    dist_map[(sx, sy)] = 0.0
+    heap = [(0.0, sx, sy)]
+
+    while heap:
+        d, cx, cy = heapq.heappop(heap)
+        if (cx, cy) == (ex, ey):
+            # 回溯路径
+            path = []
+            cur = (ex, ey)
+            while cur in prev_map:
+                path.append(cur)
+                cur = prev_map[cur]
+            path.append(start)
+            path.reverse()
+            return path
+
+        if d > dist_map.get((cx, cy), float('inf')):
+            continue
+
+        for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+            nx, ny = cx + dx, cy + dy
+            if not (0 <= nx < w and 0 <= ny < h):
+                continue
+            cell = int(arr[ny, nx])
+            if cell in obstacle_chars:
+                continue
+            # 能量权重：颜色值越高能量越高（更难穿越）
+            edge_weight = 1.0 + float(cell) * 0.1
+            new_dist = d + edge_weight
+            if new_dist < dist_map.get((nx, ny), float('inf')):
+                dist_map[(nx, ny)] = new_dist
+                prev_map[(nx, ny)] = (cx, cy)
+                heapq.heappush(heap, (new_dist, nx, ny))
+
+    return None  # 不可达
+
+
+# ============================================================
+# 波动力学原语 (Wave) — 离散波传播、干涉、叠加
+# κ-Phase: 波 = κ-相位传播的BFS wavefront模型
+# 网格上的波是离散传播的，遵守叠加原理
+# ============================================================
+
+def wave_propagate_bfs(grid: Any, sources: List[Tuple[int, int]],
+                        max_steps: int = 50,
+                        speed: float = 1.0,
+                        obstacle_chars: Set[int] = None
+                        ) -> np.ndarray:
+    """
+    BFS波传播 — 从多个源点向外扩散的wavefront模型
+
+    κ-Phase: 波传播 = κ-相位以恒定速率从源点向外扩散
+    BFS wavefront = κ-相位前沿的离散化
+    到达时间 = 相位延迟 = |源距离| / 速度
+
+    Args:
+        grid: 2D网格
+        sources: 波源位置列表
+        max_steps: 最大传播步数
+        speed: 波速（曼哈距离/步）
+        obstacle_chars: 障碍物颜色集合
+
+    Returns:
+        到达时间场 (H, W) — -1表示不可达，0表示源点
+    """
+    if obstacle_chars is None:
+        obstacle_chars = {0}
+
+    arr = np.array(grid) if hasattr(grid, 'shape') else np.array(grid)
+    h, w = arr.shape
+    arrival = np.full((h, w), -1, dtype=float)
+
+    # BFS多源初始化
+    from collections import deque
+    queue = deque()
+    for sx, sy in sources:
+        if 0 <= sx < w and 0 <= sy < h:
+            arrival[sy, sx] = 0.0
+            queue.append((sx, sy, 0))
+
+    while queue:
+        cx, cy, t = queue.popleft()
+        if t >= max_steps:
+            continue
+        for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+            nx, ny = cx + dx, cy + dy
+            if not (0 <= nx < w and 0 <= ny < h):
+                continue
+            cell = int(arr[ny, nx])
+            if cell in obstacle_chars or arrival[ny, nx] >= 0:
+                continue
+            arrival[ny, nx] = t + 1.0 / speed
+            queue.append((nx, ny, t + 1))
+
+    return arrival
+
+
+def wave_interference_check(wave1: np.ndarray, wave2: np.ndarray,
+                             threshold: float = 0.1
+                             ) -> np.ndarray:
+    """
+    波干涉检测 — 两个波场的叠加结果
+
+    κ-Phase: 干涉 = κ-相位叠加（constructive/destructive）
+    constructive: Δ相位≈0 → 振幅增强
+    destructive: Δ相位≈π → 振幅抵消
+
+    Args:
+        wave1, wave2: 两个波场（到达时间）
+        threshold: 干涉检测阈值
+
+    Returns:
+        干涉图 (H, W): 值>0=增强, 值<0=抵消, 值≈0=无干涉
+    """
+    # 叠加：两波振幅之和
+    # 将到达时间转换为相位: φ = 2π * t / λ
+    phase1 = 2 * np.pi * wave1 / 10.0  # λ=10步
+    phase2 = 2 * np.pi * wave2 / 10.0
+
+    # 振幅叠加 (简谐波 A*sin(φ))
+    amp1 = np.sin(phase1)
+    amp2 = np.sin(phase2)
+
+    # 掩模：不可达区域相位=0
+    mask = (wave1 >= 0) & (wave2 >= 0)
+    interference = np.zeros_like(wave1)
+    interference[mask] = amp1[mask] + amp2[mask]
+
+    # 增强区: |叠加| > 单波最大值
+    # 抵消区: |叠加| < threshold
+    return interference
+
+
+def wave_superposition(waves: List[np.ndarray]) -> np.ndarray:
+    """
+    多波叠加原理 — N个波场的振幅线性叠加
+
+    κ-Phase: superposition = κ-相位场的线性叠加（物理基本公理）
+    总振幅 = Σ A_i * sin(φ_i)
+
+    Args:
+        waves: 波场列表（到达时间数组）
+
+    Returns:
+        叠加后的总振幅场
+    """
+    if len(waves) == 0:
+        return np.zeros((1, 1))
+
+    result = np.zeros_like(waves[0])
+    for w in waves:
+        phase = 2 * np.pi * w / 10.0
+        mask = w >= 0
+        contribution = np.zeros_like(w)
+        contribution[mask] = np.sin(phase[mask])
+        result += contribution
+
+    return result
+
+
+def wave_resonance_positions(wave: np.ndarray, wavelength: int = 10,
+                              amplitude_threshold: float = 1.5
+                              ) -> List[Tuple[int, int]]:
+    """
+    波共振位置检测 — 找到叠加振幅超过阈值的点
+
+    κ-Phase: 共振 = κ-相位驻波节点（能量集中点）
+
+    Args:
+        wave: 波场
+        wavelength: 波长参数
+        amplitude_threshold: 振幅阈值
+
+    Returns:
+        共振位置列表 [(x, y), ...]
+    """
+    phase = 2 * np.pi * wave / wavelength
+    mask = wave >= 0
+    amplitude = np.zeros_like(wave)
+    amplitude[mask] = np.abs(np.sin(phase[mask]))
+
+    positions = []
+    if amplitude.ndim == 2:
+        h, w = amplitude.shape
+        for y in range(h):
+            for x in range(w):
+                if mask[y, x] and amplitude[y, x] >= amplitude_threshold:
+                    positions.append((x, y))
+
+    return positions
+
+
+# ============================================================
+# 欧几里得几何原语 (Euclidean Geometry) — 距离、线段、凸包
+# κ-Phase: 几何 = κ-相位空间的度量结构
+# ARC空间推理的基础：距离度量、形状识别、几何变换
+# ============================================================
+
+def distance_l1(p1: Tuple[int, int], p2: Tuple[int, int]) -> int:
+    """
+    L1距离（曼哈顿距离） — 网格运动的基本度量
+
+    κ-Phase: L1 = κ-相位差绝对值之和（|Δx|+|Δy|）
+
+    Args:
+        p1, p2: 两点坐标
+
+    Returns:
+        曼哈顿距离
+    """
+    return abs(p1[0] - p2[0]) + abs(p1[1] - p2[1])
+
+
+def distance_l2(p1: Tuple[int, int], p2: Tuple[int, int]) -> float:
+    """
+    L2距离（欧几里得距离） — 连续空间的度量
+
+    κ-Phase: L2 = κ-相位差的Euclidean范数
+
+    Args:
+        p1, p2: 两点坐标
+
+    Returns:
+        欧几里得距离
+    """
+    return float(np.sqrt((p1[0] - p2[0])**2 + (p1[1] - p2[1])**2))
+
+
+def distance_linf(p1: Tuple[int, int], p2: Tuple[int, int]) -> int:
+    """
+    L∞距离（切比雪夫距离） — 8方向运动的基本度量
+
+    κ-Phase: L∞ = κ-相位差的最大绝对值（max(|Δx|, |Δy|))
+
+    Args:
+        p1, p2: 两点坐标
+
+    Returns:
+        切比雪夫距离
+    """
+    return max(abs(p1[0] - p2[0]), abs(p1[1] - p2[1]))
+
+
+def line_segment_intersection(a1: Tuple[int, int], a2: Tuple[int, int],
+                               b1: Tuple[int, int], b2: Tuple[int, int]
+                               ) -> Optional[Tuple[float, float]]:
+    """
+    线段交点检测 — 判断两条线段是否相交并计算交点
+
+    κ-Phase: 线段交点 = κ-相位路径的交汇点
+
+    Args:
+        a1, a2: 线段A的端点
+        b1, b2: 线段B的端点
+
+    Returns:
+        交点坐标 (x, y)，或 None（不相交）
+    """
+    # 参数化: P = a1 + t*(a2-a1), Q = b1 + s*(b2-b1)
+    dx_a = a2[0] - a1[0]
+    dy_a = a2[1] - a1[1]
+    dx_b = b2[0] - b1[0]
+    dy_b = b2[1] - b1[1]
+
+    # 交叉行列式
+    denom = dx_a * dy_b - dy_a * dx_b
+    if abs(denom) < 1e-10:
+        return None  # 平行或共线
+
+    dx_c = b1[0] - a1[0]
+    dy_c = b1[1] - a1[1]
+
+    t = (dx_c * dy_b - dy_c * dx_b) / denom
+    s = (dx_c * dy_a - dy_c * dx_a) / denom
+
+    if 0 <= t <= 1 and 0 <= s <= 1:
+        ix = a1[0] + t * dx_a
+        iy = a1[1] + t * dy_a
+        return (ix, iy)
+
+    return None
+
+
+def convex_hull_2d(points: List[Tuple[int, int]]) -> List[Tuple[int, int]]:
+    """
+    2D凸包计算 — Graham扫描算法
+
+    κ-Phase: 凸包 = κ-相位空间的最小闭合区域
+    对象的凸包是其外轮廓的κ-相位边界
+
+    Args:
+        points: 点集 [(x,y), ...]
+
+    Returns:
+        凸包顶点列表（逆时针顺序）
+    """
+    if len(points) <= 2:
+        return list(points)
+
+    # 找最低点（y最小，y相同取x最小）
+    pivot = min(points, key=lambda p: (p[1], p[0]))
+
+    # 按极角排序
+    def polar_angle(p):
+        dx = p[0] - pivot[0]
+        dy = p[1] - pivot[1]
+        return float(np.arctan2(dy, dx))
+
+    sorted_pts = sorted(points, key=polar_angle)
+
+    # Graham扫描
+    hull = []
+    for p in sorted_pts:
+        while len(hull) >= 2:
+            # 检查是否左转
+            o, a = hull[-2], hull[-1]
+            cross = (a[0] - o[0]) * (p[1] - o[1]) - (a[1] - o[1]) * (p[0] - o[0])
+            if cross <= 0:
+                hull.pop()
+            else:
+                break
+        hull.append(p)
+
+    return hull
+
+
+def polygon_area(vertices: List[Tuple[int, int]]) -> float:
+    """
+    多边形面积 — Shoelace公式
+
+    κ-Phase: 面积 = κ-相位区域的总幅值（Shoelace = 行列式展开）
+
+    Args:
+        vertices: 多边形顶点列表（逆时针）
+
+    Returns:
+        面积值（正=逆时针，负=顺时针）
+    """
+    if len(vertices) < 3:
+        return 0.0
+
+    n = len(vertices)
+    area = 0.0
+    for i in range(n):
+        j = (i + 1) % n
+        area += vertices[i][0] * vertices[j][1]
+        area -= vertices[j][0] * vertices[i][1]
+
+    return abs(area) / 2.0
+
+
+def geometric_similarity(shape1: List[Tuple[int, int]],
+                          shape2: List[Tuple[int, int]],
+                          tolerance: float = 0.1
+                          ) -> float:
+    """
+    几何相似性检测 — D4旋转+平移下的形状匹配
+
+    κ-Phase: similarity = κ-陪集匹配度（D4群×位移陪集中的最佳匹配）
+    两形状相似 = 存在κ-变换使得κ-Snap归约误差<tolerance
+
+    Args:
+        shape1, shape2: 形状点集
+        tolerance: 匹配容差
+
+    Returns:
+        最佳匹配分数 (0.0~1.0)
+    """
+    if len(shape1) == 0 or len(shape2) == 0:
+        return 0.0
+    if len(shape1) != len(shape2):
+        return 0.0
+
+    best_score = 0.0
+    s1 = np.array(shape1, dtype=float)
+
+    # D4变换: 8种旋转+镜像
+    transforms = [
+        lambda p: p,                             # identity
+        lambda p: np.column_stack([-p[:,1], p[:,0]]),   # rot90
+        lambda p: np.column_stack([-p[:,0], -p[:,1]]),  # rot180
+        lambda p: np.column_stack([p[:,1], -p[:,0]]),   # rot270
+        lambda p: np.column_stack([p[:,0], -p[:,1]]),   # mirror_x
+        lambda p: np.column_stack([-p[:,0], p[:,1]]),   # mirror_y
+        lambda p: np.column_stack([-p[:,1], -p[:,0]]),  # mirror_diag1
+        lambda p: np.column_stack([p[:,1], p[:,0]]),    # mirror_diag2
+    ]
+
+    s2 = np.array(shape2, dtype=float)
+
+    for transform in transforms:
+        s2_t = transform(s2)
+        # 最优平移: 中心对齐
+        center1 = s1.mean(axis=0)
+        center2 = s2_t.mean(axis=0)
+        offset = center1 - center2
+        s2_aligned = s2_t + offset
+
+        # 匹配分数: 归一化距离误差
+        dists = np.sqrt(np.sum((s1 - s2_aligned)**2, axis=1))
+        max_dist = max(dists.max(), 1.0)
+        score = 1.0 - dists.mean() / max_dist
+        best_score = max(best_score, score)
+
+    return float(best_score)
+
+
+def vector_add(v1: Tuple[int, int], v2: Tuple[int, int]) -> Tuple[int, int]:
+    """向量加法 — κ-相位合成"""
+    return (v1[0] + v2[0], v1[1] + v2[1])
+
+
+def vector_sub(v1: Tuple[int, int], v2: Tuple[int, int]) -> Tuple[int, int]:
+    """向量减法 — κ-相位差"""
+    return (v1[0] - v2[0], v1[1] - v2[1])
+
+
+def vector_scale(v: Tuple[int, int], scalar: float) -> Tuple[float, float]:
+    """向量缩放 — κ-相位幅值调整"""
+    return (v[0] * scalar, v[1] * scalar)
+
+
+def vector_dot(v1: Tuple[int, int], v2: Tuple[int, int]) -> int:
+    """向量内积 — κ-相位相关性"""
+    return v1[0] * v2[0] + v1[1] * v2[1]
+
+
+def vector_cross_2d(v1: Tuple[int, int], v2: Tuple[int, int]) -> int:
+    """2D向量叉积 — κ-相位旋度"""
+    return v1[0] * v2[1] - v1[1] * v2[0]
+
+
+# ============================================================
+# 离散三角函数原语 (Trigonometry Discrete)
+# κ-Phase: 方向/角度 = κ-相位空间的8方向离散化
+# 连续sin/cos对网格ARC过度，但方向/向量转换是必要的
+# ============================================================
+
+# 8方向系统 — ARC网格的标准方向集
+DIRECTION_8 = {
+    0: (0, -1),     # N (上)
+    1: (1, -1),     # NE (右上)
+    2: (1, 0),      # E (右)
+    3: (1, 1),      # SE (右下)
+    4: (0, 1),      # S (下)
+    5: (-1, 1),     # SW (左下)
+    6: (-1, 0),     # W (左)
+    7: (-1, -1),    # NW (左上)
+}
+
+DIRECTION_4 = {
+    0: (0, -1),     # N (上)
+    1: (1, 0),      # E (右)
+    2: (0, 1),      # S (下)
+    3: (-1, 0),     # W (左)
+}
+
+
+def direction_angle_8(dx: int, dy: int) -> int:
+    """
+    计算8方向角度 — 从位移向量到方向编码
+
+    κ-Phase: 方向编码 = κ-相位角度的8级量化
+
+    Args:
+        dx, dy: 位移分量
+
+    Returns:
+        方向编码 0-7 (0=N, 1=NE, ..., 7=NW)
+    """
+    if dx == 0 and dy == 0:
+        return 0  # 默认北
+
+    angle = int(np.arctan2(dy, dx) * 180 / np.pi)
+    # 映射到8方向: 0°=E, 45°=NE, 90°=N, ...
+    # 重新映射: N=0(+y↑→dy<0), 顺时针递增
+    if dy < 0 and dx == 0:    return 0  # N
+    if dy < 0 and dx > 0:     return 1  # NE
+    if dx > 0 and dy == 0:    return 2  # E
+    if dy > 0 and dx > 0:     return 3  # SE
+    if dy > 0 and dx == 0:    return 4  # S
+    if dy > 0 and dx < 0:     return 5  # SW
+    if dx < 0 and dy == 0:    return 6  # W
+    if dy < 0 and dx < 0:     return 7  # NW
+    return 0
+
+
+def direction_to_vector(dir_code: int, use_8: bool = True) -> Tuple[int, int]:
+    """
+    方向编码到向量 — 从方向编码还原位移向量
+
+    κ-Phase: 方向编码 → κ-相位位移向量
+
+    Args:
+        dir_code: 方向编码
+        use_8: 使用8方向(True)或4方向(False)
+
+    Returns:
+        (dx, dy) 位移向量
+    """
+    dirs = DIRECTION_8 if use_8 else DIRECTION_4
+    return dirs.get(dir_code % len(dirs), (0, 0))
+
+
+def polar_to_cartesian(radius: float, angle_deg: float) -> Tuple[float, float]:
+    """
+    极坐标→笛卡尔坐标转换
+
+    κ-Phase: polar→cartesian = κ-相位从角域到线域的变换
+
+    Args:
+        radius: 极径
+        angle_deg: 角度（度）
+
+    Returns:
+        (x, y) 笛卡尔坐标
+    """
+    rad = np.deg2rad(angle_deg)
+    return (radius * np.cos(rad), radius * np.sin(rad))
+
+
+def cartesian_to_polar(x: float, y: float) -> Tuple[float, float]:
+    """
+    笛卡尔坐标→极坐标转换
+
+    κ-Phase: cartesian→polar = κ-相位从线域到角域的变换
+
+    Args:
+        x, y: 笛卡尔坐标
+
+    Returns:
+        (radius, angle_deg) 极坐标
+    """
+    radius = float(np.sqrt(x**2 + y**2))
+    angle_deg = float(np.rad2deg(np.arctan2(y, x)))
+    return (radius, angle_deg)
+
+
+def angle_between_vectors(v1: Tuple[float, float], v2: Tuple[float, float]) -> float:
+    """
+    两向量夹角 — 离散化的角度距离
+
+    κ-Phase: 夹角 = κ-相位间的角度距离
+    cos(θ) = (v1·v2) / (|v1||v2|)
+
+    Args:
+        v1, v2: 两个向量
+
+    Returns:
+        夹角（度）
+    """
+    dot = v1[0]*v2[0] + v1[1]*v2[1]
+    mag1 = float(np.sqrt(v1[0]**2 + v1[1]**2))
+    mag2 = float(np.sqrt(v2[0]**2 + v2[1]**2))
+    if mag1 < 1e-10 or mag2 < 1e-10:
+        return 0.0
+    cos_theta = max(-1.0, min(1.0, dot / (mag1 * mag2)))
+    return float(np.rad2deg(np.arccos(cos_theta)))
+
+
+def vector_decompose(v: Tuple[float, float],
+                     basis: Tuple[float, float]
+                     ) -> Tuple[float, float]:
+    """
+    向量分解 — 将向量投影到给定基向量方向
+
+    κ-Phase: 分解 = κ-相位沿基方向的投影
+    v = proj_along * basis + perp_component
+
+    Args:
+        v: 待分解向量
+        basis: 基向量方向
+
+    Returns:
+        (parallel_component, perpendicular_component) 沿基方向和垂直分量
+    """
+    b_mag_sq = basis[0]**2 + basis[1]**2
+    if b_mag_sq < 1e-10:
+        return (0.0, 0.0)
+    # 沿基方向投影
+    proj_scalar = (v[0]*basis[0] + v[1]*basis[1]) / b_mag_sq
+    proj_parallel = (proj_scalar * basis[0], proj_scalar * basis[1])
+    # 垂直分量
+    proj_perp = (v[0] - proj_parallel[0], v[1] - proj_parallel[1])
+    return (proj_scalar, float(np.sqrt(proj_perp[0]**2 + proj_perp[1]**2)))
+
+
+def discrete_sin(angle_steps: int, total_steps: int = 8) -> float:
+    """
+    离散正弦 — 8方向量化角度的sin值
+
+    κ-Phase: discrete_sin = κ-相位角度量化后的三角函数值
+    只取8个标准角度的sin值，避免连续三角函数的复杂性
+
+    Args:
+        angle_steps: 角度步数 (0~total_steps-1)
+        total_steps: 总方向数 (默认8)
+
+    Returns:
+        sin值近似
+    """
+    # 8方向sin预计算
+    if total_steps == 8:
+        sin_table = [0.0, 0.707, 1.0, 0.707, 0.0, -0.707, -1.0, -0.707]
+        return sin_table[angle_steps % 8]
+    # 4方向sin预计算
+    if total_steps == 4:
+        sin_table = [1.0, 0.0, -1.0, 0.0]  # N/E/S/W (dy分量)
+        return sin_table[angle_steps % 4]
+    # 通用：用连续sin
+    angle = 2 * np.pi * angle_steps / total_steps
+    return float(np.sin(angle))
+
+
+def discrete_cos(angle_steps: int, total_steps: int = 8) -> float:
+    """
+    离散余弦 — 8方向量化角度的cos值
+
+    κ-Phase: discrete_cos = κ-相位角度量化后的三角函数值
+
+    Args:
+        angle_steps: 角度步数
+        total_steps: 总方向数
+
+    Returns:
+        cos值近似
+    """
+    if total_steps == 8:
+        cos_table = [1.0, 0.707, 0.0, -0.707, -1.0, -0.707, 0.0, 0.707]
+        return cos_table[angle_steps % 8]
+    if total_steps == 4:
+        cos_table = [0.0, 1.0, 0.0, -1.0]  # N/E/S/W (dx分量)
+        return cos_table[angle_steps % 4]
+    angle = 2 * np.pi * angle_steps / total_steps
+    return float(np.cos(angle))
+
+
+# ============================================================
 # 导出
 # ============================================================
 
@@ -1087,6 +2131,46 @@ PHYSICS_PRIMITIVE_REGISTRY = {
         'functions': [rotate_90, translate_grid, find_affine_transform, align_target],
         'description': '仿射变换 — κ-旋转+κ-平移 (D4群×位移)',
         'games': ['cn04'],
+    },
+    'kinematics': {
+        'functions': [compute_trajectory, compute_parabolic_trajectory,
+                      predict_intercept_position, velocity_from_displacement],
+        'description': '运动学原语 — 轨迹计算、速度向量、加速度、抛物线弹道、拦截预测',
+        'games': [],  # 通用原语，适用于所有移动类游戏
+    },
+    'collision': {
+        'functions': [check_rect_collision, elastic_collision_1d, inelastic_collision_1d,
+                      grid_collision_detect],
+        'description': '碰撞检测原语 — AABB矩形碰撞、弹性/非弹性碰撞(动量守恒)、网格碰撞检测',
+        'games': [],  # 通用原语，适用于所有碰撞类游戏
+    },
+    'thermodynamics': {
+        'functions': [compute_grid_entropy, compute_energy_gradient,
+                      grid_heat_diffusion, minimum_energy_path],
+        'description': '热力学原语 — Shannon熵、能量梯度场、Fourier热扩散、Dijkstra最小能量路径',
+        'games': [],  # 通用原语，适用于能量/熵优化类搜索
+    },
+    'wave': {
+        'functions': [wave_propagate_bfs, wave_interference_check,
+                      wave_superposition, wave_resonance_positions],
+        'description': '波动力学原语 — BFS波传播(wavefront)、干涉检测(constructive/destructive)、叠加原理、共振检测',
+        'games': [],  # 通用原语，适用于传播/影响域类问题
+    },
+    'euclidean_geometry': {
+        'functions': [distance_l1, distance_l2, distance_linf,
+                      line_segment_intersection, convex_hull_2d, polygon_area,
+                      geometric_similarity,
+                      vector_add, vector_sub, vector_scale, vector_dot, vector_cross_2d],
+        'description': '欧几里得几何原语 — L1/L2/L∞距离度量、线段交点、凸包(Graham扫描)、Shoelace面积、D4×平移几何相似性、向量运算',
+        'games': [],  # 通用原语，ARC空间推理的基础
+    },
+    'trigonometry_discrete': {
+        'functions': [direction_angle_8, direction_to_vector,
+                      polar_to_cartesian, cartesian_to_polar,
+                      angle_between_vectors, vector_decompose,
+                      discrete_sin, discrete_cos],
+        'description': '离散三角函数原语 — 8方向编码/解码、极坐标↔笛卡尔、向量夹角、向量分解、离散sin/cos表',
+        'games': [],  # 通用原语，适用于方向/角度类推理
     },
 }
 
