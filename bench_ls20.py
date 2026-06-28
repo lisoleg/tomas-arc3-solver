@@ -80,7 +80,9 @@ def main():
         # Advance env to next level by replaying solved plan
         if level_idx < 6 and solved:
             for aid, data in plan:
-                ga = GA_MAP.get(aid, GameAction.ACTION1)
+                # GameAction enum is NOT IntEnum — convert to int for GA_MAP lookup
+                ga_key = aid.value if hasattr(aid, 'value') else aid
+                ga = GA_MAP.get(ga_key, aid)
                 obs = env.step(ga)
                 if obs.state == GameState.WIN:
                     print(f"  Env: L{env._game._current_level_index} SOLVED!")

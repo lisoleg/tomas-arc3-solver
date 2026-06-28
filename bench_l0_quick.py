@@ -54,6 +54,7 @@ for gid in ALL_GAMES:
     steps = len(plan) if plan else 999
     if plan:
         g3 = copy.deepcopy(g2)
+        from arcengine import GameState
         for step in plan[:300]:
             aid, data = step
             ai = ActionInput(id=aid, data=data if data else {})
@@ -61,7 +62,21 @@ for gid in ALL_GAMES:
                 g3.perform_action(ai)
             except Exception:
                 pass
+            # CRITICAL: call complete_action() to settle animation frames
+            for _ in range(5):
+                if hasattr(g3, '_current_level_index') and g3._current_level_index > original_level:
+                    break
+                if hasattr(g3, '_state') and g3._state == GameState.WIN:
+                    break
+                try:
+                    g3.complete_action()
+                except Exception:
+                    break
             if hasattr(g3, '_current_level_index') and g3._current_level_index > original_level:
+                solved = True
+                steps = plan.index(step) + 1
+                break
+            if hasattr(g3, '_state') and g3._state == GameState.WIN:
                 solved = True
                 steps = plan.index(step) + 1
                 break

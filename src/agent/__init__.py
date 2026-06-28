@@ -20,7 +20,7 @@ from .graph_explorer import ExplorerAgent
 from .dopamine_explorer import DopamineExplorer
 from .planner_agent import PlannerAgent
 from .grid_perception import GridPerception
-from .game_profiles import GameProfile, GameProfileRegistry
+from .game_profiles import GameProfile, GameProfileRegistry, HybridGameProfile
 from .oracle_adapters import (
     GameEntity,
     OracleAdapter,
@@ -194,6 +194,53 @@ except ImportError:
     SPPTrainer = None  # type: ignore
     META_SNAP_HAS_TORCH = False
 
+# ── v3.18.0 — 四层混合搜索架构 (Hybrid Search Pipeline) ──
+from .hybrid_search_engine import (
+    CandidateSet,
+    EvaluatedCandidateSet,
+    PipelineStrategies,
+    L1CandidateGenerator,
+    L2StructurePruner,
+    L3ResidualEvaluator,
+    L4DecisionSelector,
+    HybridSearchPipeline,
+)
+from .l1_strategies import (
+    BFSPathCandidateGenerator,
+    DFSEnumerationCandidateGenerator,
+    WallBFSCandidateGenerator,
+    DeltaStateReplayCandidateGenerator,
+    DirectComputeCandidateGenerator,
+)
+from .l2_strategies import (
+    PassThroughPruner,
+    ComboSymmetryPruner,
+    PrimeSignaturePruner,
+    MatroidConstraintPruner,
+)
+from .l3_strategies import (
+    GaussExEvaluation,
+    KappaSnapEvaluation,
+    DeadZeroFuseEvaluation,
+    AsymIndexEvaluation,
+    PassThroughEvaluation,
+)
+from .l4_strategies import (
+    KappaSelector,
+    LiuSelector,
+)
+from .kappa_selector import (
+    KappaEtaAscendSelector,
+    LiuPrioritySelector,
+    KAPPA_DELTA_K,
+    KAPPA_MIN_CONFIDENCE,
+)
+from .wall_bfs import (
+    WallBFSEngine,
+    WALL_BFS_MAX_DEPTH,
+    WALL_BFS_MAX_NODES,
+)
+
 __all__ = [
     # Core agents
     "TomasAgent",
@@ -204,6 +251,7 @@ __all__ = [
     "GridPerception",
     "GameProfile",
     "GameProfileRegistry",
+    "HybridGameProfile",
     # Oracle adapters
     "GameEntity",
     "OracleAdapter",
@@ -347,4 +395,42 @@ __all__ = [
     "MetaSnapTrainingExample",
     "MetaSnapDataCollector",
     "SPPTrainer",
+    # v3.18.0 — 四层混合搜索架构 (Hybrid Search Pipeline)
+    "CandidateSet",
+    "EvaluatedCandidateSet",
+    "PipelineStrategies",
+    "L1CandidateGenerator",
+    "L2StructurePruner",
+    "L3ResidualEvaluator",
+    "L4DecisionSelector",
+    "HybridSearchPipeline",
+    # v3.18.0 — L1候选生成策略
+    "BFSPathCandidateGenerator",
+    "DFSEnumerationCandidateGenerator",
+    "WallBFSCandidateGenerator",
+    "DeltaStateReplayCandidateGenerator",
+    "DirectComputeCandidateGenerator",
+    # v3.18.0 — L2结构剪枝策略
+    "PassThroughPruner",
+    "ComboSymmetryPruner",
+    "PrimeSignaturePruner",
+    "MatroidConstraintPruner",
+    # v3.18.0 — L3残差评估策略
+    "GaussExEvaluation",
+    "KappaSnapEvaluation",
+    "DeadZeroFuseEvaluation",
+    "AsymIndexEvaluation",
+    "PassThroughEvaluation",
+    # v3.18.0 — L4决策融合策略
+    "KappaSelector",
+    "LiuSelector",
+    # v3.18.0 — κ-优选η升序核心
+    "KappaEtaAscendSelector",
+    "LiuPrioritySelector",
+    "KAPPA_DELTA_K",
+    "KAPPA_MIN_CONFIDENCE",
+    # v3.18.0 — Wall-BFS引擎
+    "WallBFSEngine",
+    "WALL_BFS_MAX_DEPTH",
+    "WALL_BFS_MAX_NODES",
 ]

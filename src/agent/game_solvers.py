@@ -3976,20 +3976,166 @@ def solve_ar25(game: Any, level_idx: int) -> list | None:
     if _is_level_solved(game, original_level):
         return []
 
-    # ── v3.24.0: Fast BFS path — try smart BFS before mirror-geometry logic ──
+    # ── v3.31.0: Optics Pre-Plan — direct computation of optimal piece position ──
+    # Compute where each piece should be placed so that its mirror-reflected
+    # pixels cover all target positions. This bypasses BFS entirely.
+    import math as _math
+
+    try:
+        _selectable = getattr(game, "ayyvxqrhnzw", None)
+        _mirror_list = getattr(game, "jtkyjqznbnp", None)
+
+        if _selectable and len(_selectable) > 0 and _mirror_list and len(_mirror_list) > 0:
+            # Get piece pixel structure (non-background pixels only)
+            _piece = _selectable[0]
+            _pixels = _piece.pixels
+            _bg = getattr(game, "svhymyycqg", None)
+            _non_bg_pixels: list[tuple[int, int]] = []
+            for _r in range(_pixels.shape[0]):
+                for _c in range(_pixels.shape[1]):
+                    if _pixels[_r, _c] != _bg:
+                        _non_bg_pixels.append((_c, _r))  # (dx, dy) offset within piece
+
+            if _non_bg_pixels:
+                # Get target positions
+                _target_sprites = _get_sprites_by_tag(game, "0001sruqbuvukh")
+                _target_positions: list[tuple[int, int]] = []
+                for _ts in _target_sprites:
+                    _target_positions.append((int(_ts.x), int(_ts.y)))
+
+                if _target_positions:
+                    # For each mirror, compute optimal piece position
+                    # Piece pixel (px+dx, py+dy) reflected by mirror at mx → (2*mx-(px+dx), py+dy) for vertical
+                    # → (px+dx, 2*my-(py+dy)) for horizontal
+                    # We need ALL targets to be covered by reflected non_bg pixels
+                    # Strategy: try each mirror, compute required piece position
+
+                    _best_plan: list[tuple] | None = None
+
+                    for _mirror in _mirror_list:
+                        _mx = int(_mirror.x)
+                        _my = int(_mirror.y)
+                        _is_vertical = "0054kgxrvfihgm" in _mirror.tags
+                        _is_horizontal = "0002nuguepuujf" in _mirror.tags
+
+                        if not (_is_vertical or _is_horizontal):
+                            continue  # skip mirrors without orientation tag
+
+                        # For vertical mirror: reflected x = 2*mx - (px+dx)
+                        # We need: 2*mx - (px+dx) = target_x for some dx
+                        # → px = 2*mx - target_x - dx
+                        # For horizontal mirror: reflected y = 2*my - (py+dy)
+                        # → py = 2*my - target_y - dy
+
+                        # Try each target + each non_bg pixel offset to find optimal piece position
+                        _best_px = -999
+                        _best_py = -999
+                        _best_coverage = 0
+
+                        for _ref_dx, _ref_dy in _non_bg_pixels:
+                            # Compute piece position that makes this reflected pixel cover each target
+                            for _tx, _ty in _target_positions:
+                                if _is_vertical:
+                                    _try_px = 2 * _mx - _tx - _ref_dx
+                                    _try_py = _ty - _ref_dy
+                                else:
+                                    _try_px = _tx - _ref_dx
+                                    _try_py = 2 * _my - _ty - _ref_dy
+
+                                if _try_px < 0 or _try_py < 0:
+                                    continue
+
+                                # Count how many targets are covered at this position
+                                _covered = 0
+                                for _tt_x, _tt_y in _target_positions:
+                                    for _d_x, _d_y in _non_bg_pixels:
+                                        if _is_vertical:
+                                            _r_x = 2 * _mx - (_try_px + _d_x)
+                                            _r_y = _try_py + _d_y
+                                        else:
+                                            _r_x = _try_px + _d_x
+                                            _r_y = 2 * _my - (_try_py + _d_y)
+                                        if _r_x == _tt_x and _r_y == _tt_y:
+                                            _covered += 1
+                                            break
+
+                                if _covered > _best_coverage:
+                                    _best_coverage = _covered
+                                    _best_px = _try_px
+                                    _best_py = _try_py
+
+                        if _best_coverage >= len(_target_positions) and _best_px >= 0 and _best_py >= 0:
+                            # Found optimal position! Generate plan:
+                            # 1. Click to select piece
+                            # 2. Move piece to (_best_px, _best_py)
+
+                            _piece_cur_x = int(_piece.x)
+                            _piece_cur_y = int(_piece.y)
+
+                            # Click to select piece at its current display center
+                            _click_dx, _click_dy = _sprite_display_center(game, _piece)
+
+                            _preplan: list[tuple] = []
+                            _preplan.append((GameAction.ACTION6, {"x": _click_dx, "y": _click_dy}))
+
+                            # Compute movement actions
+                            _dx_needed = _best_px - _piece_cur_x
+                            _dy_needed = _best_py - _piece_cur_y
+
+                            if _dx_needed < 0:
+                                for _ in range(abs(_dx_needed)):
+                                    _preplan.append((GameAction.ACTION3, {}))
+                            elif _dx_needed > 0:
+                                for _ in range(abs(_dx_needed)):
+                                    _preplan.append((GameAction.ACTION4, {}))
+
+                            if _dy_needed < 0:
+                                for _ in range(abs(_dy_needed)):
+                                    _preplan.append((GameAction.ACTION1, {}))
+                            elif _dy_needed > 0:
+                                for _ in range(abs(_dy_needed)):
+                                    _preplan.append((GameAction.ACTION2, {}))
+
+                            # Verify plan on game copy (Δ-State Replay)
+                            _game_verify = copy.deepcopy(game)
+                            for _aid, _adata in _preplan:
+                                _ai = ActionInput(id=_aid, data=_adata if _adata else {})
+                                _game_verify.perform_action(_ai)
+                                _game_verify.complete_action()
+
+                            if _is_level_solved(_game_verify, original_level):
+                                return _preplan
+
+                            # If verification failed, try other strategies
+    except Exception:
+        pass  # Fall through to BFS
+
+    # ── v3.31.0: Fast BFS path — try smart BFS if pre-plan fails ──
+    # Corrected win check: vplrhaovhr() is the real win condition for AR25
     def _ar25_win(g):
         if g._current_level_index > original_level:
             return True
         _huj = getattr(g, "hujpxmlafgh", None)
-        return _huj is True or _huj == 1
+        if _huj is True or _huj == 1:
+            return True
+        # Check the actual game win method: vplrhaovhr()
+        _vplr = getattr(g, "vplrhaovhr", None)
+        if _vplr and callable(_vplr):
+            try:
+                return _vplr()
+            except Exception:
+                pass
+        return False
 
+    # AR25 piece (0006lxjtqggkmi) can move freely in 4 directions
+    # Mirror (0003uqrdzdofso+0054kgxrvfihgm) is fixed — 0056icpryeujyf tag
     _bfs_actions = _generate_movement_actions(game)
     _bfs_actions.append((GameAction.ACTION5, {}))
-    for _tag in ["0006lxjtqggkmi", "0003uqrdzdofso", "0001sruqbuvukh", "0054kgxrvfihgm", "0002nuguepuujf", "sys_click"]:
-        for _s in _get_sprites_by_tag(game, _tag):
-            if getattr(_s, 'is_visible', True):
-                _dx, _dy = _sprite_display_center(game, _s)
-                _bfs_actions.append((GameAction.ACTION6, {"x": _dx, "y": _dy}))
+    # Only click on selectable pieces (0006lxjtqggkmi has sys_click tag)
+    for _s in _get_sprites_by_tag(game, "0006lxjtqggkmi"):
+        if getattr(_s, 'is_visible', True):
+            _dx, _dy = _sprite_display_center(game, _s)
+            _bfs_actions.append((GameAction.ACTION6, {"x": _dx, "y": _dy}))
     _bfs_result = _coset_prioritized_solver(game, candidate_actions=_bfs_actions,
         max_depth=30, max_time=10.0, max_nodes=50000, extra_win_check=_ar25_win,
         heuristic_fn=_make_ar25_heuristic(game))

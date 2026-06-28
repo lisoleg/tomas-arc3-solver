@@ -1,0 +1,51 @@
+sequenceDiagram
+    participant SG as solve_game()
+    participant HSP as HybridSearchPipeline
+    participant REG as GameProfileRegistry
+    participant CONF as HybridSearchConfig
+    participant L1 as DeltaStateBFSEngine
+    participant L2 as L2PruningEngine
+    participant L3 as L3EvaluationEngine
+    participant L4 as L4DecisionEngine
+    participant RE as ReplayEngine
+    participant KS as KSnapEngine
+    participant VER as _verify_plan()
+
+    SG->>HSP: solve(game, "ka59", 0)
+    HSP->>REG: get_hybrid_config("ka59")
+    REG->>CONF: return ka59_config {l1=WALL_BFS, l2=COMBINATORIAL, l3=DEAD_ZERO_FUSE, l4=KAPPA_SELECTION}
+    
+    Note over HSP,L1: L1 状态枚举层
+    HSP->>L1: _run_l1(game, config, 0)
+    L1->>L1: Wall-BFS: bfs_with_wall_priority(game, 0)
+    L1->>L1: 每节点: Node(parent_id, action) — 零拷贝
+    L1->>L1: 物理检查: can_push_box() + is_deadlock_corner()
+    L1->>L1: Dead-Zero熔断: 跳过deadlock节点
+    L1-->>HSP: candidates: list[Node]
+
+    Note over HSP,L2: L2 结构剪枝层
+    HSP->>L2: _run_l2(candidates, game, config)
+    L2->>L2: 组合对称剪枝: 八元数编码旋转/镜像归一化
+    L2->>L2: 去重: LayoutHasher.hash_with_shape()
+    L2-->>HSP: pruned: list[Node]
+
+    Note over HSP,L3: L3 差评估层
+    HSP->>L3: _run_l3(pruned, game, config)
+    L3->>RE: replay_batch(pruned_node_ids) → 物化所有候选
+    RE->>RE: deepcopy(root_game) + perform_action序列
+    L3->>KS: project(eml_state, prior) → (best_v, η)
+    L3->>L3: η < δ_K → PASS; η ≥ δ_K → 熔断
+    L3-->>HSP: scored: list[ScoredCandidate(node, η, confidence)]
+
+    Note over HSP,L4: L4 κ-优选决策融合
+    HSP->>L4: _run_l4(scored, game, config)
+    L4->>L4: η升序排序 → confidence = 1 - η/δ_K
+    L4->>L4: 选择最小η候选 → 回溯action序列
+    L4->>RE: replay(best_node_id) → 物化最优状态
+    L4-->>HSP: final_plan: list[tuple]
+
+    HSP->>VER: _verify_plan(final_plan, pristine_game)
+    VER->>VER: deepcopy(pristine_game) + replay plan → _is_level_solved()
+    VER-->>HSP: True/False
+
+    HSP-->>SG: return final_plan or None

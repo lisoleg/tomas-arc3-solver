@@ -413,12 +413,19 @@ class ReplayEngine:
       - 回溯路径：_backtrack_path() 从 target_id 回溯到 root，
         收集动作链然后逆序执行
 
+    v3.18.0 NEW:
+      - from_game() 工厂方法: 从game engine和node_map自动构建ReplayEngine
+      - 全局共享支持: _shared_engines dict支持跨任务共享ReplayEngine实例
+
     Attributes:
         root_state: 根节点状态 (game mode: game engine, grid mode: np.ndarray)。
         node_map: 节点编号 → Node 对象的映射。
         mode: Replay 模式 ('game' 或 'grid')。
         _cache_count: 当前已使用的缓存槽位数。
     """
+
+    # v3.18.0: 全局共享ReplayEngine实例池 (支持跨任务共享)
+    _shared_engines: Dict[str, 'ReplayEngine'] = {}
 
     def __init__(
         self,
@@ -441,6 +448,83 @@ class ReplayEngine:
         self._cache_count: int = 0
         # v4.1: Karma Cache — structural_hash lookup/store for ReplayEngine
         self._karma_cache: Dict[str, Any] = {}
+
+    @classmethod
+    def from_game(
+        cls,
+        game: Any,
+        mode: str = 'game',
+        game_id: str = "",
+        shared: bool = False,
+    ) -> 'ReplayEngine':
+        """从game engine自动构建ReplayEngine的工厂方法。
+
+        创建根节点和node_map，构建ReplayEngine实例。
+        如果shared=True，将实例注册到全局共享池，
+        同一game_id共享同一个ReplayEngine。
+
+        Args:
+            game: ARC-AGI-3 game engine 对象。
+            mode: Replay 模式 ('game' 或 'grid')。
+            game_id: 游戏ID，用于全局共享池的键 (可选)。
+            shared: 是否注册到全局共享池 (默认False)。
+
+        Returns:
+            ReplayEngine实例。
+        """
+        # 创建根节点
+        node_map: Dict[int, Node] = {}
+        root_node: Node = Node(
+            id=0,
+            parent_id=-1,
+            action="root",
+            depth=0,
+            meta={'stage': 'root'},
+        )
+        node_map[0] = root_node
+
+        # 提取根状态
+        root_state: Any = game
+        if mode == 'grid':
+            # Grid mode: 从game提取Grid数据
+            grid: Optional[np.ndarray] = _extract_game_grid(game)
+            if grid is not None:
+                root_state = grid.copy()
+            else:
+                # 无法提取Grid → 使用空Grid
+                root_state = np.zeros((64, 64), dtype=int)
+
+        # 构建ReplayEngine
+        engine: ReplayEngine = cls(
+            root_state=root_state,
+            node_map=node_map,
+            mode=mode,
+        )
+
+        # 全局共享
+        if shared and game_id:
+            cls._shared_engines[game_id] = engine
+
+        return engine
+
+    @classmethod
+    def get_shared(cls, game_id: str) -> Optional['ReplayEngine']:
+        """获取全局共享的ReplayEngine实例。
+
+        Args:
+            game_id: 游戏ID。
+
+        Returns:
+            共享的ReplayEngine实例，或None(不存在)。
+        """
+        return cls._shared_engines.get(game_id)
+
+    @classmethod
+    def clear_shared(cls) -> None:
+        """清除所有全局共享的ReplayEngine实例。"""
+        for engine in cls._shared_engines.values():
+            engine.clear_cache()
+        cls._shared_engines.clear()
 
     def replay(self, target_id: int) -> Any:
         """从根节点 Replay 到 target_id，返回最终状态。

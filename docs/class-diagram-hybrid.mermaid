@@ -1,0 +1,181 @@
+classDiagram
+    class HybridSearchPipeline {
+        +solve(game, game_id, level_idx) list~tuple~
+        +_run_l1(game, config, level_idx) list~Node~
+        +_run_l2(candidates, game, config) list~Node~
+        +_run_l3(pruned, game, config) list~ScoredCandidate~
+        +_run_l4(scored, game, config) list~tuple~
+        +_verify_plan(plan, game) bool
+        -_registry GameProfileRegistry
+        -_replay_engine ReplayEngine
+    }
+
+    class HybridSearchConfig {
+        +game_id str
+        +l1_strategy L1Strategy
+        +l2_strategy L2Strategy
+        +l3_strategy L3Strategy
+        +l4_strategy L4Strategy
+        +l1_params dict
+        +l2_params dict
+        +l3_params dict
+        +time_budget float
+        +max_nodes int
+        +delta_k float
+        +physics_primitives list~str~
+    }
+
+    class L1Strategy {
+        <<enumeration>>
+        BFS
+        DFS
+        WALL_BFS
+        DELTA_REPLAY_BFS
+        DELTA_REPLAY_DFS
+        DIRECT_COMPUTE
+    }
+
+    class L2Strategy {
+        <<enumeration>>
+        COMBINATORIAL_SYMMETRY
+        PRIME_SIGNATURE
+        MATROID_CONSTRAINT
+        PHYSICS_PRIMITIVE
+        WALKABLE_DEDUP
+        ACTION_SEQ_DEDUP
+        PASS_THROUGH
+    }
+
+    class L3Strategy {
+        <<enumeration>>
+        KAPPA_SNAP
+        GAUSSEX
+        DEAD_ZERO_FUSE
+        ASYM_INDEX
+        DISTANCE_RESIDUAL
+        PASS_THROUGH
+    }
+
+    class L4Strategy {
+        <<enumeration>>
+        KAPPA_SELECTION
+        SHORTEST_PATH
+        MIN_CLICK
+        MIN_SWAP
+        DIRECT_RETURN
+    }
+
+    class ScoredCandidate {
+        +node Node
+        +eta float
+        +confidence float
+        +action_sequence list
+    }
+
+    class Node {
+        +id int
+        +parent_id int
+        +action str
+        +depth int
+        +meta dict
+        +signature() str
+    }
+
+    class ReplayEngine {
+        +root_state Any
+        +node_map dict~int_Node~
+        +mode str
+        +replay(target_id) Any
+        +replay_batch(target_ids) list~Any~
+        +clear_cache() void
+    }
+
+    class DeltaStateBFSEngine {
+        +root_game Any
+        +action_space ActionSpace
+        +max_nodes int
+        +time_budget float
+        +bfs_search(game, level_idx) list~Node~
+        +dfs_search(game, level_idx) list~Node~
+        -_node_map dict~int_Node~
+        -_replay_engine ReplayEngine
+    }
+
+    class WallBFSEngine {
+        +bfs_with_wall_priority(game, level_idx) list~Node~
+        -_push_feasibility_check(state) ISAResult
+        -_deadlock_detector(state) bool
+    }
+
+    class L2PruningEngine {
+        +prune(candidates, strategy, params) list~Node~
+        +_combo_symmetry_prune(nodes, params) list~Node~
+        +_prime_signature_prune(nodes, params) list~Node~
+        +_matroid_prune(nodes, params) list~Node~
+        +_physics_primitive_prune(nodes, primitives) list~Node~
+    }
+
+    class L3EvaluationEngine {
+        +evaluate(pruned, strategy, params) list~ScoredCandidate~
+        +_kappa_snap_eval(nodes, ks_engine) list~ScoredCandidate~
+        +_gauss_ex_eval(nodes, verifier) list~ScoredCandidate~
+        +_dead_zero_fuse_eval(nodes) list~ScoredCandidate~
+    }
+
+    class L4DecisionEngine {
+        +decide(scored, strategy, params) list~tuple~
+        +_kappa_selection(scored, delta_k) list~tuple~
+        +_shortest_path(scored) list~tuple~
+    }
+
+    class GameProfile {
+        +game_id str
+        +action_type str
+        +step_size int
+        +hybrid_config HybridSearchConfig
+    }
+
+    class GameProfileRegistry {
+        +get_profile(game_id) GameProfile
+        +get_hybrid_config(game_id) HybridSearchConfig
+    }
+
+    class SBInjector {
+        +name str
+        +physics_primitives list~str~
+        +l2_primitives list~str~
+    }
+
+    class KSnapEngine {
+        +DELTA_K float = 0.036
+        +project(eml_state, prior) tuple~Octonion_float~
+    }
+
+    class ActionSpace {
+        +GAME_ACTIONS dict
+        +GRID_PRIMITIVES list
+        +get_primitives() list
+        +apply_game_action(game, action_id, data) void
+    }
+
+    HybridSearchPipeline --> HybridSearchConfig : uses
+    HybridSearchPipeline --> DeltaStateBFSEngine : L1
+    HybridSearchPipeline --> L2PruningEngine : L2
+    HybridSearchPipeline --> L3EvaluationEngine : L3
+    HybridSearchPipeline --> L4DecisionEngine : L4
+    HybridSearchPipeline --> GameProfileRegistry : config lookup
+    HybridSearchPipeline --> ReplayEngine : verification
+    GameProfile --> HybridSearchConfig : embedded config
+    HybridSearchConfig --> L1Strategy : l1
+    HybridSearchConfig --> L2Strategy : l2
+    HybridSearchConfig --> L3Strategy : l3
+    HybridSearchConfig --> L4Strategy : l4
+    DeltaStateBFSEngine --> Node : creates
+    DeltaStateBFSEngine --> ReplayEngine : materialization
+    DeltaStateBFSEngine --> ActionSpace : action dispatch
+    WallBFSEngine --> DeltaStateBFSEngine : extends
+    L2PruningEngine --> SBInjector : physics_primitives
+    L3EvaluationEngine --> KSnapEngine : κ-Snap projection
+    L3EvaluationEngine --> ScoredCandidate : produces
+    L4DecisionEngine --> ScoredCandidate : consumes
+    ScoredCandidate --> Node : wraps
