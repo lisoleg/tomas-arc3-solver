@@ -8,9 +8,14 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "src
 
 import arc_agi
 from arc_agi import Arcade, OperationMode
-from arcengine import GameAction, ActionInput
+from arcengine import GameAction, ActionInput, GameState
 from agent.game_solvers import solve_game, SOLVERS
 from agent.game_profiles import ALL_GAME_BASELINES
+
+# v3.32.0: Games whose lambda closures break after deepcopy (okllwtboml dict).
+# For these games, solver computes plans from game internals — verification
+# must use Δ-State Replay (replay actions on original game) instead of deepcopy.
+_DEEPCOPY_UNSAFE_GAMES = frozenset({"tn36"})
 
 arc = Arcade(operation_mode=OperationMode.OFFLINE)
 
@@ -53,33 +58,63 @@ for gid in ALL_GAMES:
     solved = False
     steps = len(plan) if plan else 999
     if plan:
-        g3 = copy.deepcopy(g2)
-        from arcengine import GameState
-        for step in plan[:300]:
-            aid, data = step
-            ai = ActionInput(id=aid, data=data if data else {})
-            try:
-                g3.perform_action(ai)
-            except Exception:
-                pass
-            # CRITICAL: call complete_action() to settle animation frames
-            for _ in range(5):
+        # v3.32.0: Δ-State Replay verification for deepcopy-unsafe games
+        if gid in _DEEPCOPY_UNSAFE_GAMES:
+            # Replay on original game (solver was called on original too)
+            # Save/restore level index to detect level transitions
+            orig_level = g2._current_level_index
+            for step in plan[:300]:
+                aid, data = step
+                ai = ActionInput(id=aid, data=data if data else {})
+                try:
+                    g2.perform_action(ai)
+                except Exception:
+                    pass
+                for _ in range(5):
+                    if hasattr(g2, '_current_level_index') and g2._current_level_index > orig_level:
+                        break
+                    if hasattr(g2, '_state') and g2._state == GameState.WIN:
+                        break
+                    try:
+                        g2.complete_action()
+                    except Exception:
+                        break
+                if hasattr(g2, '_current_level_index') and g2._current_level_index > orig_level:
+                    solved = True
+                    steps = plan.index(step) + 1
+                    break
+                if hasattr(g2, '_state') and g2._state == GameState.WIN:
+                    solved = True
+                    steps = plan.index(step) + 1
+                    break
+        else:
+            # Deepcopy-safe games: verify on fresh deepcopy
+            g3 = copy.deepcopy(g2)
+            for step in plan[:300]:
+                aid, data = step
+                ai = ActionInput(id=aid, data=data if data else {})
+                try:
+                    g3.perform_action(ai)
+                except Exception:
+                    pass
+                # CRITICAL: call complete_action() to settle animation frames
+                for _ in range(5):
+                    if hasattr(g3, '_current_level_index') and g3._current_level_index > original_level:
+                        break
+                    if hasattr(g3, '_state') and g3._state == GameState.WIN:
+                        break
+                    try:
+                        g3.complete_action()
+                    except Exception:
+                        break
                 if hasattr(g3, '_current_level_index') and g3._current_level_index > original_level:
+                    solved = True
+                    steps = plan.index(step) + 1
                     break
                 if hasattr(g3, '_state') and g3._state == GameState.WIN:
+                    solved = True
+                    steps = plan.index(step) + 1
                     break
-                try:
-                    g3.complete_action()
-                except Exception:
-                    break
-            if hasattr(g3, '_current_level_index') and g3._current_level_index > original_level:
-                solved = True
-                steps = plan.index(step) + 1
-                break
-            if hasattr(g3, '_state') and g3._state == GameState.WIN:
-                solved = True
-                steps = plan.index(step) + 1
-                break
     
     rhae = min(115.0, (baseline / max(1, steps))**2 * 100) if solved else 0
     phase = "Adapter" if SOLVERS.get(gid) else "Pipeline"
