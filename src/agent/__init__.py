@@ -434,3 +434,77 @@ __all__ = [
     "WALL_BFS_MAX_DEPTH",
     "WALL_BFS_MAX_NODES",
 ]
+
+# ── v4.0 — 主动探测+复盘框架 (第三篇文章) ──
+from .semi_private_prober import (
+    ProbeResult,
+    ProbeBatch,
+    SemiPrivateProber,
+    PROBE_DELTA_K,
+    PROBE_MIN_CONFIDENCE,
+    MAX_PROBE_ROUNDS,
+    MAX_SUBMISSIONS_PER_ROUND,
+    ETA_EST_SCALE,
+    MAX_EML_RECONSTRUCT_ITERS,
+)
+from .postmortem_analyzer import (
+    RuleInductionCheck,
+    RankingCheck,
+    PartialAcceptLocator,
+    PostmortemDiagnosis,
+    PostmortemAnalyzer,
+    QUESTION_RULE_INDUCTION,
+    QUESTION_RANKING,
+    QUESTION_PARTIAL_ACCEPT,
+    PRIOR_UPDATE_RATE,
+    RULE_CONFIDENCE_THRESHOLD,
+    RANKING_CONSISTENCY_THRESHOLD,
+    PARTIAL_ACCEPT_SEARCH_DEPTH,
+    MAX_POSTMORTEM_ROUNDS,
+)
+from .planner_agent_patch import (
+    RankedSolution,
+    solve_ranked,
+    kappa_snap_perceive_ranked,
+    patch_planner_agent,
+    MAX_RANKED_CANDIDATES,
+    ETA_MIN_GAP,
+    PROBE_STOP_THRESHOLD,
+    PROBE_TIMEOUT,
+)
+
+__all__ += [
+    # v4.0 — 主动探测引擎
+    "ProbeResult",
+    "ProbeBatch",
+    "SemiPrivateProber",
+    "PROBE_DELTA_K",
+    "PROBE_MIN_CONFIDENCE",
+    "MAX_PROBE_ROUNDS",
+    "MAX_SUBMISSIONS_PER_ROUND",
+    "ETA_EST_SCALE",
+    "MAX_EML_RECONSTRUCT_ITERS",
+    # v4.0 — 复盘分析引擎
+    "RuleInductionCheck",
+    "RankingCheck",
+    "PartialAcceptLocator",
+    "PostmortemDiagnosis",
+    "PostmortemAnalyzer",
+    "QUESTION_RULE_INDUCTION",
+    "QUESTION_RANKING",
+    "QUESTION_PARTIAL_ACCEPT",
+    "PRIOR_UPDATE_RATE",
+    "RULE_CONFIDENCE_THRESHOLD",
+    "RANKING_CONSISTENCY_THRESHOLD",
+    "PARTIAL_ACCEPT_SEARCH_DEPTH",
+    "MAX_POSTMORTEM_ROUNDS",
+    # v4.0 — κ-Snap solve_ranked()接口
+    "RankedSolution",
+    "solve_ranked",
+    "kappa_snap_perceive_ranked",
+    "patch_planner_agent",
+    "MAX_RANKED_CANDIDATES",
+    "ETA_MIN_GAP",
+    "PROBE_STOP_THRESHOLD",
+    "PROBE_TIMEOUT",
+]

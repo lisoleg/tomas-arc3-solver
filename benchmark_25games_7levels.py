@@ -7,14 +7,17 @@ sys.path.insert(0, '.')
 
 import arc_agi
 from arc_agi import Arcade, OperationMode
-from arcengine import GameAction, ActionInput
+from arcengine import GameAction, ActionInput, GameState
 from src.agent.game_solvers import solve_game
 from src.agent.game_profiles import ALL_GAME_BASELINES
 import copy, time
 
+# v3.32.0: Games whose lambda closures break after deepcopy (okllwtboml dict).
+# For these games, replay actions on original game instead of deepcopy verification.
+_DEEPCOPY_UNSAFE_GAMES = frozenset({"tn36"})
+
 def check_solved(game, original_level):
     """Check if game has advanced past original_level."""
-    from arcengine import GameState
     return (hasattr(game, '_current_level_index') and game._current_level_index > original_level) \
         or (hasattr(game, '_state') and game._state == GameState.WIN)
 
@@ -68,22 +71,42 @@ for gid in ALL_GAMES:
         solved = False
         steps = len(plan) if plan else 999
         if plan:
-            g3 = copy.deepcopy(g2)
-            for step in plan[:300]:
-                aid, data = step
-                ai = ActionInput(id=aid, data=data if data else {})
-                try:
-                    g3.perform_action(ai)
-                except Exception:
-                    pass
-                for _ in range(2):
+            # v3.32.0: Δ-State Replay for deepcopy-unsafe games
+            if gid in _DEEPCOPY_UNSAFE_GAMES:
+                # Replay on original game (solver was called on original too)
+                for step in plan[:300]:
+                    aid, data = step
+                    ai = ActionInput(id=aid, data=data if data else {})
                     try:
-                        g3.complete_action()
+                        g2.perform_action(ai)
                     except Exception:
+                        pass
+                    for _ in range(2):
+                        try:
+                            g2.complete_action()
+                        except Exception:
+                            break
+                    if check_solved(g2, li):
+                        solved = True
                         break
-                if check_solved(g3, li):
-                    solved = True
-                    break
+            else:
+                # Deepcopy-safe games: verify on fresh copy
+                g3 = copy.deepcopy(g2)
+                for step in plan[:300]:
+                    aid, data = step
+                    ai = ActionInput(id=aid, data=data if data else {})
+                    try:
+                        g3.perform_action(ai)
+                    except Exception:
+                        pass
+                    for _ in range(2):
+                        try:
+                            g3.complete_action()
+                        except Exception:
+                            break
+                    if check_solved(g3, li):
+                        solved = True
+                        break
 
         rhae = min(115.0, (baseline / max(1, steps))**2 * 100) if solved else 0
         level_scores.append((li, solved, steps, baseline, round(rhae, 1), round(elapsed, 1)))
