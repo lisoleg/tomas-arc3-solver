@@ -42,18 +42,17 @@ from .delta_state import (
     PARAM_BFS_BUDGET,
 )
 
-
-# ============================================================================
-# §1b. Critique Self-Loop 异常 (文章 §14.1)
-# ============================================================================
-
-class CannotConverge(Exception):
-    """critique_self_loop自纠错循环收敛失败异常。
-
-    当κ-优选选不出候选(η > δ_K)且自纠错3轮仍无法收敛时抛出。
-    κ-Phase: 批评与自我批评 = κ-Snap自指残差校验 + Dead-Zero熔断
-    """
-    pass
+# v4.0 — Critique-Self-Loop独立模块 (deepcopy-safe, 泛化接口)
+from .critique_loop import (
+    CannotConverge,
+    CritiqueSelfLoop,
+    CritiqueResult,
+    CritiqueDiagnosis,
+    diagnose_eta,
+    adjust_macro_params,
+    critique_self_loop,
+    log_critique_to_psi_audit,
+)
 
 
 # ============================================================================
@@ -940,7 +939,7 @@ class HybridSearchPipeline:
         max_retry: int = 3,
         l4_diagnosis: str = "",
     ) -> Optional[List[Dict[str, Any]]]:
-        """critique_self_loop 自纠错循环 (文章 §14.1 + Appendix A)。
+        """critique_self_loop 自纠错循环 — 委托给独立CritiqueSelfLoop引擎 (v4.0)。
 
         κ-优选选不出候选(η > δ_K)时触发自纠错:
           1. diagnose(η): 分析最大残差来源
@@ -948,8 +947,8 @@ class HybridSearchPipeline:
           3. 重跑L1→L2→L3→L4管线(放宽参数)
           4. 最多max_retry=3次, 失败则raise CannotConverge
 
+        v4.0: 委托给独立CritiqueSelfLoop模块，通过回调函数接入pipeline。
         κ-Phase: 批评与自我批评 = κ-Snap自指残差校验 + Dead-Zero熔断
-        允许负Inflow修正(承认错误), 周期性KS_PROJ self_view校验。
 
         Args:
             evaluated_set: L3评估后的候选集(η都>δ_K)。
@@ -961,91 +960,73 @@ class HybridSearchPipeline:
             max_nodes: 最大扩展节点数。
             max_time_remaining: 剩余时间预算(秒)。
             max_retry: 最大自纠错轮数, 默认3。
+            l4_diagnosis: L4选择器诊断信息。
 
         Returns:
             自纠错后的最优候选列表, 或None(收敛失败)。
         """
-        import time as _time
-
-        # ★ 升级5: 记录critique_self_loop触发到ψ-Audit日志
-        from .kappa_selector import PsiAuditEntry, get_psi_audit_log
-        psi_audit = get_psi_audit_log()
-
-        for retry_idx in range(max_retry):
-            t_critique: float = _time.time()
-            if max_time_remaining <= 0:
-                break  # 时间耗尽
-
-            # Step 1: diagnose(η) — 分析最大残差来源
-            diagnosis: Dict[str, Any] = self._diagnose_eta(evaluated_set)
-            diagnosis['retry_idx'] = retry_idx
-            diagnosis['critique_phase'] = f'critique_self_loop_{retry_idx}'
-            # ★ 升级5: 合并L4选择器的诊断信息
-            if l4_diagnosis:
-                diagnosis['l4_diagnosis'] = l4_diagnosis
-
-            # Step 2: adjust_macro — 根据诊断放宽搜索参数
-            adjusted_depth: int = min(max_depth + 5 * (retry_idx + 1), 60)
-            adjusted_nodes: int = min(max_nodes * (2 ** retry_idx), 500000)
-
-            # Step 3: 重跑L1→L2→L3→L4管线(放宽参数)
+        # ── 构建管线回调函数 ──
+        # pipeline_fn: 调用self的L1→L2→L3→L4管线
+        def pipeline_fn(depth: int, nodes: int, **kwargs) -> List[Dict[str, Any]]:
+            """L1→L2→L3→L4管线回调 — 供CritiqueSelfLoop调用。"""
             try:
                 l1_result: CandidateSet = self.l1.generate(
                     root_state, action_space or ActionSpace('game'),
-                    adjusted_depth, adjusted_nodes,
-                    **{'critique_retry': retry_idx, 'diagnosis': diagnosis},
+                    depth, nodes,
+                    **kwargs,
                 )
             except Exception:
-                continue  # L1失败 → 继续下一轮
+                return []  # L1失败 → 空列表
 
             if l1_result.is_empty():
-                continue
+                return []
 
             l2_result: CandidateSet = self.l2.prune(l1_result)
             if l2_result.is_empty():
-                continue
+                return []
 
             l3_result: EvaluatedCandidateSet = self.l3.evaluate(l2_result, examples)
             if l3_result.is_empty():
-                continue
+                return []
 
-            best_candidates: List[Dict[str, Any]] = self.l4.select(l3_result)
-            if len(best_candidates) > 0:
-                # ★ 自纠错成功! 批评→修正→收敛
-                best_candidates[0]['critique_self_loop'] = {
-                    'retry_idx': retry_idx,
-                    'diagnosis': diagnosis,
-                    'adjusted_depth': adjusted_depth,
-                    'adjusted_nodes': adjusted_nodes,
-                }
-                # ★ 升级5: 记录自纠错成功到ψ-Audit日志
-                psi_audit.append(PsiAuditEntry(
-                    selector='critique_self_loop',
-                    eta=best_candidates[0].get('eta', 1.0),
-                    confidence=best_candidates[0].get('confidence', 0.0),
-                    liu_score=best_candidates[0].get('liu_score', 0.0),
-                    bayesian_rhae_score=best_candidates[0].get('bayesian_rhae_score', 0.0),
-                    timestamp=_time.time(),
-                    node_id=best_candidates[0].get('node_id', -1),
-                    needs_critique=False,
-                    diagnosis=f"critique_self_loop converged at retry {retry_idx}",
-                ))
-                verified: Optional[List[Dict[str, Any]]] = self._verify(
-                    best_candidates, l3_result.replay_engine, examples,
-                )
-                if verified is not None:
-                    return verified
+            return self.l4.select(l3_result)
 
-            # 时间预算检查
-            elapsed: float = _time.time() - t_critique
-            max_time_remaining -= elapsed
+        # verify_fn: 调用self._verify验证候选
+        def verify_fn(candidates: List[Dict[str, Any]]) -> Optional[List[Dict[str, Any]]]:
+            """验证回调 — 供CritiqueSelfLoop调用。"""
+            return self._verify(candidates, replay_engine, examples)
 
-        # max_retry轮自纠错均失败 → CannotConverge
-        # κ-Phase: 批评与自我批评 = 承认无法收敛 (负Inflow修正)
+        # ── 委托给独立CritiqueSelfLoop引擎 ──
+        engine = CritiqueSelfLoop(
+            max_retry=max_retry,
+            base_depth=max_depth,
+            base_nodes=max_nodes,
+            max_time_budget=max_time_remaining,
+        )
+
+        # 将evaluated_set.candidates转换为List[Dict]供diagnose_eta使用
+        candidates_list = evaluated_set.candidates if hasattr(evaluated_set, 'candidates') \
+            else list(evaluated_set)
+
+        result: CritiqueResult = engine.run(
+            candidates=candidates_list,
+            pipeline_fn=pipeline_fn,
+            l4_diagnosis=l4_diagnosis,
+            verify_fn=verify_fn,
+        )
+
+        # ── 记录ψ-Audit日志 ──
+        if result.converged and result.verified_candidates:
+            log_critique_to_psi_audit(result, result.verified_candidates[0])
+        else:
+            log_critique_to_psi_audit(result)
+
+        if result.converged:
+            return result.verified_candidates
         return None
 
     def _diagnose_eta(self, evaluated_set: EvaluatedCandidateSet) -> Dict[str, Any]:
-        """diagnose(η) — 分析评估集残差来源 (文章 §14.1)。
+        """diagnose(η) — 委托给独立diagnose_eta函数 (v4.0)。
 
         κ-Phase: 自指残差校验 = κ-Snap project self_view → KS_GX residual_self
         如果residual_self > δ_K → DZFUSE + INFLOW correction
@@ -1054,34 +1035,12 @@ class HybridSearchPipeline:
             evaluated_set: L3评估后的候选集。
 
         Returns:
-            诊断字典: {best_eta, worst_eta, avg_eta, eta_range, deadlock_count, ...}
+            诊断字典(兼容旧接口)。
         """
-        if evaluated_set.is_empty():
-            return {
-                'best_eta': None, 'worst_eta': None, 'avg_eta': None,
-                'eta_range': None, 'deadlock_count': 0,
-                'diagnosis': 'empty_evaluated_set',
-            }
-
-        etas: List[float] = [c.get('eta', 1.0) for c in evaluated_set.candidates]
-        best_eta: float = min(etas)
-        worst_eta: float = max(etas)
-        avg_eta: float = sum(etas) / len(etas)
-
-        deadlock_count: int = sum(
-            1 for c in evaluated_set.candidates
-            if c.get('deadlock_checked', False) and c.get('eta', 0.0) >= 1.0
-        )
-
-        return {
-            'best_eta': best_eta,
-            'worst_eta': worst_eta,
-            'avg_eta': avg_eta,
-            'eta_range': worst_eta - best_eta,
-            'deadlock_count': deadlock_count,
-            'candidate_count': len(etas),
-            'diagnosis': f'eta_range={worst_eta - best_eta:.4f}, avg={avg_eta:.4f}',
-        }
+        candidates = evaluated_set.candidates if hasattr(evaluated_set, 'candidates') \
+            else list(evaluated_set)
+        diag: CritiqueDiagnosis = diagnose_eta(candidates)
+        return diag.to_dict()
 
 
 # ============================================================================

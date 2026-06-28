@@ -24,6 +24,15 @@ from typing import Any, Optional
 
 import numpy as np
 
+# v4.0 — TN36数据驱动OPCODE_TABLE (deepcopy-safe)
+from .tn36_opcode import (
+    TN36StateMachine,
+    OPCODE_TABLE,
+    extract_both_state_machines,
+    find_editable_sm,
+    execute_opcode,
+)
+
 # TOMAS Sleep-Step Learning (for episode recording integration)
 from .tomas_learner import EpisodeTrace, ActionTrace
 
@@ -3415,42 +3424,30 @@ def _solve_oracle_click_replay(
 
 
 def solve_tn36(game: Any, level_idx: int) -> list | None:
-    """Solve TN36: Click-programming state machine game — Direct Computation (v3.30.0).
+    """Solve TN36: Click-programming state machine game — Data-Driven OPCODE (v4.0).
 
-    Game mechanics (CORRECTED from v3.19.0):
+    Game mechanics (from tn36_opcode.py):
         - Actions: [6] (CLICK only)
         - Two state machines: mvqheosngn (LEFT) and bzirenxmrg (RIGHT)
         - LEFT SM: viknfwcfei=True (READ-ONLY) — cannot toggle bits
         - RIGHT SM: viknfwcfei=False (EDITABLE) — CAN toggle bits
         - Each SM has htntnzkbzu (current) and aqszntqeae (target)
         - Buttons have opcodes (bitmask of active data bits)
-        - okllwtboml dict maps opcode → animation instruction (lambda)
-        - Cancel button triggers mmmdksslmq → animation execution
         - Win: htnt reaches target (position + rotation + scale + sjmtdfxdrc match)
 
-    CRITICAL: deepcopy breaks okllwtboml lambda closures (cell refs original self).
-    This solver computes the plan DIRECTLY from game internals — NO deepcopy needed.
+    Architecture (v4.0 — Data-Driven, zero-copy):
+        Phase 0: Extract state machines via tn36_opcode (IC锚定, deepcopy-safe)
+        Phase 0.5: Find editable SM via find_editable_sm()
+        Phase 1: Read target state (embedded in TN36StateMachine.target_* fields)
+        Phase 2: Compute target program via compute_target_program() (κ-陪集因果归约)
+        Phase 3: Generate toggle clicks from bit differences (needs game object for sprites)
+        Phase 4: Add cancel click to trigger animation
+        Phase 5: Return verified plan
 
-    Strategy (v3.30.0 — Direct Computation, zero-copy):
-        1. Find the editable SM (viknfwcfei=False)
-        2. Read htnt/target positions, rotation, scale, sjmtdfxdrc
-        3. Compute needed opcodes from movement/transform deltas
-        4. Toggle bits to set the target program
-        5. Click cancel to trigger animation
-        6. Return action plan
-
-    Opcode mapping (CSPOIQWER = 4):
-        0: NOP (mlejdghzfo)
-        1: LEFT (-4, 0)
-        2: RIGHT (+4, 0)
-        3: DOWN (0, +4)
-        5: rotate +90
-        6: rotate -90
-        7: rotate +180
-        8: scale +1
-        9: scale -1
-        33: UP (0, -4)
-        34: LEFT-ALT (-4, 0)
+    κ-Phase洞察:
+        - λ闭包 = IC未锚定 = 本体学错误 → 用OPCODE_TABLE纯数据替代
+        - TN36StateMachine = κ-陪集数据对象 → deepcopy完全安全
+        - compute_target_program = κ-陪集因果归约 → 按优先级生成opcode序列
     """
     from arcengine import GameAction
 
@@ -3460,27 +3457,13 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
     if _is_level_solved(game, original_level):
         return []
 
-    # ── Phase 0: Extract game internals — NO deepcopy ──
-    fdk = getattr(game, "fdksqlmpki", None)
-    if fdk is None:
+    # ── Phase 0: Extract state machines via tn36_opcode (IC锚定) ──
+    left_sm, right_sm = extract_both_state_machines(game)
+    if left_sm is None and right_sm is None:
         return None
 
-    left_sm = getattr(fdk, "mvqheosngn", None)
-    right_sm = getattr(fdk, "bzirenxmrg", None)
-    if left_sm is None or right_sm is None:
-        return None
-
-    # ── Phase 0.5: Find the EDITABLE SM (viknfwcfei=False) ──
-    # CRITICAL: Previous versions assumed RIGHT SM is read-only — WRONG!
-    # In L0: LEFT is read-only, RIGHT is editable.
-    editable_sm = None
-    editable_label = ""
-    for sm_candidate, label in [(left_sm, "left"), (right_sm, "right")]:
-        prog_bar = getattr(sm_candidate, "ukwrvhanub", None)
-        if prog_bar is not None and not getattr(prog_bar, "viknfwcfei", True):
-            editable_sm = sm_candidate
-            editable_label = label
-            break
+    # ── Phase 0.5: Find the EDITABLE SM ──
+    editable_sm = find_editable_sm(left_sm, right_sm)
 
     if editable_sm is None:
         # Neither SM is editable — fall back to BFS
@@ -3491,102 +3474,35 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
                 max_depth=15, max_time=8.0, max_nodes=50000)
         return None
 
-    # ── Phase 1: Read target state from the editable SM ──
-    htnt = editable_sm.htntnzkbzu
-    target = editable_sm.aqszntqeae
+    # ── Phase 1: Target state already embedded in editable_sm ──
+    # editable_sm is a TN36StateMachine with:
+    #   x, y, rotation, scale, sjmtdfxdrc (current state)
+    #   target_x, target_y, target_rotation, target_scale, target_sjmtdfxdrc (target)
+    # We still need the game object for click positions (prog_bar, buttons, cancel button)
 
-    htnt_x = getattr(htnt, "x", 0)
-    htnt_y = getattr(htnt, "y", 0)
-    htnt_rotation = getattr(htnt, "rotation", 0)
-    htnt_scale = getattr(htnt, "scale", 1)
-    htnt_sjmtdfxdrc = getattr(htnt, "sjmtdfxdrc", 0)
+    # Find the game object for the editable SM (needed for click coordinates)
+    fdk = getattr(game, "fdksqlmpki", None)
+    if fdk is None:
+        return None
 
-    target_x = getattr(target, "x", 0) if target else 0
-    target_y = getattr(target, "y", 0) if target else 0
-    target_rotation = getattr(target, "rotation", 0) if target else 0
-    target_scale = getattr(target, "scale", 1) if target else 1
-    target_sjmtdfxdrc = getattr(target, "sjmtdfxdrc", 0) if target else 0
+    game_sm_obj = getattr(fdk, "mvqheosngn", None) if editable_sm.label == "left" \
+        else getattr(fdk, "bzirenxmrg", None)
+    if game_sm_obj is None:
+        return None
 
-    # ── Phase 2: Compute target program from state deltas ──
-    CSPOIQWER = 4  # Step size constant from TN36 game code
+    prog_bar = getattr(game_sm_obj, "ukwrvhanub", None)
+    if prog_bar is None:
+        return None
 
-    # Movement deltas
-    dx = target_x - htnt_x
-    dy = target_y - htnt_y
-
-    # Compute number of single-step moves needed
-    dx_steps = dx // CSPOIQWER  # positive = RIGHT, negative = LEFT
-    dy_steps = dy // CSPOIQWER  # positive = DOWN, negative = UP
-
-    # Rotation delta (mod 360, normalized)
-    rotation_delta = (target_rotation - htnt_rotation) % 360
-
-    # Scale delta
-    scale_delta = target_scale - htnt_scale
-
-    # sjmtdfxdrc delta
-    sjmtdfxdrc_delta = target_sjmtdfxdrc - htnt_sjmtdfxdrc
-
-    # Build the target opcode sequence
-    target_prog: list[int] = []
-
-    # Add rotation opcodes first (before movement, so htnt faces correct direction)
-    if rotation_delta == 90:
-        target_prog.append(5)   # rotate +90
-    elif rotation_delta == -90 or rotation_delta == 270:
-        target_prog.append(6)   # rotate -90
-    elif rotation_delta == 180:
-        target_prog.append(7)   # rotate +180
-
-    # Add scale opcodes
-    for _ in range(abs(scale_delta)):
-        target_prog.append(8 if scale_delta > 0 else 9)
-
-    # Add movement opcodes (horizontal first, then vertical)
-    # RIGHT: opcode 2, LEFT: opcode 1, DOWN: opcode 3, UP: opcode 33
-    for _ in range(abs(dx_steps)):
-        target_prog.append(2 if dx_steps > 0 else 1)
-
-    for _ in range(abs(dy_steps)):
-        target_prog.append(3 if dy_steps > 0 else 33)
-
-    # Pad with NOP (opcode 0) if prog is shorter than number of buttons
-    prog_bar = editable_sm.ukwrvhanub
     n_buttons = len(getattr(prog_bar, "pfyayhyovw", []))
+    if n_buttons == 0:
+        return None
 
-    if len(target_prog) > n_buttons:
-        # Too many moves needed — can't fit in program slots
-        # Try double-step opcodes (10=RIGHT*2, 12=LEFT*2) to reduce steps
-        compressed_prog: list[int] = []
-        # Rotations and scales stay the same
-        if rotation_delta == 90:
-            compressed_prog.append(5)
-        elif rotation_delta == -90 or rotation_delta == 270:
-            compressed_prog.append(6)
-        elif rotation_delta == 180:
-            compressed_prog.append(7)
-        for _ in range(abs(scale_delta)):
-            compressed_prog.append(8 if scale_delta > 0 else 9)
+    # ── Phase 2: Compute target program via κ-陪集因果归约 ──
+    target_prog = editable_sm.compute_target_program(n_buttons)
 
-        # Use double-step opcodes where possible
-        remaining_dx = abs(dx_steps)
-        while remaining_dx >= 2:
-            compressed_prog.append(10 if dx_steps > 0 else 12)
-            remaining_dx -= 2
-        for _ in range(remaining_dx):
-            compressed_prog.append(2 if dx_steps > 0 else 1)
-
-        remaining_dy = abs(dy_steps)
-        while remaining_dy >= 2:
-            compressed_prog.append(3 if dy_steps > 0 else 33)
-            remaining_dy -= 2
-        for _ in range(remaining_dy):
-            compressed_prog.append(3 if dy_steps > 0 else 33)
-
-        target_prog = compressed_prog
-
-    # If still too long, fall back to BFS
-    if len(target_prog) > n_buttons:
+    if target_prog is None:
+        # Cannot fit target in n_buttons → fall back to BFS
         _bfs_actions = _generate_click_actions(game, ["Maidxz", "sucqgk", "sys_click",
             "tozzsf", "taptxx", "bltjrl", "inwola"])
         if _bfs_actions:
@@ -3594,14 +3510,20 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
                 max_depth=15, max_time=8.0, max_nodes=50000)
         return None
 
-    # Pad with NOP to fill remaining slots
-    while len(target_prog) < n_buttons:
-        target_prog.append(0)
+    # κ-Snap验证: simulate the target program on a pure-data SM
+    # If the simulated result doesn't reach target → program is wrong
+    simulated_sm = editable_sm.apply_program(target_prog)
+    if not simulated_sm.is_at_target():
+        # Simulation verification failed → fall back to BFS
+        _bfs_actions = _generate_click_actions(game, ["Maidxz", "sucqgk", "sys_click",
+            "tozzsf", "taptxx", "bltjrl", "inwola"])
+        if _bfs_actions:
+            return _coset_prioritized_solver(game, candidate_actions=_bfs_actions,
+                max_depth=15, max_time=8.0, max_nodes=50000)
+        return None
 
-    # ── Phase 3: Generate toggle plan ──
-    # For each button, compute which bits need toggling
-    # Button opcode = bitmask of active data bits: sum(1<<i for i, bit in enumerate(bits) if bit.active)
-    # Bit 0 = 1<<0 = 1, Bit 1 = 1<<1 = 2 → opcode 3 = both bits active
+    # ── Phase 3: Generate toggle clicks from bit differences ──
+    # Each button has a bitmask opcode; toggle bits to match target_prog[i].
     plan: list[tuple] = []
     buttons = getattr(prog_bar, "pfyayhyovw", [])
 
@@ -3635,7 +3557,7 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
                 plan.append((GameAction.ACTION6, {"x": cx, "y": cy}))
 
     # ── Phase 4: Add cancel click to trigger animation ──
-    cancel_obj = getattr(editable_sm, "sxhtkytekm", None)
+    cancel_obj = getattr(game_sm_obj, "sxhtkytekm", None)
     if cancel_obj is not None:
         cancel_sprite = getattr(cancel_obj, "axbjgpzkyi", None)
         if cancel_sprite is not None:
@@ -3651,23 +3573,13 @@ def solve_tn36(game: Any, level_idx: int) -> list | None:
                 max_depth=15, max_time=8.0, max_nodes=50000)
         return None
 
-    # ── Phase 5: Handle switcher sprites for multi-config levels ──
-    # Some levels require selecting a specific configuration first.
-    # Check if there are switcher sprites (qqifsatqdo / miytdaqzei)
-    switchers = getattr(fdk, "miytdaqzei", [])
-    if switchers and len(switchers) > 1:
-        # We may need to click a specific switcher before toggling bits.
-        # For now, try the current configuration first.
-        # If the plan doesn't solve, fall through to BFS.
-        pass  # TODO: multi-config selection in future version
-
-    # ── Phase 6: Return plan ──
-    # NO deepcopy, NO verification on copy — direct computation is correct.
-    # The plan will be verified by solve_game's _verify_plan on the original game.
+    # ── Phase 5: Return verified plan ──
+    # κ-Snap验证已在Phase 2通过(simulated_sm.is_at_target())
+    # 实际验证由solve_game的_verify_plan在original game上执行
     if plan:
         return plan
 
-    # ── Phase 7: Fallback — BFS with no deepcopy ──
+    # ── Phase 6: Fallback — BFS ──
     _bfs_actions = _generate_click_actions(game, ["Maidxz", "sucqgk", "sys_click",
         "tozzsf", "taptxx", "bltjrl", "inwola"])
     if _bfs_actions:
