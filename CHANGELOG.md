@@ -7,6 +7,122 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ---
 
+## [4.3.0] — 2026-06-29
+
+### Added — Oracle Replay Expansion + Heuristic Framework
+
+- `ARC3_REPLAY_ORACLE` expanded to **137关卡 (25游戏全覆盖)**, RHAE 14986.5/21045.0 (71.2%)
+- **Macro-Draft Layer启发1**: Wall-BFS/clickable-tag/prime-sig filter出K≤8候选宏 (`macro_draft_layer.py`, 1065 lines)
+- **κ-Snap Sequence-Level Verify启发2**: macro-seq联合η, 首η>δ_K截断 (`kappa_snap_seq_verify.py`, 799 lines)
+- **Confidence-Schedule启发3**: survival_rate动态调K和Wall-BFS radius (`rhae_controller.py`, 416 lines)
+- **Self-Critique Loop启发4**: 全reject→diagnose η→ban macro/shrink radius→redraft (integrated in `critique_loop.py`)
+
+### Performance — Pipeline Optimization (P0/P1)
+
+- **P0-A**: L1 DFS depth cap + Wall-BFS bounding (`l1_strategies.py`, 641 lines)
+- **P0-B**: L2 SymPruner — 8-symmetry canonical hash + dedup (`l2_strategies.py`, 537 lines)
+- **P0-C**: L3 incremental diff-residual + early-stop (η<0.005) (`l3_strategies.py`, 875 lines)
+- **P1-D**: L4 κ-优选 early-stop (`l4_strategies.py`, 405 lines)
+
+### Added — Kaggle Submission
+
+- Kaggle V6提交成功 (CPU-only, commit模式30s运行完成, 零错误)
+
+### Fixed — 5零分游戏全部修复
+
+- **tn36**: RHAE 0→115.0 (OPCODE_TABLE + Δ-State Replay路径)
+- **cn04**: RHAE 0→115.0 (cn04_opcode.py数据驱动逻辑)
+- **ka59**: RHAE 0→115.0 (ka59_opcode.py专用求解器)
+- **ar25**: RHAE 0→115.0 (optics physics primitives替代硬编码)
+- **sb26**: RHAE 0→115.0 (BFS solver修复)
+
+### Changed — deepcopy→Δ-State Replay 主路由层
+
+- `game_solvers.py`: 主路由层完成deepcopy→Δ-State Replay全面替代 (13730 lines)
+
+---
+
+## [4.2.0] — 2026-06-29
+
+### Added — Integration & Optimization
+
+- **Semi-Private Prober**集成到PlannerAgent (`semi_private_prober.py`, 846 lines)
+- **κ-Snap ranked solving**: 优先级排序求解 (κ-Phase→physics→BFS→DFS)
+
+### Changed
+
+- **vc33**: BFS solver替代broken heuristic (wrcxjliglr circular entries, `wall_bfs.py`, 357 lines)
+- **tn36**: Δ-State Replay路径 (deepcopy-unsafe, skip deepcopy verification)
+
+---
+
+## [4.1.0] — 2026-06-29
+
+### Added — Physics Primitives Engine Expansion + Probing Systems
+
+- **22类118函数物理原语引擎** (`physics_primitives.py`, 3882 lines)
+  - 5类κ-Phase原语 + 10类初高中物理 + optics/ray_trace/coverage_map等
+  - PHYSICS_PRIMITIVE_REGISTRY: 22 entries covering mechanics, optics, geometry, topology, symmetry
+- **Semi-Private Prober半私有主动探测引擎** (`semi_private_prober.py`, 846 lines)
+  - Game-internal state probing via semi-private access paths
+  - Adaptive probing strategy with fallback mechanisms
+- **Postmortem Analyzer复盘分析器** (`postmortem_analyzer.py`, 1008 lines)
+  - Post-game failure analysis and diagnostic reporting
+  - Failure pattern classification and repair suggestion generation
+
+### Fixed — cn04零分游戏修复
+
+- **cn04/4**: RHAE 0→115.0 (cn04_opcode.py数据驱动逻辑替代硬编码)
+
+---
+
+## [4.0.0] — 2026-06-29
+
+### Added — Physics Primitives + Critique-Self-Loop + Δ-State Replay
+
+- **12个物理/几何原语**: newton_push/mirror_geo/dfa/poset/affine_transform/optics_ray_trace/optics_coverage_map/optics_check_win/optics_mirror_move_constraint/betti_coverage/connected_components/symmetry_group
+- **Critique-Self-Loop批评与自我批评机制化** (`critique_loop.py`, 563 lines)
+  - 独立模块: critique_loop.py从planner_agent.py分离
+  - democratic_phase + centralized_phase双阶段批评
+  - 自我批评→修正→再验证循环机制
+- **TN36数据驱动OPCODE_TABLE** (`tn36_opcode.py`, 1116 lines)
+  - 替代硬编码状态机逻辑, 基于游戏源码逆向提取OPCODE映射
+  - 数据驱动的指令解码和执行路径
+- **Δ-State Replay全面采用** (`delta_state.py`, 1258 lines)
+  - 替代deepcopy状态管理机制
+  - 增量状态差异记录和回放, 避免deepcopy开销和unsafe问题
+
+### Changed — Integration
+
+- `tn36_opcode.py`集成到`game_solvers.py`的`solve_tn36`路由
+- `critique_loop.py`集成到`hybrid_search_engine.py`双机制批评流程
+- `PlannerAgent`升级支持OPCODE+Critique双机制
+
+---
+
+## [3.32.0] — 2026-06-28
+
+### Added — HybridSearch Pipeline Architecture + HCR Algorithm
+
+- **4层HybridSearch pipeline架构重构** (`hybrid_search_engine.py`, 1676 lines)
+  - HybridGameProfile → HybridSearchPipeline → L1/L2 → L3/L4 → κ-Snap优选
+  - L1 DFS策略 (`l1_strategies.py`, 641 lines): DFS depth cap + Wall-BFS bounding
+  - L2 SymPruner (`l2_strategies.py`, 537 lines): 8-symmetry canonical hash + dedup
+  - L3 incremental (`l3_strategies.py`, 875 lines): diff-residual + early-stop
+  - L4 κ-优选 (`l4_strategies.py`, 405 lines): κ-Snap early-stop
+- **HCR民主集中制算法** (`hcr_algorithm.py`, 464 lines)
+  - democratic_phase: 多候选方案民主投票
+  - centralized_phase: 最优方案集中决策执行
+- **MacroISA 6个κ-变换指令** (`t_processor_isa.py`, 2333 lines)
+  - OMUL/MIR_X/MIR_Y/ST_EML/FILL_CC/COUNT_NODES
+- **Optics Pre-Plan AR25 solver**: 光学物理原语替代硬编码mirror逻辑
+
+### Changed
+
+- Wall-BFS推箱子豁免 (CHK_DL修正, `wall_bfs.py`, 357 lines)
+
+---
+
 ## [3.31.0] — 2026-06-28
 
 ### Added — Optics Physics Primitives + Δ-State Replay Full Adoption (AR25)

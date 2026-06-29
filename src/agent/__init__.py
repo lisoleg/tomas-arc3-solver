@@ -212,6 +212,18 @@ from .l1_strategies import (
     DeltaStateReplayCandidateGenerator,
     DirectComputeCandidateGenerator,
 )
+from .macro_draft_layer import (
+    MacroDraftGenerator,
+    PushMacroDraft,
+    ClickMacroDraft,
+    macro_draft_redraft,
+    K_MAX,
+    MACRO_LEN_MAX,
+    WALL_BFS_RADIUS_MAX,
+    PUSH_GAMES,
+    CLICK_GAMES,
+    PATTERN_GAMES,
+)
 from .l2_strategies import (
     PassThroughPruner,
     ComboSymmetryPruner,
@@ -224,6 +236,12 @@ from .l3_strategies import (
     DeadZeroFuseEvaluation,
     AsymIndexEvaluation,
     PassThroughEvaluation,
+)
+from .kappa_snap_seq_verify import (
+    KappaSnapSequenceVerify,
+    DeadZeroFuseDiagnosis,
+    DZFUSE_TRUNCATE_THRESHOLD,
+    MIN_PREFIX_LEN,
 )
 from .l4_strategies import (
     KappaSelector,
@@ -410,6 +428,17 @@ __all__ = [
     "WallBFSCandidateGenerator",
     "DeltaStateReplayCandidateGenerator",
     "DirectComputeCandidateGenerator",
+    # v4.3 — Macro-Draft Layer (DSpark启发1)
+    "MacroDraftGenerator",
+    "PushMacroDraft",
+    "ClickMacroDraft",
+    "macro_draft_redraft",
+    "K_MAX",
+    "MACRO_LEN_MAX",
+    "WALL_BFS_RADIUS_MAX",
+    "PUSH_GAMES",
+    "CLICK_GAMES",
+    "PATTERN_GAMES",
     # v3.18.0 — L2结构剪枝策略
     "PassThroughPruner",
     "ComboSymmetryPruner",
@@ -421,6 +450,11 @@ __all__ = [
     "DeadZeroFuseEvaluation",
     "AsymIndexEvaluation",
     "PassThroughEvaluation",
+    # v4.3 — κ-Snap Sequence-Level Verify (DSpark启发2)
+    "KappaSnapSequenceVerify",
+    "DeadZeroFuseDiagnosis",
+    "DZFUSE_TRUNCATE_THRESHOLD",
+    "MIN_PREFIX_LEN",
     # v3.18.0 — L4决策融合策略
     "KappaSelector",
     "LiuSelector",
@@ -433,7 +467,53 @@ __all__ = [
     "WallBFSEngine",
     "WALL_BFS_MAX_DEPTH",
     "WALL_BFS_MAX_NODES",
+    # v4.3 — OPCODE solver modules (吴文俊 machine-proof route)
+    "CN04SpriteData",
+    "CN04CoverageConfig",
+    "CN04CoveragePlan",
+    "solve_cn04_opcode",
+    "compute_coverage_plan",
+    "generate_action_plan",
+    "KA59GameData",
+    "KA59PushPlan",
+    "solve_ka59_opcode",
+    "compute_push_plan",
+    "generate_push_actions",
+    # v4.4 — tn36 OPCODE L1+ extension
+    "OPCODE_TABLE",
+    "_SJMTDFXDRC_TARGET_TO_OPCODE",
+    "TN36StateMachine",
+    "extract_both_state_machines",
+    "find_editable_sm",
 ]
+
+# ── v4.3 — OPCODE solver modules (吴文俊 machine-proof route) ──
+from .cn04_opcode import (
+    CN04SpriteData,
+    CN04CoverageConfig,
+    CN04CoveragePlan,
+    solve_cn04_opcode,
+    compute_coverage_plan,
+    generate_action_plan,
+)
+from .ka59_opcode import (
+    KA59GameData,
+    KA59PushPlan,
+    solve_ka59_opcode,
+    compute_push_plan,
+    generate_push_actions,
+)
+from .tn36_opcode import (
+    OPCODE_TABLE,
+    _SJMTDFXDRC_TARGET_TO_OPCODE,
+    TN36StateMachine,
+    WallRect,
+    extract_both_state_machines,
+    find_editable_sm,
+    compute_wall_aware_program,
+    _check_wall_collision,
+    _wall_aware_movement_bfs,
+)
 
 # ── v4.0 — 主动探测+复盘框架 (第三篇文章) ──
 from .semi_private_prober import (

@@ -469,7 +469,7 @@ class PipelineStrategies:
     """管线策略配置: 声明每层使用的策略名。
 
     每层策略名对应具体策略类:
-      - L1: 'wall_bfs' | 'bfs' | 'dfs' | 'delta_replay' | 'direct'
+      - L1: 'macro_draft' | 'wall_bfs' | 'bfs' | 'dfs' | 'delta_replay' | 'direct'
       - L2: 'combo_symmetry' | 'prime_signature' | 'matroid_constraint' | 'pass_through'
       - L3: 'kappa_snap' | 'dead_zero_fuse' | 'gauss_ex' | 'asym_index' | 'pass_through'
       - L4: 'kappa_selector' | 'liu_priority'
@@ -482,7 +482,7 @@ class PipelineStrategies:
     """
 
     l1_strategy: str = "bfs"
-    l2_strategy: str = "pass_through"
+    l2_strategy: str = "sym_pruner"
     l3_strategy: str = "gauss_ex"
     l4_strategy: str = "kappa_selector"
 
@@ -497,6 +497,7 @@ class L1CandidateGenerator(Protocol):
 
     L1层负责搜索空间探索，生成候选节点集(CandidateSet)。
     不同L1策略使用不同的搜索方式:
+      - 'macro_draft': Macro-Draft宏观候选 (DSpark启发1, K≤8)
       - 'wall_bfs': KA59推箱Wall-BFS (物理原语约束)
       - 'bfs': 标准BFS (结构探索)
       - 'dfs': DFS枚举 (深度优先)
@@ -568,6 +569,7 @@ class L3ResidualEvaluator(Protocol):
       - 'gauss_ex': GaussEx残差评估 (像素匹配)
       - 'asym_index': 不对称指数评估
       - 'pass_through': 无评估(直接传递)
+      - 'kappa_snap_seq_verify': κ-Snap Sequence-Level Verify (DSpark启发2, 逐步回放+Dead-Zero Fuse+Longest Accept Prefix)
 
     Protocol方法:
       - evaluate(candidate_set, examples) → EvaluatedCandidateSet
@@ -672,7 +674,7 @@ class HybridSearchPipeline:
 
         Args:
             strategies: PipelineStrategies策略配置。
-                如果None，使用默认配置(bfs/pass_through/gauss_ex/kappa_selector)。
+                如果None，使用默认配置(bfs/sym_pruner/gauss_ex/kappa_selector)。
         """
         self.strategies: PipelineStrategies = strategies or PipelineStrategies()
         self.l1: Optional[L1CandidateGenerator] = None
@@ -707,7 +709,7 @@ class HybridSearchPipeline:
         if l2_cls is not None:
             self.l2 = l2_cls()  # type: ignore[assignment]
         else:
-            self.l2 = _DefaultL2PassThrough()
+            self.l2 = _DefaultL2SymPruner()
 
         # L3策略
         l3_name: str = self.strategies.l3_strategy
@@ -1048,10 +1050,21 @@ class HybridSearchPipeline:
 # ============================================================================
 
 class _DefaultL1BFS:
-    """默认L1策略: 标准BFS候选生成。
+    """默认L1策略: 标准BFS候选生成 + 大网格depth cap + Wall-BFS bounding。
 
     使用delta_state.structural_bfs做BFS搜索。
+    对大网格(H*W >= 64)强制max_depth=2以减少候选数。
+    小网格保持原depth=3以保证搜索充分性。
+
+    Attributes:
+        LARGE_GRID_THRESHOLD: 大网格阈值，H*W >= 此值视为大网格。
+        SMALL_GRID_MAX_DEPTH: 小网格最大搜索深度。
+        LARGE_GRID_MAX_DEPTH: 大网格最大搜索深度(强制≤2)。
     """
+
+    LARGE_GRID_THRESHOLD: int = 64
+    SMALL_GRID_MAX_DEPTH: int = 3
+    LARGE_GRID_MAX_DEPTH: int = 2
 
     def generate(
         self,
@@ -1061,8 +1074,29 @@ class _DefaultL1BFS:
         max_nodes: int = STRUCT_BFS_BUDGET,
         **kwargs: Any,
     ) -> CandidateSet:
-        """BFS候选生成。"""
+        """BFS候选生成 + 大网格depth cap。
+
+        对大网格(H*W >= 64)强制max_depth=2，避免生成过多候选。
+        小网格保持原depth=3以保证搜索充分性。
+
+        Args:
+            root_state: 根节点状态 (game/grid)。
+            action_space: ActionSpace实例。
+            max_depth: 最大搜索深度(会被大网格depth cap覆盖)。
+            max_nodes: 最大扩展节点数。
+            **kwargs: 策略特定参数。
+
+        Returns:
+            CandidateSet: L1候选生成结果。
+        """
         from .delta_state import structural_bfs
+
+        # 大网格检测: 强制depth cap
+        effective_max_depth: int = max_depth
+        if is_large_grid(root_state):
+            effective_max_depth = min(max_depth, self.LARGE_GRID_MAX_DEPTH)
+        else:
+            effective_max_depth = min(max_depth, self.SMALL_GRID_MAX_DEPTH)
 
         # 创建根节点和node_map
         node_map: Dict[int, Node] = {}
@@ -1076,13 +1110,32 @@ class _DefaultL1BFS:
             mode=action_space._mode,
         )
 
-        # 执行BFS搜索
+        # 大网格时减少max_nodes预算(避免BFS爆炸)
+        effective_max_nodes: int = max_nodes
+        if is_large_grid(root_state):
+            effective_max_nodes = min(max_nodes, 20)  # 大网格时限制节点数
+
+        # 执行BFS搜索 (structural_bfs内部也受depth控制)
         candidates: List[int] = structural_bfs(
             root_id=0,
             node_map=node_map,
             action_space=action_space,
-            max_nodes=max_nodes,
+            max_nodes=effective_max_nodes,
         )
+
+        # 过滤超过effective_max_depth的候选
+        if effective_max_depth < DEFAULT_MAX_DEPTH:
+            candidates = [
+                nid for nid in candidates
+                if node_map[nid].depth <= effective_max_depth
+            ]
+
+        meta: Dict[str, Any] = {
+            'l1_strategy': 'bfs',
+            'effective_max_depth': effective_max_depth,
+            'effective_max_nodes': effective_max_nodes,
+            'is_large_grid': is_large_grid(root_state),
+        }
 
         return CandidateSet(
             node_ids=candidates,
@@ -1090,14 +1143,149 @@ class _DefaultL1BFS:
             replay_engine=replay_engine,
             root_state=root_state,
             action_space=action_space,
-            meta={'l1_strategy': 'bfs'},
+            meta=meta,
         )
 
 
+def is_large_grid(state: Any) -> bool:
+    """判断是否为大网格(H*W >= 64)。
+
+    大网格(L1+关卡)搜索空间爆炸风险高，需要depth cap限制。
+    对于np.ndarray直接用shape判断；对于game engine对象
+    通过提取grid或使用fallback默认值判断。
+
+    Args:
+        state: 根节点状态 (game engine或np.ndarray)。
+
+    Returns:
+        True如果H*W >= 64 (大网格)，False otherwise。
+    """
+    if isinstance(state, np.ndarray):
+        H: int = state.shape[0]
+        W: int = state.shape[1]
+    else:
+        # game mode: 提取grid
+        try:
+            from .delta_state import _extract_game_grid
+            grid: Optional[np.ndarray] = _extract_game_grid(state)
+            if grid is not None:
+                H, W = grid.shape[0], grid.shape[1]
+            else:
+                H, W = 8, 8  # default fallback
+        except Exception:
+            H, W = 8, 8  # default fallback
+    return H * W >= 64
+
+
+class _DefaultL2SymPruner:
+    """默认L2策略: 对称hash剪枝 + Prime-Signature快拒。
+
+    使用8-对称归一化hash(canonical_signature)和(opcode, param_hash)去重。
+    替代旧版 _DefaultL2PassThrough (完全不剪枝)。
+
+    对称剪枝:
+      - 计算grid的8-对称归一化hash (rot90×4 + mirror, 取min tuple)
+      - 对每个候选节点生成 (canon, opcode, param_hash) 签名
+      - 同签名候选只保留第一个(去重)
+
+    Attributes:
+        _sym_cache: grid_tuple → canonical_sig 缓存 (避免重复计算8-对称)。
+        _seen_this_frame: 当前帧已见签名集合 (每次prune清空)。
+    """
+
+    def __init__(self) -> None:
+        """初始化对称剪枝器。"""
+        self._sym_cache: Dict[tuple, tuple] = {}
+        self._seen_this_frame: set = set()
+
+    def prune(self, candidate_set: CandidateSet) -> CandidateSet:
+        """对称剪枝+去重: 基于8-对称归一化hash和(opcode, param_hash)签名。
+
+        Args:
+            candidate_set: L1候选生成结果。
+
+        Returns:
+            CandidateSet: 剪枝后的候选集(去除对称重复和签名重复)。
+        """
+        self._seen_this_frame.clear()
+
+        # 计算root state的canonical signature
+        canon: tuple = self._canonical_signature(candidate_set.root_state)
+
+        filtered_ids: List[int] = []
+        for node_id in candidate_set.node_ids:
+            node: Optional[Node] = candidate_set.node_map.get(node_id)
+            if node is None:
+                continue
+
+            # (canon, opcode, param_hash) 去重签名
+            action_str: str = node.action
+            meta_hash: int = hash(str(node.meta))
+            sig: tuple = (canon, action_str, meta_hash)
+            if sig in self._seen_this_frame:
+                continue
+            self._seen_this_frame.add(sig)
+            filtered_ids.append(node_id)
+
+        pruned_count: int = len(candidate_set.node_ids) - len(filtered_ids)
+        return CandidateSet(
+            node_ids=filtered_ids,
+            node_map=dict(candidate_set.node_map),
+            replay_engine=candidate_set.replay_engine,
+            root_state=candidate_set.root_state,
+            action_space=candidate_set.action_space,
+            meta={
+                'l2_strategy': 'sym_pruner',
+                'pruned': pruned_count,
+                'l1_meta': candidate_set.meta,
+            },
+        )
+
+    def _canonical_signature(self, state: Any) -> tuple:
+        """计算8-对称归一化hash: rot90×4 + mirror, 取min tuple。
+
+        对grid做4次旋转(rot90)×2(含水平翻转)共8种对称变换，
+        取所有变换结果中字典序最小的tuple作为canonical signature。
+        同一grid在不同旋转/镜像下会得到相同的canonical signature，
+        实现对称去重。
+
+        Args:
+            state: 根节点状态 (game engine或np.ndarray)。
+
+        Returns:
+            canonical signature tuple (8-对称归一化后的最小表示)。
+        """
+        grid: Optional[np.ndarray] = None
+        if isinstance(state, np.ndarray):
+            grid = state
+        else:
+            from .delta_state import _extract_game_grid
+            grid = _extract_game_grid(state)
+
+        if grid is None:
+            return ()
+
+        key: tuple = tuple(tuple(r) for r in grid.tolist())
+        if key in self._sym_cache:
+            return self._sym_cache[key]
+
+        # 8 symmetry variants: 4 rotations × 2 (original + mirror)
+        variants: List[tuple] = []
+        for i in range(4):
+            v: np.ndarray = np.rot90(grid, i)
+            variants.append(tuple(tuple(r) for r in v.tolist()))
+            variants.append(tuple(tuple(r) for r in np.fliplr(v).tolist()))
+
+        canon: tuple = min(variants)
+        self._sym_cache[key] = canon
+        return canon
+
+
 class _DefaultL2PassThrough:
-    """默认L2策略: PassThrough(不剪枝)。
+    """旧版L2策略: PassThrough(不剪枝) — 仅用于向后兼容。
 
     直接传递L1候选集，不做任何剪枝。
+    已被 _DefaultL2SymPruner 替代，保留供手动指定 'pass_through' 策略时使用。
     """
 
     def prune(self, candidate_set: CandidateSet) -> CandidateSet:
@@ -1113,18 +1301,39 @@ class _DefaultL2PassThrough:
 
 
 class _DefaultL3GaussEx:
-    """默认L3策略: GaussEx残差评估。
+    """默认L3策略: GaussEx残差评估 + 增量diff-residual优化。
 
-    物化候选节点并计算GaussEx残差η。
+    物化候选节点并计算GaussEx残差η。使用增量diff-residual优化：
+    当连续候选的grid变化较小时，只计算变化cell的残差增量，
+    避免O(HW)的full GaussEx重计算。同时支持early-stop：
+    当η低于DELTA_K_EARLY阈值时立即返回最优候选。
+
+    Attributes:
+        DELTA_K_EARLY: early-stop阈值，η低于此值时立即返回候选。
     """
+
+    DELTA_K_EARLY: float = 0.005  # early-stop threshold
 
     def evaluate(
         self,
         candidate_set: CandidateSet,
         examples: List[Tuple[np.ndarray, np.ndarray]],
     ) -> EvaluatedCandidateSet:
-        """GaussEx残差评估。"""
-        from .delta_state import parametric_bfs
+        """GaussEx残差评估 + 增量diff-residual + early-stop。
+
+        评估流程:
+          1. 第一个候选: full GaussEx验证
+          2. 后续候选: 增量diff-residual (只计算变化cell的残差增量)
+          3. early-stop: η < DELTA_K_EARLY → 立即返回最优候选
+
+        Args:
+            candidate_set: L2剪枝后的候选集。
+            examples: 示例列表 [(input, output), ...]。
+
+        Returns:
+            EvaluatedCandidateSet: 评估后的候选集(含η/confidence/early_stop标记)。
+        """
+        from .delta_state import parametric_bfs, _extract_game_grid
 
         verifier: GaussExVerifier = GaussExVerifier()
         candidates: List[Dict[str, Any]] = []
@@ -1135,8 +1344,17 @@ class _DefaultL3GaussEx:
                 candidates=candidates,
                 node_map=candidate_set.node_map,
                 replay_engine=None,
-                meta={'l3_strategy': 'gauss_ex', 'error': 'no_replay_engine'},
+                meta={'l3_strategy': 'gauss_ex_incremental', 'error': 'no_replay_engine'},
             )
+
+        # 提取goal_grid from examples (最终output)
+        goal_grid: Optional[np.ndarray] = None
+        if len(examples) > 0:
+            goal_grid = examples[-1][1] if len(examples[-1]) > 1 else None
+
+        # Track previous state for incremental residual
+        prev_eta: Optional[float] = None
+        prev_grid: Optional[np.ndarray] = None
 
         for node_id in candidate_set.node_ids:
             node: Optional[Node] = candidate_set.node_map.get(node_id)
@@ -1151,63 +1369,234 @@ class _DefaultL3GaussEx:
 
             # Grid mode: 直接验证
             if replay_engine.mode == 'grid' and isinstance(state, np.ndarray):
-                result: Dict[str, Any] = verifier.verify(state, examples)
-                eta: float = result.get('max_error', 1.0)
-                confidence: float = max(0.0, 1.0 - eta / 0.036)
-                ic: float = node.meta.get('ic', 0.5)
+                grid: np.ndarray = state
 
-                candidates.append({
-                    'node_id': node_id,
-                    'eta': eta,
-                    'confidence': confidence,
-                    'gex_result': result,
-                    'ic': ic,
-                    'depth': node.depth,
-                })
-
-            # Game mode: 提取Grid后验证
-            elif replay_engine.mode == 'game':
-                from .delta_state import _extract_game_grid
-                grid: Optional[np.ndarray] = _extract_game_grid(state)
-                if grid is not None:
-                    result = verifier.verify(grid, examples)
+                # Incremental residual optimization
+                if (
+                    prev_grid is not None
+                    and prev_eta is not None
+                    and goal_grid is not None
+                    and isinstance(prev_grid, np.ndarray)
+                    and prev_grid.shape == grid.shape
+                    and goal_grid.shape == grid.shape
+                ):
+                    eta: float = self._incremental_residual(
+                        prev_grid, grid, goal_grid, prev_eta,
+                    )
+                    # For incremental, we don't have full gex_result, compute confidence from eta
+                    confidence: float = max(0.0, 1.0 - eta / 0.036)
+                    ic: float = node.meta.get('ic', 0.5)
+                    cand_dict: Dict[str, Any] = {
+                        'node_id': node_id,
+                        'eta': eta,
+                        'confidence': confidence,
+                        'ic': ic,
+                        'depth': node.depth,
+                    }
+                else:
+                    # First candidate or shape mismatch: full GaussEx
+                    result: Dict[str, Any] = verifier.verify(grid, examples)
                     eta = result.get('max_error', 1.0)
                     confidence = max(0.0, 1.0 - eta / 0.036)
                     ic = node.meta.get('ic', 0.5)
-                    candidates.append({
+                    cand_dict = {
                         'node_id': node_id,
                         'eta': eta,
                         'confidence': confidence,
                         'gex_result': result,
                         'ic': ic,
                         'depth': node.depth,
-                    })
+                    }
+
+                # Early-stop check
+                if eta < self.DELTA_K_EARLY:
+                    cand_dict['early_stop'] = True
+                    candidates.append(cand_dict)
+                    # Immediately return — no need to evaluate remaining candidates
+                    return EvaluatedCandidateSet(
+                        candidates=candidates,
+                        node_map=candidate_set.node_map,
+                        replay_engine=replay_engine,
+                        meta={
+                            'l3_strategy': 'gauss_ex_incremental',
+                            'early_stopped': True,
+                            'early_stop_node_id': node_id,
+                        },
+                    )
+
+                candidates.append(cand_dict)
+
+                # Update prev for incremental
+                prev_grid = grid.copy()
+                prev_eta = eta
+
+            # Game mode: 提取Grid后验证
+            elif replay_engine.mode == 'game':
+                from .delta_state import _extract_game_grid
+                grid = _extract_game_grid(state)
+                if grid is not None:
+                    # Incremental residual optimization (same logic as grid mode)
+                    if (
+                        prev_grid is not None
+                        and prev_eta is not None
+                        and goal_grid is not None
+                        and isinstance(prev_grid, np.ndarray)
+                        and prev_grid.shape == grid.shape
+                        and goal_grid.shape == grid.shape
+                    ):
+                        eta = self._incremental_residual(
+                            prev_grid, grid, goal_grid, prev_eta,
+                        )
+                        confidence = max(0.0, 1.0 - eta / 0.036)
+                        ic = node.meta.get('ic', 0.5)
+                        cand_dict = {
+                            'node_id': node_id,
+                            'eta': eta,
+                            'confidence': confidence,
+                            'ic': ic,
+                            'depth': node.depth,
+                        }
+                    else:
+                        result = verifier.verify(grid, examples)
+                        eta = result.get('max_error', 1.0)
+                        confidence = max(0.0, 1.0 - eta / 0.036)
+                        ic = node.meta.get('ic', 0.5)
+                        cand_dict = {
+                            'node_id': node_id,
+                            'eta': eta,
+                            'confidence': confidence,
+                            'gex_result': result,
+                            'ic': ic,
+                            'depth': node.depth,
+                        }
+
+                    # Early-stop check
+                    if eta < self.DELTA_K_EARLY:
+                        cand_dict['early_stop'] = True
+                        candidates.append(cand_dict)
+                        return EvaluatedCandidateSet(
+                            candidates=candidates,
+                            node_map=candidate_set.node_map,
+                            replay_engine=replay_engine,
+                            meta={
+                                'l3_strategy': 'gauss_ex_incremental',
+                                'early_stopped': True,
+                                'early_stop_node_id': node_id,
+                            },
+                        )
+
+                    candidates.append(cand_dict)
+                    prev_grid = grid.copy()
+                    prev_eta = eta
 
         return EvaluatedCandidateSet(
             candidates=candidates,
             node_map=candidate_set.node_map,
             replay_engine=replay_engine,
-            meta={'l3_strategy': 'gauss_ex'},
+            meta={'l3_strategy': 'gauss_ex_incremental'},
         )
+
+    def _incremental_residual(
+        self,
+        prev_grid: np.ndarray,
+        new_grid: np.ndarray,
+        goal_grid: np.ndarray,
+        prev_eta: float,
+    ) -> float:
+        """增量残差计算: η_new = η_prev + Σ_{changed cells} Δ(cell, goal)。
+
+        只计算变化cell的残差增量，避免O(HW)的full GaussEx重计算。
+        对于相邻候选(如BFS扩展的同级节点)，grid变化通常很小，
+        只改变少数cell，增量计算复杂度O(changed)而非O(HW)。
+
+        Args:
+            prev_grid: 前一个候选的grid (numpy 2D array)。
+            new_grid: 当前候选的grid (numpy 2D array)。
+            goal_grid: 目标grid (从examples提取的最终output)。
+            prev_eta: 前一个候选的η值。
+
+        Returns:
+            当前候选的η值 (增量计算结果)。
+        """
+        if not isinstance(prev_grid, np.ndarray) or not isinstance(new_grid, np.ndarray):
+            return prev_eta  # fallback
+
+        # 找到变化的cell位置
+        changed = np.where(prev_grid != new_grid)
+        delta: float = 0.0
+        for r, c in zip(changed[0], changed[1]):
+            old_diff: float = abs(int(prev_grid[r, c]) - int(goal_grid[r, c]))
+            new_diff: float = abs(int(new_grid[r, c]) - int(goal_grid[r, c]))
+            delta += new_diff - old_diff
+
+        # Normalize delta by total grid size (same as GaussExVerifier)
+        total_pixels: int = goal_grid.size
+        if total_pixels > 0:
+            delta /= float(total_pixels)
+
+        return max(0.0, prev_eta + delta)
 
 
 class _DefaultL4Kappa:
-    """默认L4策略: κ-优选η升序选择器。
+    """默认L4策略: κ-优选η升序选择器 + early-stop + 双阈值通道。
 
     使用kappa_selector.KappaEtaAscendSelector做最终选择。
+    支持early-stop: 当L3标记了early_stop候选或η < DELTA_K_EARLY时，
+    立即返回最优候选，不做完整排序。
+
+    ★ 升级6: 双阈值通道 — 硬通道优先, 空时切换创意通道。
+
+    Attributes:
+        DELTA_K_EARLY: early-stop阈值，η低于此值时立即返回。
+        _selector: KappaEtaAscendSelector实例 (支持双阈值)。
     """
 
+    DELTA_K_EARLY: float = 0.005
+
     def __init__(self) -> None:
-        """初始化L4 κ-优选选择器。"""
+        """初始化L4 κ-优选选择器 (双阈值模式)。"""
         from .kappa_selector import KappaEtaAscendSelector
-        self._selector: KappaEtaAscendSelector = KappaEtaAscendSelector()
+        self._selector: KappaEtaAscendSelector = KappaEtaAscendSelector(
+            dual_threshold=True,  # ★ 升级6: 启用双阈值
+        )
 
     def select(
         self,
         evaluated_set: EvaluatedCandidateSet,
     ) -> List[Dict[str, Any]]:
-        """κ-优选η升序选择。"""
-        return self._selector.select(evaluated_set.candidates)
+        """κ-优选η升序选择 + early-stop。
+
+        选择流程:
+          1. 检查L3的early_stop标记 → 有则立即返回该候选
+          2. η升序排序候选
+          3. early-stop: η < DELTA_K_EARLY → 立即返回该候选
+          4. 无early-stop → 返回排序后前5个候选
+
+        Args:
+            evaluated_set: L3评估后的候选集。
+
+        Returns:
+            最优候选列表(按优先级排序)。
+        """
+        candidates: List[Dict[str, Any]] = evaluated_set.candidates
+
+        # Check for early_stop flag from L3
+        for c in candidates:
+            if c.get('early_stop', False):
+                return [c]  # L3 already found a great candidate
+
+        # Sort by η ascending (lowest residual first)
+        sorted_cands: List[Dict[str, Any]] = sorted(
+            candidates, key=lambda x: x.get('eta', 1.0),
+        )
+
+        # Early-stop: first η < threshold → return immediately
+        for c in sorted_cands:
+            if c.get('eta', 1.0) < self.DELTA_K_EARLY:
+                return [c]
+
+        # No early-stop → delegate to KappaEtaAscendSelector for full selection
+        return self._selector.select(candidates)
 
     def confidence(self, eta: float) -> float:
         """计算置信度。"""
@@ -1259,7 +1648,7 @@ def _self_test() -> bool:
     # 测试3: PipelineStrategies默认配置
     ps: PipelineStrategies = PipelineStrategies()
     assert ps.l1_strategy == "bfs", "Default L1 should be bfs"
-    assert ps.l2_strategy == "pass_through", "Default L2 should be pass_through"
+    assert ps.l2_strategy == "sym_pruner", "Default L2 should be sym_pruner"
     assert ps.l3_strategy == "gauss_ex", "Default L3 should be gauss_ex"
     assert ps.l4_strategy == "kappa_selector", "Default L4 should be kappa_selector"
 

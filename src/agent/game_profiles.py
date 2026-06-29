@@ -104,6 +104,7 @@ class HybridGameProfile(GameProfile):
 
     Strategy names:
         L1 (Candidate Generation):
+            - 'macro_draft': Macro-Draft宏观候选 (DSpark启发1, K≤8)
             - 'wall_bfs': KA59推箱Wall-BFS (物理原语约束)
             - 'bfs': 标准BFS (结构探索)
             - 'dfs': DFS枚举 (深度优先)

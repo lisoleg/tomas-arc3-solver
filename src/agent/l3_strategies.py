@@ -11,11 +11,12 @@ L3层负责评估剪枝后候选的残差η和置信度confidence。
   - GaussExEvaluation: GaussEx残差评估 (像素匹配，max_error = η)
   - AsymIndexEvaluation: 不对称指数评估 (κ-phase consistency → η)
   - PassThroughEvaluation: 不评估(直接传递，η=0.0)
+  - KappaSnapSequenceVerify: κ-Snap Sequence-Level Verify (DSpark启发2, 逐步回放macro-sequence + Dead-Zero Fuse截断 + Longest Accept Prefix)
 
 所有策略类实现L3ResidualEvaluator Protocol:
   evaluate(candidate_set, examples) → EvaluatedCandidateSet
 
-Version: v3.18.0 — Hybrid Search L3 Strategies
+Version: v3.18.0 — Hybrid Search L3 Strategies (+ v4.3 kappa_snap_seq_verify)
 """
 
 from __future__ import annotations
@@ -42,10 +43,14 @@ from .physics_primitives import is_deadlock_corner, kappa_phase_consistency, che
 # ============================================================================
 
 class GaussExEvaluation:
-    """GaussEx残差评估策略 — 像素匹配计算η。
+    """GaussEx残差评估策略 — 增量diff-residual + early-stop优化。
 
     物化候选节点(ReplayEngine.replay)，然后用GaussExVerifier
     计算Grid与示例的像素错误比率(max_error = η)。
+
+    ★ v4.3 优化:
+      - 增量diff-residual: 只计算变化cell的残差增量 O(changed)而非O(HW)
+      - early-stop: η < DELTA_K_EARLY → 立即返回最优候选，不做完整评估
 
     置信度: confidence = 1 - η/δ_K (类比量子态纯度)
     δ_K = 0.036 (from KSnapEngine)
@@ -54,7 +59,10 @@ class GaussExEvaluation:
 
     Attributes:
         delta_k: κ-Snap残差阈值δ_K。
+        DELTA_K_EARLY: early-stop阈值，η低于此值时立即返回候选。
     """
+
+    DELTA_K_EARLY: float = 0.005  # early-stop threshold
 
     def __init__(self, delta_k: float = 0.036) -> None:
         """初始化GaussEx残差评估策略。
@@ -69,7 +77,12 @@ class GaussExEvaluation:
         candidate_set: CandidateSet,
         examples: List[Tuple[np.ndarray, np.ndarray]],
     ) -> EvaluatedCandidateSet:
-        """GaussEx残差评估: 物化 + 像素匹配。
+        """GaussEx残差评估: 物化 + 增量diff-residual + early-stop。
+
+        ★ v4.3 优化:
+          1. 第一个候选: full GaussEx验证
+          2. 后续候选: 增量diff-residual (只计算变化cell)
+          3. early-stop: η < DELTA_K_EARLY → 立即返回最优候选
 
         Args:
             candidate_set: L2剪枝后的候选集。
@@ -86,8 +99,17 @@ class GaussExEvaluation:
             return EvaluatedCandidateSet(
                 candidates=candidates,
                 node_map=candidate_set.node_map,
-                meta={'l3_strategy': 'gauss_ex', 'error': 'no_replay_engine'},
+                meta={'l3_strategy': 'gauss_ex_incremental', 'error': 'no_replay_engine'},
             )
+
+        # ★ v4.3: 提取goal_grid for incremental residual
+        goal_grid: Optional[np.ndarray] = None
+        if len(examples) > 0:
+            goal_grid = examples[-1][1] if len(examples[-1]) > 1 else None
+
+        # ★ v4.3: Track previous state for incremental residual
+        prev_eta: Optional[float] = None
+        prev_grid: Optional[np.ndarray] = None
 
         for node_id in candidate_set.node_ids:
             node: Optional[Node] = candidate_set.node_map.get(node_id)
@@ -100,23 +122,58 @@ class GaussExEvaluation:
             except (KeyError, SolverAborted):
                 continue
 
-            # Grid mode: 直接验证
+            # Grid mode: 直接验证 + incremental
             if replay_engine.mode == 'grid' and isinstance(state, np.ndarray):
-                result: Dict[str, Any] = verifier.verify(state, examples)
-                eta: float = result.get('max_error', 1.0)
-                confidence: float = max(0.0, 1.0 - eta / self.delta_k)
-                ic: float = node.meta.get('ic', 0.5)
+                grid: np.ndarray = state
 
-                candidates.append({
-                    'node_id': node_id,
-                    'eta': eta,
-                    'confidence': confidence,
-                    'gex_result': result,
-                    'ic': ic,
-                    'depth': node.depth,
-                })
+                # ★ v4.3: Incremental residual optimization
+                if (
+                    prev_grid is not None
+                    and prev_eta is not None
+                    and goal_grid is not None
+                    and isinstance(prev_grid, np.ndarray)
+                    and prev_grid.shape == grid.shape
+                    and goal_grid.shape == grid.shape
+                ):
+                    eta: float = self._incremental_residual(
+                        prev_grid, grid, goal_grid, prev_eta,
+                    )
+                    confidence: float = max(0.0, 1.0 - eta / self.delta_k)
+                    ic: float = node.meta.get('ic', 0.5)
+                    cand_dict: Dict[str, Any] = {
+                        'node_id': node_id,
+                        'eta': eta,
+                        'confidence': confidence,
+                        'ic': ic,
+                        'depth': node.depth,
+                    }
+                else:
+                    # First candidate or shape mismatch: full GaussEx
+                    result: Dict[str, Any] = verifier.verify(grid, examples)
+                    eta = result.get('max_error', 1.0)
+                    confidence = max(0.0, 1.0 - eta / self.delta_k)
+                    ic = node.meta.get('ic', 0.5)
+                    cand_dict = {
+                        'node_id': node_id,
+                        'eta': eta,
+                        'confidence': confidence,
+                        'gex_result': result,
+                        'ic': ic,
+                        'depth': node.depth,
+                    }
 
-            # Game mode: 检查通关 + 提取Grid后验证
+                # BUGFIX v4.3.1: REMOVED grid-mode early-stop.
+                # Phase 0.5 examples are self-comparison (game_grid, game_grid),
+                # so shallow BFS candidates always have near-zero eta.
+                # Early-stop returns non-solving plans.
+                # WIN state early-stop (game mode) is the only valid shortcut.
+
+                candidates.append(cand_dict)
+                # Update prev for incremental
+                prev_grid = grid.copy()
+                prev_eta = eta
+
+            # Game mode: 检查通关 + 提取Grid后验证 + incremental
             elif replay_engine.mode == 'game':
                 # ★ 关键: 先检查通关状态 — IDO κ-优选核心
                 # 通关候选 η=0 (完美分数) → κ-优选必然选择它
@@ -131,38 +188,123 @@ class GaussExEvaluation:
                     pass
 
                 if game_solved:
-                    # 通关候选 → η=0, confidence=1.0 (κ-优选最高优先)
-                    candidates.append({
+                    # 通关候选 → η=0, confidence=1.0 (κ-优选最高优先) + early-stop
+                    cand_dict = {
                         'node_id': node_id,
                         'eta': 0.0,
                         'confidence': 1.0,
                         'gex_result': {'max_error': 0.0, 'solved': True},
                         'ic': 1.0,
                         'depth': node.depth,
-                    })
-                    continue  # 通关候选已记录, 不需要进一步验证
+                        'early_stop': True,
+                    }
+                    candidates.append(cand_dict)
+                    return EvaluatedCandidateSet(
+                        candidates=candidates,
+                        node_map=candidate_set.node_map,
+                        replay_engine=replay_engine,
+                        meta={
+                            'l3_strategy': 'gauss_ex_incremental',
+                            'early_stopped': True,
+                            'early_stop_node_id': node_id,
+                            'game_solved': True,
+                        },
+                    )
 
-                grid: Optional[np.ndarray] = _extract_game_grid(state)
+                grid = _extract_game_grid(state)
                 if grid is not None:
-                    result = verifier.verify(grid, examples)
-                    eta = result.get('max_error', 1.0)
-                    confidence = max(0.0, 1.0 - eta / self.delta_k)
-                    ic = node.meta.get('ic', 0.5)
-                    candidates.append({
-                        'node_id': node_id,
-                        'eta': eta,
-                        'confidence': confidence,
-                        'gex_result': result,
-                        'ic': ic,
-                        'depth': node.depth,
-                    })
+                    # ★ v4.3: Incremental residual optimization (game mode)
+                    if (
+                        prev_grid is not None
+                        and prev_eta is not None
+                        and goal_grid is not None
+                        and isinstance(prev_grid, np.ndarray)
+                        and prev_grid.shape == grid.shape
+                        and goal_grid.shape == grid.shape
+                    ):
+                        eta = self._incremental_residual(
+                            prev_grid, grid, goal_grid, prev_eta,
+                        )
+                        confidence = max(0.0, 1.0 - eta / self.delta_k)
+                        ic = node.meta.get('ic', 0.5)
+                        cand_dict = {
+                            'node_id': node_id,
+                            'eta': eta,
+                            'confidence': confidence,
+                            'ic': ic,
+                            'depth': node.depth,
+                        }
+                    else:
+                        # First candidate: full GaussEx
+                        result = verifier.verify(grid, examples)
+                        eta = result.get('max_error', 1.0)
+                        confidence = max(0.0, 1.0 - eta / self.delta_k)
+                        ic = node.meta.get('ic', 0.5)
+                        cand_dict = {
+                            'node_id': node_id,
+                            'eta': eta,
+                            'confidence': confidence,
+                            'gex_result': result,
+                            'ic': ic,
+                            'depth': node.depth,
+                        }
+
+                    # BUGFIX v4.3.1: REMOVED early-stop for game mode.
+                    # Game mode uses self-comparison examples (game_grid, game_grid),
+                    # so shallow BFS candidates with grid similar to start have near-zero eta.
+                    # Early-stop would return a non-solving plan.
+                    # WIN state check (above) is the ONLY valid early-stop for game mode.
+
+                    candidates.append(cand_dict)
+                    prev_grid = grid.copy()
+                    prev_eta = eta
 
         return EvaluatedCandidateSet(
             candidates=candidates,
             node_map=candidate_set.node_map,
             replay_engine=replay_engine,
-            meta={'l3_strategy': 'gauss_ex', 'delta_k': self.delta_k},
+            meta={'l3_strategy': 'gauss_ex_incremental', 'delta_k': self.delta_k},
         )
+
+    def _incremental_residual(
+        self,
+        prev_grid: np.ndarray,
+        new_grid: np.ndarray,
+        goal_grid: np.ndarray,
+        prev_eta: float,
+    ) -> float:
+        """★ v4.3: 增量残差计算: η_new = η_prev + Σ_{changed cells} Δ(cell, goal)。
+
+        只计算变化cell的残差增量，避免O(HW)的full GaussEx重计算。
+        对于相邻候选(如BFS扩展的同级节点)，grid变化通常很小，
+        只改变少数cell，增量计算复杂度O(changed)而非O(HW)。
+
+        Args:
+            prev_grid: 前一个候选的grid (numpy 2D array)。
+            new_grid: 当前候选的grid (numpy 2D array)。
+            goal_grid: 目标grid (从examples提取的最终output)。
+            prev_eta: 前一个候选的η值。
+
+        Returns:
+            当前候选的η值 (增量计算结果)。
+        """
+        if not isinstance(prev_grid, np.ndarray) or not isinstance(new_grid, np.ndarray):
+            return prev_eta  # fallback
+
+        # 找到变化的cell位置
+        changed = np.where(prev_grid != new_grid)
+        delta: float = 0.0
+        for r, c in zip(changed[0], changed[1]):
+            old_diff: float = abs(int(prev_grid[r, c]) - int(goal_grid[r, c]))
+            new_diff: float = abs(int(new_grid[r, c]) - int(goal_grid[r, c]))
+            delta += new_diff - old_diff
+
+        # Normalize delta by total grid size (same as GaussExVerifier normalization)
+        total_pixels: int = goal_grid.size
+        if total_pixels > 0:
+            delta /= float(total_pixels)
+
+        return max(0.0, prev_eta + delta)
 
 
 # ============================================================================

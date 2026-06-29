@@ -5,6 +5,7 @@ TOMAS 四层混合搜索 L1 候选生成策略
 L1层负责搜索空间探索，从初始状态生成候选节点集(CandidateSet)。
 不同L1策略使用不同的搜索方式:
 
+  - MacroDraftGenerator: Macro-Draft宏观候选 (DSpark启发1, K≤8)
   - WallBFSCandidateGenerator: KA59推箱Wall-BFS (物理原语约束)
   - BFSPathCandidateGenerator: 标准BFS (结构探索)
   - DFSEnumerationCandidateGenerator: DFS枚举 (深度优先)
@@ -14,7 +15,7 @@ L1层负责搜索空间探索，从初始状态生成候选节点集(CandidateSe
 所有策略类实现L1CandidateGenerator Protocol:
   generate(root_state, action_space, ...) → CandidateSet
 
-Version: v3.18.0 — Hybrid Search L1 Strategies
+Version: v4.3.1 — Hybrid Search L1 Strategies (+ v4.3 macro_draft + P0-A depth cap/bounding)
 """
 
 from __future__ import annotations
@@ -134,10 +135,21 @@ class DFSEnumerationCandidateGenerator:
     DFS搜索所有可用动作序列，优先深入探索。
     适用于需要深度搜索的游戏(CN04仿射变换等)。
 
+    P0-A优化: 网格大小自适应depth cap (大网格≤2, 小网格≤3)。
+    大网格(H*W >= 64) DFS深度爆炸风险高，强制缩减depth。
+    小网格保持depth=3以保证搜索充分性。
+
     Attributes:
         max_depth: 最大搜索深度。
         max_nodes: 最大扩展节点数。
+        LARGE_GRID_THRESHOLD: 大网格阈值 (H*W >= 此值)。
+        SMALL_GRID_MAX_DEPTH: 小网格最大搜索深度。
+        LARGE_GRID_MAX_DEPTH: 大网格最大搜索深度 (P0-A depth cap)。
     """
+
+    LARGE_GRID_THRESHOLD: int = 64
+    SMALL_GRID_MAX_DEPTH: int = 3
+    LARGE_GRID_MAX_DEPTH: int = 2
 
     def __init__(
         self,
@@ -147,7 +159,7 @@ class DFSEnumerationCandidateGenerator:
         """初始化DFS候选生成策略。
 
         Args:
-            max_depth: 最大搜索深度，默认5。
+            max_depth: 最大搜索深度，默认5 (会被P0-A depth cap覆盖)。
             max_nodes: 最大扩展节点数，默认80。
         """
         self.max_depth: int = max_depth
@@ -161,18 +173,23 @@ class DFSEnumerationCandidateGenerator:
         max_nodes: int = 80,
         **kwargs: Any,
     ) -> CandidateSet:
-        """DFS候选生成: 深度优先搜索。
+        """DFS候选生成: 深度优先搜索 + P0-A网格自适应depth cap。
+
+        P0-A优化: 对大网格(H*W >= 64)强制max_depth<=2，
+        小网格保持max_depth<=3，避免DFS搜索空间爆炸。
 
         Args:
             root_state: 根节点状态。
             action_space: ActionSpace实例。
-            max_depth: 最大搜索深度。
+            max_depth: 最大搜索深度 (会被P0-A depth cap覆盖)。
             max_nodes: 最大扩展节点数。
             **kwargs: 策略特定参数。
 
         Returns:
             CandidateSet: DFS搜索结果。
         """
+        from .hybrid_search_engine import is_large_grid
+
         # 创建根节点和node_map
         node_map: Dict[int, Node] = {}
         root_node: Node = Node(id=0, parent_id=-1, action="root", depth=0)
@@ -185,9 +202,19 @@ class DFSEnumerationCandidateGenerator:
             mode=action_space._mode,
         )
 
-        # DFS搜索
-        effective_max_nodes: int = min(max_nodes, self.max_nodes)
+        # P0-A: 网格大小自适应depth cap
         effective_max_depth: int = min(max_depth, self.max_depth)
+        if is_large_grid(root_state):
+            effective_max_depth = min(effective_max_depth, self.LARGE_GRID_MAX_DEPTH)
+        else:
+            effective_max_depth = min(effective_max_depth, self.SMALL_GRID_MAX_DEPTH)
+
+        # P0-A: 大网格时缩减max_nodes预算
+        effective_max_nodes: int = min(max_nodes, self.max_nodes)
+        if is_large_grid(root_state):
+            effective_max_nodes = min(effective_max_nodes, 20)  # 大网格DFS节点数限制
+
+        # DFS搜索
         candidates: List[int] = []
         next_id: int = 1
         expanded: int = 0
@@ -230,7 +257,8 @@ class DFSEnumerationCandidateGenerator:
             replay_engine=replay_engine,
             root_state=root_state,
             action_space=action_space,
-            meta={'l1_strategy': 'dfs', 'max_depth': effective_max_depth, 'max_nodes': effective_max_nodes},
+            meta={'l1_strategy': 'dfs', 'max_depth': effective_max_depth, 'max_nodes': effective_max_nodes,
+                  'is_large_grid': is_large_grid(root_state), 'p0a_depth_cap': True},
         )
 
 
@@ -246,10 +274,27 @@ class WallBFSCandidateGenerator:
 
     适用于KA59 Sokoban推箱游戏。
 
+    P0-A优化: Wall-BFS bounding — 网格大小自适应depth/nodes缩减 +
+    BFS radius边界限制(Manhattan距离约束防止过度探索)。
+
+    大网格(H*W >= 64): max_depth缩减至8, max_nodes缩减至100,
+    搜索半径限制在grid_dim/2以内。
+
     Attributes:
         max_depth: 最大搜索深度。
         max_nodes: 最大扩展节点数。
+        bfs_radius_ratio: BFS搜索半径比例 (相对于grid维度)。
+        LARGE_GRID_THRESHOLD: 大网格阈值。
+        LARGE_GRID_MAX_DEPTH: 大网格Wall-BFS深度上限 (P0-A bounding)。
+        LARGE_GRID_MAX_NODES: 大网格Wall-BFS节点上限 (P0-A bounding)。
+        SMALL_GRID_MAX_DEPTH: 小网格Wall-BFS深度上限。
     """
+
+    LARGE_GRID_THRESHOLD: int = 64
+    LARGE_GRID_MAX_DEPTH: int = 8
+    LARGE_GRID_MAX_NODES: int = 100
+    SMALL_GRID_MAX_DEPTH: int = 15
+    bfs_radius_ratio: float = 0.5  # BFS半径 = max(H,W) * ratio
 
     def __init__(
         self,
@@ -259,8 +304,8 @@ class WallBFSCandidateGenerator:
         """初始化Wall-BFS候选生成策略。
 
         Args:
-            max_depth: 最大搜索深度，默认15。
-            max_nodes: 最大扩展节点数，默认200。
+            max_depth: 最大搜索深度，默认15 (大网格会被P0-A缩减至8)。
+            max_nodes: 最大扩展节点数，默认200 (大网格会被P0-A缩减至100)。
         """
         self.max_depth: int = max_depth
         self.max_nodes: int = max_nodes
@@ -273,19 +318,23 @@ class WallBFSCandidateGenerator:
         max_nodes: int = 200,
         **kwargs: Any,
     ) -> CandidateSet:
-        """Wall-BFS候选生成: 物理原语约束搜索。
+        """Wall-BFS候选生成: 物理原语约束搜索 + P0-A bounding。
+
+        P0-A优化: 大网格(H*W >= 64)自动缩减depth和nodes预算，
+        并设置BFS radius边界限制(Manhattan距离不超过max_dim*bfs_radius_ratio)。
 
         Args:
             root_state: 根节点状态 (Grid np.ndarray 或 game engine)。
             action_space: ActionSpace实例。
-            max_depth: 最大搜索深度。
-            max_nodes: 最大扩展节点数。
-            **kwargs: 可包含wall_char, goal_char, box_chars参数。
+            max_depth: 最大搜索深度 (会被P0-A bounding覆盖)。
+            max_nodes: 最大扩展节点数 (会被P0-A bounding覆盖)。
+            **kwargs: 可包含wall_char, goal_char, box_chars, bfs_radius参数。
 
         Returns:
             CandidateSet: Wall-BFS搜索结果。
         """
         from .wall_bfs import WallBFSEngine
+        from .hybrid_search_engine import is_large_grid
 
         # 提取Grid数据
         grid: Optional[np.ndarray] = None
@@ -302,6 +351,25 @@ class WallBFSCandidateGenerator:
                 meta={'l1_strategy': 'wall_bfs', 'error': 'no_grid'},
             )
 
+        # P0-A: 网格大小自适应depth/nodes缩减
+        is_large: bool = is_large_grid(root_state)
+        effective_max_depth: int = min(max_depth, self.max_depth)
+        effective_max_nodes: int = min(max_nodes, self.max_nodes)
+
+        if is_large:
+            effective_max_depth = min(effective_max_depth, self.LARGE_GRID_MAX_DEPTH)
+            effective_max_nodes = min(effective_max_nodes, self.LARGE_GRID_MAX_NODES)
+        else:
+            effective_max_depth = min(effective_max_depth, self.SMALL_GRID_MAX_DEPTH)
+
+        # P0-A: BFS radius边界限制
+        grid_h: int = grid.shape[0]
+        grid_w: int = grid.shape[1]
+        bfs_radius_ratio: float = kwargs.get('bfs_radius_ratio', self.bfs_radius_ratio)
+        bfs_radius: int = int(max(grid_h, grid_w) * bfs_radius_ratio)
+        # 最低radius=3保证基本搜索能力
+        bfs_radius = max(bfs_radius, 3)
+
         # 构建WallBFSEngine
         wall_char: int = kwargs.get('wall_char', 0)
         goal_char: int = kwargs.get('goal_char', 2)
@@ -312,11 +380,10 @@ class WallBFSCandidateGenerator:
             wall_char=wall_char,
             goal_char=goal_char,
             box_chars=box_chars,
+            bfs_radius=bfs_radius,  # P0-A: 传入radius边界
         )
 
         # 执行搜索
-        effective_max_depth: int = min(max_depth, self.max_depth)
-        effective_max_nodes: int = min(max_nodes, self.max_nodes)
         candidates: List[int] = engine.search(
             max_depth=effective_max_depth,
             max_nodes=effective_max_nodes,
@@ -335,7 +402,9 @@ class WallBFSCandidateGenerator:
             replay_engine=replay_engine,
             root_state=grid,
             action_space=action_space,
-            meta={'l1_strategy': 'wall_bfs', 'max_depth': effective_max_depth, 'max_nodes': effective_max_nodes},
+            meta={'l1_strategy': 'wall_bfs', 'max_depth': effective_max_depth,
+                  'max_nodes': effective_max_nodes, 'is_large_grid': is_large,
+                  'bfs_radius': bfs_radius, 'p0a_bounding': True},
         )
 
 

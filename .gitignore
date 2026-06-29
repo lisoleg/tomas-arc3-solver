@@ -76,7 +76,46 @@ beam_output.txt
 smart_output.txt
 continual_learning_output.txt
 
-# Benchmark debug scripts
+# One-off replacement/fix scripts
+_replace_*.py
+apply_*.py
+fix_*.py
+cn04_*.py
+replace_*.py
+
+# Oracle data files (generated, not source)
+arc3_oracle_*.json
+arc3_oracle_*.py
+oracle_*.json
+oracle_*.txt
+oracle_*.py
+record_*.py
+measure_*.py
+
+# Benchmark scripts (transient)
+bench_*.py
+bench_*.json
+
+# Test scripts for specific games (one-off diagnostics)
+test_*.py
+!tests/test_*.py
+
+# Kaggle output directories (transient)
+kaggle_output_v*/
+kaggle_push_*/
+kaggle_submit_*/
+kaggle_submit_v*/
+ref_nb_src/
+ref_notebook/
+
+# One-off trace/diagnostic scripts
+trace_*.py
+src/agent/data/
+src/agent/cn04_opcode.py
+src/agent/ka59_opcode.py
+src/agent/kappa_snap_seq_verify.py
+src/agent/macro_draft_layer.py
+src/cli/__init__.py
 benchmarks/analyze_*.py
 benchmarks/debug_*.py
 benchmarks/eval_*.py

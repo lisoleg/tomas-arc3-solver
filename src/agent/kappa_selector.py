@@ -210,9 +210,17 @@ def get_psi_audit_log() -> PsiAuditLog:
 # δ_K: κ-Snap GaussEx残差阈值 (from KSnapEngine)
 KAPPA_DELTA_K: float = 0.036
 
-# 卞氏5/6饱和置信度阈值
+# ★ 升级6: κ-Snap双阈值通道 — 创意阈值 (结构化偏离流形探测)
+# 当硬阈值选不出候选时, 放宽到创意阈值: 接受更高残差的"创意"候选
+KAPPA_DELTA_K_CREATIVE: float = 0.042
+
+# 卞氏5/6饱和置信度阈值 (硬通道)
 # confidence ≥ KAPPA_MIN_CONFIDENCE → 通过
 KAPPA_MIN_CONFIDENCE: float = 1.0 - 5.0 / 6.0  # = 1/6 ≈ 0.167
+
+# ★ 升级6: 创意通道置信度阈值 — 不做卞氏5/6过滤, 只要求η < δ_K_creative
+# 创意候选本身就是"偏离流形的探测", 不需要高置信度门槛
+KAPPA_MIN_CONFIDENCE_CREATIVE: float = 0.0
 
 # Liu-Score ε (防止除零)
 LIU_EPSILON: float = 0.01
@@ -235,11 +243,20 @@ DEFAULT_RHAE_MAX: float = 115.0
 def kappa_eta_ascend_sort(
     candidates: List[Dict[str, Any]],
     delta_k: float = KAPPA_DELTA_K,
+    delta_k_creative: float = KAPPA_DELTA_K_CREATIVE,
+    dual_threshold: bool = True,
 ) -> List[Dict[str, Any]]:
     """κ-优选η升序排序: 按残差η升序排列候选。
 
+    ★ 升级6: 双阈值通道 — 硬通道(保守) + 创意通道(放宽)
+
     核心思想: η越小 → 残差越小 → 越接近目标 → 优先选择。
     置信度 confidence = 1 - η/δ_K，η升序选择最小残差。
+
+    双阈值策略:
+      - 硬通道(Hard): η < δ_K × 5/6 ≈ 0.030, confidence ≥ 1/6 → 保守候选优先
+      - 创意通道(Creative): 硬通道空时, 放宽到 η < δ_K_creative = 0.042
+      - 创意候选标记 tier='creative', 供ψ-Audit追踪
 
     Args:
         candidates: L3评估后的候选列表，每个候选包含:
@@ -249,16 +266,19 @@ def kappa_eta_ascend_sort(
             - 'gex_result': GaussEx验证结果
             - 'ic': 信息基数IC
             - 'depth': 搜索深度
-        delta_k: κ-Snap残差阈值δ_K，默认0.036。
+        delta_k: κ-Snap硬残差阈值δ_K，默认0.036。
+        delta_k_creative: κ-Snap创意残差阈值δ_K_creative，默认0.042。
+        dual_threshold: 是否启用双阈值模式，默认True。
 
     Returns:
         η升序排序后的候选列表 (η最小在前)。
+        硬通道候选优先; 硬通道空时返回创意候选(tagged tier='creative')。
     """
     if len(candidates) == 0:
         return []
 
-    # 计算置信度并过滤
-    valid_candidates: List[Dict[str, Any]] = []
+    # === 硬通道(Hard): 卞氏5/6饱和阈值过滤 ===
+    hard_candidates: List[Dict[str, Any]] = []
     for cand in candidates:
         eta: float = cand.get('eta', 1.0)
         confidence: float = 1.0 - eta / delta_k if delta_k > 0 else 0.0
@@ -266,12 +286,32 @@ def kappa_eta_ascend_sort(
 
         # 卞氏5/6饱和阈值过滤: confidence ≥ 1/6 → 有效
         if confidence >= KAPPA_MIN_CONFIDENCE:
-            valid_candidates.append(cand)
+            cand['tier'] = 'hard'
+            hard_candidates.append(cand)
 
-    # η升序排序 (残差最小在前)
-    valid_candidates.sort(key=lambda x: x.get('eta', 1.0))
+    # 硬通道有候选 → 直接返回 (保守优先)
+    if len(hard_candidates) > 0:
+        hard_candidates.sort(key=lambda x: x.get('eta', 1.0))
+        return hard_candidates
 
-    return valid_candidates
+    # === 硬通道空 → 创意通道(Creative): 放宽阈值 ===
+    if dual_threshold:
+        creative_candidates: List[Dict[str, Any]] = []
+        for cand in candidates:
+            eta: float = cand.get('eta', 1.0)
+            # 创意通道: η < δ_K_creative → 接受 (不做卞氏5/6饱和过滤)
+            if eta < delta_k_creative:
+                cand['tier'] = 'creative'
+                # 创意通道置信度 = 1 - η/δ_K_creative (以创意阈值为基准)
+                cand['confidence'] = 1.0 - eta / delta_k_creative if delta_k_creative > 0 else 0.0
+                creative_candidates.append(cand)
+
+        # η升序排序 (残差最小在前)
+        creative_candidates.sort(key=lambda x: x.get('eta', 1.0))
+        return creative_candidates
+
+    # 双阈值关闭时, 只用硬通道 (原逻辑)
+    return []
 
 
 def compute_liu_score(
@@ -305,12 +345,18 @@ def compute_liu_score(
 def kappa_priority_select(
     candidates: List[Dict[str, Any]],
     delta_k: float = KAPPA_DELTA_K,
+    delta_k_creative: float = KAPPA_DELTA_K_CREATIVE,
     max_select: int = 10,
+    dual_threshold: bool = True,
 ) -> List[Dict[str, Any]]:
-    """κ-优选η升序 + Liu-Score双约束选择。
+    """κ-优选η升序 + Liu-Score双约束选择 — 双阈值通道。
+
+    ★ 升级6: 双阈值通道
+      - 硬通道优先: η < δ_K × 5/6 (保守候选)
+      - 硬通道空 → 创意通道: η < δ_K_creative (放宽候选)
 
     步骤:
-      1. η升序排序 (κ-优选)
+      1. η升序排序 (κ-优选, 双阈值)
       2. 计算Liu-Score
       3. 背景剪枝: Liu-Score < DEAD_ZERO_RATIO → 丢弃
       4. 按Liu-Score降序排列 (最高优先级在前)
@@ -318,14 +364,19 @@ def kappa_priority_select(
 
     Args:
         candidates: L3评估后的候选列表。
-        delta_k: κ-Snap残差阈值δ_K。
+        delta_k: κ-Snap硬残差阈值δ_K。
+        delta_k_creative: κ-Snap创意残差阈值δ_K_creative。
         max_select: 最大选择数量。
+        dual_threshold: 是否启用双阈值模式。
 
     Returns:
         κ-优选η升序 + Liu-Score双约束后的最优候选列表。
+        硬通道候选优先; 硬通道空时返回创意候选。
     """
-    # Step 1: η升序排序
-    eta_sorted: List[Dict[str, Any]] = kappa_eta_ascend_sort(candidates, delta_k)
+    # Step 1: η升序排序 (双阈值)
+    eta_sorted: List[Dict[str, Any]] = kappa_eta_ascend_sort(
+        candidates, delta_k, delta_k_creative, dual_threshold,
+    )
 
     if len(eta_sorted) == 0:
         return []
@@ -337,10 +388,18 @@ def kappa_priority_select(
         cand['liu_score'] = liu_score
 
         # Step 3: 背景剪枝
-        if liu_score < DEAD_ZERO_RATIO:
-            continue  # 低价值候选丢弃
-
-        scored_candidates.append((liu_score, cand))
+        # ★ 升级6: 创意候选不做背景剪枝 (已经有tier标记, 允许更大残差)
+        tier: str = cand.get('tier', 'hard')
+        if tier == 'creative':
+            # 创意候选: 只要求liu_score > 0 (避免完全无效)
+            if liu_score <= 0:
+                continue
+            scored_candidates.append((liu_score, cand))
+        else:
+            # 硬通道候选: 标准背景剪枝
+            if liu_score < DEAD_ZERO_RATIO:
+                continue
+            scored_candidates.append((liu_score, cand))
 
     # Step 4: Liu-Score降序排列
     scored_candidates.sort(key=lambda x: x[0], reverse=True)
@@ -369,31 +428,46 @@ class KappaEtaAscendSelector:
       - psi_audit: ψ-Audit日志, 记录每次select操作的审计轨迹
       - critique_diagnosis: critique_self_loop触发时的诊断信息
 
+    ★ 升级6新增:
+      - delta_k_creative: κ-Snap创意残差阈值 (结构化偏离探测)
+      - tier_used: 最近select使用的通道 ('hard' / 'creative' / 'none')
+      - dual_threshold: 是否启用双阈值模式
+
     Attributes:
-        delta_k: κ-Snap残差阈值δ_K。
+        delta_k: κ-Snap硬残差阈值δ_K。
+        delta_k_creative: κ-Snap创意残差阈值δ_K_creative。
         max_select: 最大选择数量。
+        dual_threshold: 是否启用双阈值模式。
         needs_critique: 是否需要触发critique_self_loop (空候选时True)。
         critique_diagnosis: 诊断信息 (critique_self_loop触发时)。
+        tier_used: 最近select使用的通道 ('hard' / 'creative' / 'none')。
         psi_audit: ψ-Audit日志实例。
     """
 
     def __init__(
         self,
         delta_k: float = KAPPA_DELTA_K,
+        delta_k_creative: float = KAPPA_DELTA_K_CREATIVE,
         max_select: int = 10,
+        dual_threshold: bool = True,
         psi_audit: Optional[PsiAuditLog] = None,
     ) -> None:
         """初始化κ-优选η升序选择器。
 
         Args:
-            delta_k: κ-Snap残差阈值δ_K，默认0.036。
+            delta_k: κ-Snap硬残差阈值δ_K，默认0.036。
+            delta_k_creative: κ-Snap创意残差阈值δ_K_creative，默认0.042。
             max_select: 最大选择数量，默认10。
+            dual_threshold: 是否启用双阈值模式，默认True。
             psi_audit: ψ-Audit日志实例, 默认使用全局实例。
         """
         self.delta_k: float = delta_k
+        self.delta_k_creative: float = delta_k_creative
         self.max_select: int = max_select
+        self.dual_threshold: bool = dual_threshold
         self.needs_critique: bool = False  # ★ 升级5: 空候选触发critique标志
         self.critique_diagnosis: str = ""  # ★ 升级5: 诊断信息
+        self.tier_used: str = "none"  # ★ 升级6: 最近使用的通道
         self.psi_audit: PsiAuditLog = psi_audit or get_psi_audit_log()  # ★ 升级5: ψ-Audit日志
 
     def select(
@@ -404,6 +478,7 @@ class KappaEtaAscendSelector:
 
         ★ 升级5: 空候选时设置needs_critique=True, 触发critique_self_loop。
         ★ 升级5: 每次select记录ψ-Audit日志。
+        ★ 升级6: 双阈值通道 — 硬通道优先, 空时切换创意通道。
 
         Args:
             candidates: L3评估后的候选列表。
@@ -413,21 +488,33 @@ class KappaEtaAscendSelector:
             空候选时设置self.needs_critique=True。
         """
         result: List[Dict[str, Any]] = kappa_priority_select(
-            candidates, self.delta_k, self.max_select,
+            candidates, self.delta_k, self.delta_k_creative,
+            self.max_select, self.dual_threshold,
         )
+
+        # ★ 升级6: 记录使用的通道
+        if len(result) > 0:
+            tiers = [c.get('tier', 'hard') for c in result]
+            if 'creative' in tiers:
+                self.tier_used = 'creative'
+            else:
+                self.tier_used = 'hard'
+        else:
+            self.tier_used = 'none'
 
         # ★ 升级5: 空候选 → 触发critique_self_loop
         if len(result) == 0:
             self.needs_critique = True
             self.critique_diagnosis = (
-                f"κ-优选选不出候选: all η > δ_K({self.delta_k:.4f}), "
+                f"κ-优选双阈值选不出候选: "
+                f"hard δ_K={self.delta_k:.4f}, creative δ_K={self.delta_k_creative:.4f}, "
                 f"candidates={len(candidates)}, "
                 f"best_eta={min(c.get('eta',1.0) for c in candidates) if candidates else 'N/A'}"
             )
 
             # ★ 记录空候选触发ψ-Audit
             self.psi_audit.append(PsiAuditEntry(
-                selector='kappa_eta_ascend',
+                selector='kappa_eta_ascend_dual',
                 eta=min(c.get('eta', 1.0) for c in candidates) if candidates else 1.0,
                 confidence=0.0,
                 liu_score=0.0,
@@ -446,7 +533,7 @@ class KappaEtaAscendSelector:
             audit_entries: List[PsiAuditEntry] = []
             for cand in result:
                 audit_entries.append(PsiAuditEntry(
-                    selector='kappa_eta_ascend',
+                    selector='kappa_eta_ascend_dual',
                     eta=cand.get('eta', 1.0),
                     confidence=cand.get('confidence', 0.0),
                     liu_score=cand.get('liu_score', 0.0),
@@ -454,7 +541,7 @@ class KappaEtaAscendSelector:
                     timestamp=time.time(),
                     node_id=cand.get('node_id', -1),
                     needs_critique=False,
-                    diagnosis="",
+                    diagnosis=f"tier={cand.get('tier', 'hard')}",
                 ))
             self.psi_audit.append_batch(audit_entries)
 

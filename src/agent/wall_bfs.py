@@ -71,6 +71,7 @@ class WallBFSEngine:
         wall_char: int = WALL_BFS_WALL_CHAR,
         goal_char: int = WALL_BFS_GOAL_CHAR,
         box_chars: Optional[Set[int]] = None,
+        bfs_radius: int = 0,
     ) -> None:
         """初始化WallBFSEngine。
 
@@ -79,13 +80,20 @@ class WallBFSEngine:
             wall_char: 墙壁颜色值。
             goal_char: 目标颜色值。
             box_chars: 箱子颜色值集合，默认{3, 5}。
+            bfs_radius: P0-A bounding — BFS搜索半径限制(Manhattan距离)。
+                0表示无限制, >0时只探索起始位置radius范围内的节点。
         """
         self.root_state: np.ndarray = root_state.copy()
         self.wall_char: int = wall_char
         self.goal_char: int = goal_char
         self.box_chars: Set[int] = box_chars or WALL_BFS_BOX_CHARS.copy()
+        self.bfs_radius: int = bfs_radius  # P0-A: BFS半径边界
         self.node_map: Dict[int, Node] = {}
         self._next_id: int = 0
+
+        # P0-A: 记录起始玩家位置用于radius约束
+        player_pos, _ = self._find_entities(self.root_state)
+        self._origin_pos: Tuple[int, int] = player_pos
 
         # 创建根节点
         root_node: Node = Node(
@@ -235,6 +243,17 @@ class WallBFSEngine:
                     )
                     if new_grid is None:
                         continue  # push不合法或deadlock
+
+                    # P0-A bounding: BFS radius边界限制
+                    # 只接受origin位置Manhattan距离<=bfs_radius内的push目标
+                    if self.bfs_radius > 0 and self._origin_pos != (-1, -1):
+                        ox, oy = self._origin_pos
+                        # 新箱子push后的目标位置
+                        new_box_x = box_pos[0] + direction[0]
+                        new_box_y = box_pos[1] + direction[1]
+                        manhattan = abs(new_box_x - ox) + abs(new_box_y - oy)
+                        if manhattan > self.bfs_radius:
+                            continue  # 超出BFS radius边界，跳过
 
                     # 布局哈希去重
                     layout_hash: str = self._layout_hash(new_grid)

@@ -7,7 +7,7 @@
   "enable_gpu": true,
   "enable_internet": false,
   "competition_sources": [
-    "arc-agi-3"
+    "arc-prize-2026-arc-agi-3"
   ],
   "kernel_type": "notebook"
 }

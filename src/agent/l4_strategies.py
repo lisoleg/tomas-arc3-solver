@@ -44,7 +44,7 @@ from .kappa_selector import (
 # ============================================================================
 
 class KappaSelector:
-    """κ-优选η升序选择器 — L4决策融合策略。
+    """κ-优选η升序选择器 — L4决策融合策略 + early-stop优化。
 
     使用kappa_selector.KappaEtaAscendSelector做最终选择:
       1. η升序排序 (κ-优选)
@@ -52,6 +52,10 @@ class KappaSelector:
       3. 背景剪枝 (Liu-Score < DEAD_ZERO_RATIO → 丢弃)
       4. Liu-Score降序排列
       5. 取前max_select个最优候选
+
+    ★ v4.3 优化:
+      - early-stop: η < DELTA_K_EARLY → 立即返回最优候选
+      - 检查L3的early_stop标记 → 有则立即返回该候选
 
     ★ 升级5新增:
       - needs_critique: 空候选时标记为True, 触发critique_self_loop
@@ -62,7 +66,10 @@ class KappaSelector:
         selector: KappaEtaAscendSelector实例。
         needs_critique: 是否需要触发critique_self_loop。
         critique_diagnosis: 诊断信息。
+        DELTA_K_EARLY: early-stop阈值。
     """
+
+    DELTA_K_EARLY: float = 0.005  # early-stop threshold
 
     def __init__(
         self,
@@ -94,7 +101,13 @@ class KappaSelector:
         self,
         evaluated_set: EvaluatedCandidateSet,
     ) -> List[Dict[str, Any]]:
-        """κ-优选η升序选择。
+        """κ-优选η升序选择 + early-stop。
+
+        ★ v4.3 优化:
+          1. 检查L3的early_stop标记 → 有则立即返回该候选
+          2. η升序排序候选
+          3. early-stop: η < DELTA_K_EARLY → 立即返回该候选
+          4. 无early-stop → 委托KappaEtaAscendSelector做完整选择
 
         ★ 升级5: 空候选时通过needs_critique属性标记触发critique_self_loop。
         ★ 升级5: 每次select通过底层KappaEtaAscendSelector记录ψ-Audit日志。
@@ -105,6 +118,19 @@ class KappaSelector:
         Returns:
             最优候选列表(按Liu-Score降序)。
         """
+        candidates: List[Dict[str, Any]] = evaluated_set.candidates
+
+        # ★ v4.3: Check for early_stop flag from L3
+        for c in candidates:
+            if c.get('early_stop', False):
+                return [c]  # L3 already found a great candidate (WIN state or grid-mode perfect match)
+
+        # BUGFIX v4.3.1: REMOVED standalone eta < DELTA_K_EARLY early-stop.
+        # For game-mode self-comparison examples, many non-solving candidates
+        # have near-zero eta (grid similar to start) — this would return
+        # a non-solving plan. Only trust L3's explicit early_stop flag.
+
+        # No early-stop → delegate to KappaEtaAscendSelector for full selection
         return self._selector.select(evaluated_set.candidates)
 
     def confidence(self, eta: float) -> float:
