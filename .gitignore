@@ -89,6 +89,7 @@ arc3_oracle_*.py
 oracle_*.json
 oracle_*.txt
 oracle_*.py
+update_oracle_in_agent.py
 record_*.py
 measure_*.py
 
