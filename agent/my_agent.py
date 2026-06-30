@@ -1,16 +1,17 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v6.5 (Object-Level Search + A* Heuristic).
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v6.6 (CCA + Rule Hypothesis Engine).
 
-Strategy (v6.5 — architectural overhaul: object-level state abstraction + A* heuristic):
+Strategy (v6.6 — CCA + Rule Hypothesis Engine: proper object detection + game mechanic inference):
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
-  2. Object-Level State Abstraction: Extract {player, objects, goals, color_dist} from 64×64 grid
-     → state space from ~10^30 (pixel-level) to ~10^3-10^4 (object-level)
-  3. A* Heuristic Frontier: Use goal-distance heuristic (Manhattan, goal-completion) for frontier
-     priority instead of blind BFS "least visited first"
-  4. Non-Local Action Impact Tracking: gravity-flip/teleport (J⊥ class) actions get priority boost
-     when η-plateau — inspired by Ferlaino J⊥≫Jz analogy
-  5. IDS Depth Limiting: Cap frontier BFS depth to prevent spiraling into deep chains
-  6. IDO Value Score + Noether-Check + Goal-EML (from v6.4, retained)
-  7. Creative-Probe + Pattern repeat + Random fallback
+  2. CCA (Connected Component Analysis): Flood-fill BFS to identify contiguous color regions
+     as real "objects" — replaces crude 8×8 region signature from v6.5.
+     Implements Perceptual Abstraction Functor F from TOMAS-Hybrid theory.
+  3. Rule Hypothesis Engine: Observe grid changes in first 3-5 steps → infer game mechanics
+     (push/toggle/propagation) → predict goal state. Layer I (Induction) approximation.
+  4. Object-Level State Abstraction + A* Heuristic (from v6.5, now CCA-enhanced)
+  5. Non-Local Action Impact Tracking: CCA-based object centroid displacement for J⊥ class detection
+  6. IDS Depth Limiting (from v6.5, retained)
+  7. IDO Value Score + Noether-Check + Goal-EML (from v6.4, retained)
+  8. Creative-Probe + Pattern repeat + Random fallback
 
 This file is self-contained — no imports from local project files.
 All replay data and logic is included inline.
@@ -297,12 +298,24 @@ class MyAgent(Agent):
         self._nonlocal_impact: Dict[str, float] = {}  # action_key → non-local impact magnitude (J⊥ class)
         self._frontier_depth: Dict[str, int] = {}  # object_hash → BFS depth from start state
 
+        # ── NEW v6.6: CCA (Connected Component Analysis) + Rule Hypothesis Engine ──
+        # CCA replaces crude 8×8 region signature with proper flood-fill BFS
+        # to identify contiguous color regions as "objects" (Perceptual Abstraction Functor F).
+        # Rule Hypothesis Engine: observe grid changes → infer game mechanics → predict goal.
+        self._cca_objects: List[Dict[str, Any]] = []  # CCA-detected objects [{centroid, size, color, bbox, obj_type}]
+        self._rule_hypothesis: Dict[str, Any] = {}  # inferred rule: {type, goal_prediction, confidence}
+        self._observation_log: List[Dict[str, Any]] = []  # first-N-step observations [{step, action, grid_changes}]
+        self._hypothesis_confirmed: bool = False  # whether rule hypothesis confirmed (3+ consistent observations)
+        self._hypothesis_step_count: int = 0  # how many steps observed for hypothesis
+        self._MAX_HYPOTHESIS_STEPS: int = 5  # max steps to observe before confirming hypothesis
+        self._predicted_goal_objects: List[Dict[str, Any]] = []  # predicted goal state objects
+
         # ── Initialize plan for level 0 ──
         self._compute_plan(0)
 
     @property
     def name(self) -> str:
-        return f"tomas.v6.5.{self.MAX_ACTIONS}"
+        return f"tomas.v6.6.{self.MAX_ACTIONS}"
 
     @property
     def _stall_threshold(self) -> int:
@@ -649,6 +662,14 @@ class MyAgent(Agent):
         self._heuristic_distance = 1.0
         self._nonlocal_impact = {}
         self._frontier_depth = {}
+
+        # ── Reset v6.6 CCA + Rule Hypothesis state ──
+        self._cca_objects = []
+        self._rule_hypothesis = {}
+        self._observation_log = []
+        self._hypothesis_confirmed = False
+        self._hypothesis_step_count = 0
+        self._predicted_goal_objects = []
 
     def _should_visit(self, x: int, y: int) -> bool:
         """v5.0.4: Check if a coordinate should be visited (allow revisit up to _max_revisit).
@@ -1775,6 +1796,25 @@ class MyAgent(Agent):
         self._object_hash = self._compute_object_hash(self._object_state)
         self._heuristic_distance = self._compute_heuristic_distance(self._object_state)
 
+        # ── v6.6: Rule Hypothesis Engine — observe grid changes ──
+        # In first MAX_HYPOTHESIS_STEPS, track how grid changes after actions
+        # to infer game mechanics (push/toggle/propagation).
+        if (self._action_count > 0
+                and not self._hypothesis_confirmed
+                and self._hypothesis_step_count < self._MAX_HYPOTHESIS_STEPS
+                and self._last_action_key):
+            prev_grid = None
+            if len(frames) >= 2 and frames[-2].frame is not None:
+                prev_grid = frames[-2].frame
+            elif len(self._grid_history) >= 2:
+                prev_grid = self._grid_history[-2]
+            if prev_grid is not None and current_grid:
+                self._observe_rule_hypothesis(
+                    prev_grid, current_grid, self._last_action_key, self._hypothesis_step_count
+                )
+                # Recompute heuristic with updated hypothesis
+                self._heuristic_distance = self._compute_heuristic_distance(self._object_state)
+
         # Compute delta from previous frame
         delta: List[Tuple[int, int]] = []
         if len(frames) >= 2 and frames[-2].frame is not None:
@@ -2380,14 +2420,123 @@ class MyAgent(Agent):
         self._goal_eml_convergence = convergence
         return convergence
 
-    # ── v6.5: Object-Level State Abstraction + A* Heuristic ───────────────
+    # ── v6.6: CCA (Connected Component Analysis) + Rule Hypothesis Engine ───────
+
+    def _cca_connected_components(self, grid_layer: Any) -> List[Dict[str, Any]]:
+        """v6.6: Connected Component Analysis — flood-fill BFS to identify contiguous color regions.
+
+        Replaces crude 8×8 region signature with proper object detection.
+        Each connected region of same color becomes an "object" with:
+        - centroid (x, y), size (pixel count), color, bounding box, object type
+
+        Implements Perceptual Abstraction Functor F from TOMAS-Hybrid theory.
+        """
+        if not grid_layer:
+            return []
+        h = len(grid_layer)
+        w = len(grid_layer[0])
+        if h == 0 or w == 0:
+            return []
+
+        wall_set = set(self._wall_colors) if self._wall_colors else set()
+        visited = set()
+        objects = []
+
+        for r in range(h):
+            for c in range(w):
+                try:
+                    color = grid_layer[r][c]
+                except (IndexError, TypeError):
+                    continue
+                if color == 0 or color == -1 or color in wall_set:
+                    continue  # Skip background and walls
+                if (r, c) in visited:
+                    continue
+
+                # Flood-fill BFS for this color region
+                component_pixels = []
+                queue = [(r, c)]
+                visited.add((r, c))
+                while queue:
+                    cr, cc = queue.pop(0)
+                    component_pixels.append((cr, cc))
+                    # 8-connectivity (including diagonals for robustness)
+                    for dr in (-1, 0, 1):
+                        for dc in (-1, 0, 1):
+                            if dr == 0 and dc == 0:
+                                continue
+                            nr, nc = cr + dr, cc + dc
+                            if 0 <= nr < h and 0 <= nc < w and (nr, nc) not in visited:
+                                try:
+                                    if grid_layer[nr][nc] == color:
+                                        visited.add((nr, nc))
+                                        queue.append((nr, nc))
+                                except (IndexError, TypeError):
+                                    continue
+
+                # Compute object properties
+                n_pixels = len(component_pixels)
+                if n_pixels < 2:  # Skip single-pixel noise
+                    continue
+
+                sum_r = sum(p[0] for p in component_pixels)
+                sum_c = sum(p[1] for p in component_pixels)
+                centroid_x = sum_c / n_pixels
+                centroid_y = sum_r / n_pixels
+
+                min_r = min(p[0] for p in component_pixels)
+                max_r = max(p[0] for p in component_pixels)
+                min_c = min(p[1] for p in component_pixels)
+                max_c = max(p[1] for p in component_pixels)
+
+                # Classify object type
+                obj_type = "unknown"
+                player_color = self._player_color if self._player_color else -1
+                goal_color_set = set(self._goal_colors) if self._goal_colors else set()
+                anomaly_set = set(self._asd_anomaly_colors) if self._asd_analyzed else set()
+
+                if color == player_color and self._estimated_player_pos:
+                    # Check if near estimated player position
+                    px, py = self._estimated_player_pos
+                    if abs(centroid_x - px) < 5 and abs(centroid_y - py) < 5:
+                        obj_type = "player"
+                if color in goal_color_set:
+                    obj_type = "goal"
+                if color in anomaly_set:
+                    obj_type = "anomaly"
+
+                # Size-based classification
+                bbox_w = max_c - min_c + 1
+                bbox_h = max_r - min_r + 1
+                aspect_ratio = bbox_w / max(bbox_h, 1)
+                if n_pixels > 100:
+                    obj_type = "large_block" if obj_type == "unknown" else obj_type
+
+                obj = {
+                    'centroid': (round(centroid_x, 1), round(centroid_y, 1)),
+                    'size': n_pixels,
+                    'color': color,
+                    'bbox': (min_c, min_r, max_c, max_r),
+                    'bbox_size': (bbox_w, bbox_h),
+                    'aspect_ratio': round(aspect_ratio, 2),
+                    'obj_type': obj_type,
+                    'pixels': component_pixels[:50],  # Keep first 50 pixels for reference (don't store all)
+                }
+                objects.append(obj)
+
+        # Sort by size (largest first) for priority
+        objects.sort(key=lambda o: o['size'], reverse=True)
+        return objects
 
     def _extract_objects(self, grid: Any) -> Dict[str, Any]:
         """Extract key objects from 64×64 grid for object-level state abstraction.
 
-        v6.5 CORE: Instead of hashing entire 64×64 pixel grid (~10^30 states),
-        extract essential game objects (~10^3-10^4 states).
-        Inspired by Yuanbao BFS efficiency analysis.
+        v6.6 CORE: Uses CCA (Connected Component Analysis) — proper flood-fill BFS
+        to identify contiguous color regions as real "objects", replacing the crude
+        8×8 region signature from v6.5.
+
+        Implements Perceptual Abstraction Functor F from TOMAS-Hybrid theory:
+        pixel stream → object-level state S via CCA + object classification.
         """
         layer = self._extract_layer0(grid)
         if not layer:
@@ -2399,6 +2548,11 @@ class MyAgent(Agent):
         if w == 0:
             return {}
 
+        # v6.6: CCA replaces 8×8 region signature
+        cca_objs = self._cca_connected_components(layer)
+        self._cca_objects = cca_objs  # Store for rule hypothesis engine
+
+        # Aggregate statistics from CCA objects
         color_dist: Dict[int, int] = {}
         total_nonzero = 0
         player_pos = self._estimated_player_pos
@@ -2406,29 +2560,25 @@ class MyAgent(Agent):
         goal_color_set = set(self._goal_colors) if self._goal_colors else set()
         special_pos: List[Tuple[int, int, int]] = []
         goal_pos_pixels: List[Tuple[int, int]] = []
-        wall_set = set(self._wall_colors) if self._wall_colors else set()
 
-        # 8×8 region signature — coarse grid overview
-        region_sig: List[int] = []
-        region_size = 8
-        for ry in range(0, h, region_size):
-            for rx in range(0, w, region_size):
-                region_colors: Dict[int, int] = {}
-                for r in range(ry, min(ry + region_size, h)):
-                    for c in range(rx, min(rx + region_size, w)):
-                        try:
-                            val = layer[r][c]
-                            if val != 0 and val != -1 and val not in wall_set:
-                                region_colors[val] = region_colors.get(val, 0) + 1
-                                color_dist[val] = color_dist.get(val, 0) + 1
-                                total_nonzero += 1
-                                if val in anomaly_set:
-                                    special_pos.append((c, r, val))
-                                if val in goal_color_set:
-                                    goal_pos_pixels.append((c, r))
-                        except (IndexError, TypeError):
-                            continue
-                region_sig.append(max(region_colors.items(), key=lambda x: x[1])[0] if region_colors else 0)
+        for obj in cca_objs:
+            color = obj['color']
+            size = obj['size']
+            color_dist[color] = color_dist.get(color, 0) + size
+            total_nonzero += size
+
+            cx, cy = obj['centroid']
+            obj_type = obj['obj_type']
+
+            if obj_type == "anomaly" or color in anomaly_set:
+                special_pos.append((round(cx), round(cy), color))
+            if obj_type == "goal" or color in goal_color_set:
+                goal_pos_pixels.append((round(cx), round(cy)))
+
+        # Object-level signatures (replace grid_signature with CCA summary)
+        obj_sig = []
+        for obj in cca_objs[:30]:  # Top 30 objects by size
+            obj_sig.append(f"{obj['color']}:{obj['size']}:{obj['obj_type']}")
 
         return {
             'player_pos': player_pos,
@@ -2437,11 +2587,13 @@ class MyAgent(Agent):
             'goal_pos': goal_pos_pixels if goal_pos_pixels else self._goal_positions,
             'n_colors': len(color_dist),
             'n_nonzero': total_nonzero,
-            'grid_signature': region_sig,
+            'grid_signature': obj_sig,  # v6.6: CCA-based object signature (was 8×8 region_sig)
+            'cca_objects': cca_objs,  # v6.6: Full CCA object list
+            'n_objects': len(cca_objs),  # v6.6: Number of detected objects
         }
 
     def _compute_object_hash(self, objects: Dict[str, Any]) -> str:
-        """v6.5: Object-level hash replacing pixel-level _grid_hash for state graph."""
+        """v6.6: Object-level hash using CCA object signatures for state graph."""
         if not objects:
             return ""
         hash_parts = []
@@ -2459,23 +2611,36 @@ class MyAgent(Agent):
             hash_parts.append(f"g:{sorted_goals}")
         hash_parts.append(f"nc:{objects.get('n_colors', 0)}")
         hash_parts.append(f"nn:{objects.get('n_nonzero', 0)}")
+        hash_parts.append(f"no:{objects.get('n_objects', 0)}")  # v6.6: number of objects
+        # v6.6: Use CCA object signatures instead of region_sig
         if objects.get('grid_signature'):
-            hash_parts.append(f"rs:{','.join(str(x) for x in objects['grid_signature'])}")
+            hash_parts.append(f"os:{','.join(str(x) for x in objects['grid_signature'][:20])}")
         hash_input = "|".join(hash_parts)
         return hashlib.md5(hash_input.encode()).hexdigest()[:16]
 
     def _compute_heuristic_distance(self, objects: Dict[str, Any]) -> float:
-        """v6.5 A* heuristic: goal-distance for frontier priority.
+        """v6.6 A* heuristic: CCA-based goal-distance + Rule Hypothesis guided.
 
         Lower = closer to goal. 0 = goal achieved.
-        Keyboard: Manhattan distance player→goal.
-        Click: remaining anomaly / initial count.
-        Mixed: 1 - goal_eml_convergence.
+        Keyboard: Manhattan distance player→goal (or predicted goal if hypothesis confirmed).
+        Click: remaining anomaly objects / initial count.
+        Mixed: 1 - goal_eml_convergence (or hypothesis confidence).
+
+        v6.6: When rule hypothesis is confirmed, use predicted_goal_objects for
+        more precise targeting — this is the Layer I (Induction) benefit.
         """
         h_distance = 100.0  # Default: far from goal
 
+        # v6.6: If rule hypothesis confirmed, use predicted goal
+        goal_positions = objects.get('goal_pos', [])
+        if self._hypothesis_confirmed and self._predicted_goal_objects:
+            pred_goals = [(round(o['centroid'][0]), round(o['centroid'][1]))
+                          for o in self._predicted_goal_objects
+                          if o.get('obj_type') in ('goal', 'predicted_goal')]
+            if pred_goals:
+                goal_positions = pred_goals
+
         if self._detected_game_type == "keyboard" and self._estimated_player_pos:
-            goal_positions = objects.get('goal_pos', [])
             if goal_positions:
                 min_dist = min(
                     abs(self._estimated_player_pos[0] - gx) + abs(self._estimated_player_pos[1] - gy)
@@ -2490,41 +2655,218 @@ class MyAgent(Agent):
             initial_count = max(len(self._asd_anomaly_targets), 1)
             remaining = len(objects.get('special_pos', []))
             h_distance = remaining / initial_count
+            # v6.6: CCA-based click heuristic — remaining anomaly objects
+            cca_objs = objects.get('cca_objects', [])
+            anomaly_objs = [o for o in cca_objs if o.get('obj_type') == 'anomaly']
+            if anomaly_objs:
+                h_distance = len(anomaly_objs) / max(initial_count, 1)
         else:
             h_distance = 1.0 - self._goal_eml_convergence
+            # v6.6: Rule hypothesis confidence boost
+            if self._hypothesis_confirmed:
+                h_distance *= (1.0 - self._rule_hypothesis.get('confidence', 0.0) * 0.3)
 
         self._heuristic_distance = h_distance
         return h_distance
 
     def _compute_nonlocal_impact(self, prev_objects: Dict[str, Any], curr_objects: Dict[str, Any], action_key: str) -> float:
-        """v6.5: Non-local impact — J⊥≫Jz analogy from Ferlaino.
+        """v6.6: Non-local impact using CCA object-level changes.
 
-        Measures how many regions changed simultaneously.
-        High impact = gravity-flip/teleport (J⊥ class).
-        Low impact = push/step (Jz class).
-        When η-plateau (stuck), prefer J⊥-class actions.
+        Measures how many objects changed simultaneously.
+        High impact = gravity-flip/teleport (J⊥ class) — many objects moved.
+        Low impact = push/step (Jz class) — one object moved locally.
+
+        v6.6: Uses CCA object signatures + centroid displacement for
+        more precise impact measurement.
         """
         if not prev_objects or not curr_objects:
             return 0.0
 
+        # v6.6: CCA-based object change measurement
         prev_sig = prev_objects.get('grid_signature', [])
         curr_sig = curr_objects.get('grid_signature', [])
         if not prev_sig or not curr_sig:
             return 0.0
 
-        changed_regions = sum(1 for i in range(min(len(prev_sig), len(curr_sig))) if prev_sig[i] != curr_sig[i])
-        total_regions = max(len(prev_sig), 1)
-        impact = changed_regions / total_regions
+        changed_objects = sum(1 for i in range(min(len(prev_sig), len(curr_sig))) if prev_sig[i] != curr_sig[i])
+        total_objects = max(len(prev_sig), 1)
+        impact = changed_objects / total_objects
 
+        # Color distribution change (unchanged from v6.5, still useful)
         prev_dist = prev_objects.get('color_dist', {})
         curr_dist = curr_objects.get('color_dist', {})
         color_change = sum(abs(prev_dist.get(c, 0) - curr_dist.get(c, 0)) for c in set(prev_dist) | set(curr_dist))
         total_pixels = max(sum(curr_dist.values()), 1)
         color_impact = color_change / total_pixels
 
-        total_impact = impact + color_impact * 2
+        # v6.6: Object centroid displacement
+        prev_objs = prev_objects.get('cca_objects', [])
+        curr_objs = curr_objects.get('cca_objects', [])
+        centroid_displacement = 0.0
+        if prev_objs and curr_objs:
+            # Match objects by color+size (same object in different position)
+            for po in prev_objs[:15]:
+                for co in curr_objs[:15]:
+                    if po['color'] == co['color'] and abs(po['size'] - co['size']) <= 2:
+                        dx = abs(po['centroid'][0] - co['centroid'][0])
+                        dy = abs(po['centroid'][1] - co['centroid'][1])
+                        displacement = dx + dy
+                        if displacement > 3:  # Only count significant displacements
+                            centroid_displacement += displacement
+
+        total_impact = impact + color_impact * 2 + centroid_displacement * 0.01
         self._nonlocal_impact[action_key] = total_impact
         return total_impact
+
+    def _observe_rule_hypothesis(
+        self, prev_grid: Any, curr_grid: Any, action_key: str, step: int
+    ) -> Dict[str, Any]:
+        """v6.6: Rule Hypothesis Engine — observe grid changes → infer game mechanics.
+
+        Lightweight approximation of Layer I (Induction) from TOMAS-Hybrid theory.
+        In first 3-5 steps, deliberately observe how the grid changes after each action:
+        - Local change near action point → push/mechanics type
+        - Color flip at click point → click-toggle type
+        - Remote propagation from action → remote-propagation type
+        - No change → ineffective/waiting type
+
+        After MAX_HYPOTHESIS_STEPS observations, confirm the most consistent rule
+        and predict goal state objects.
+        """
+        prev_layer = self._extract_layer0(prev_grid)
+        curr_layer = self._extract_layer0(curr_grid)
+        if not prev_layer or not curr_layer:
+            return {}
+
+        h = min(len(prev_layer), len(curr_layer))
+        w = min(len(prev_layer[0]) if prev_layer else 0, len(curr_layer[0]) if curr_layer else 0)
+
+        # Find changed pixels
+        local_changes: List[Tuple] = []  # Changes near action point
+        remote_changes: List[Tuple] = []  # Changes far from action point
+        color_flips: List[Tuple] = []  # Pixels that changed color (not moved)
+
+        # Parse action point from action_key
+        action_x, action_y = -1, -1
+        if "@" in action_key:
+            try:
+                coords = action_key.split("@")[1].split(",")
+                action_x, action_y = int(coords[0]), int(coords[1])
+            except (ValueError, IndexError):
+                pass
+        elif action_key in ("ACTION1", "ACTION2", "ACTION3", "ACTION4"):
+            # Keyboard action — use estimated player position
+            if self._estimated_player_pos:
+                action_x, action_y = self._estimated_player_pos
+
+        for r in range(h):
+            for c in range(w):
+                try:
+                    prev_val = prev_layer[r][c]
+                    curr_val = curr_layer[r][c]
+                except (IndexError, TypeError):
+                    continue
+                if prev_val != curr_val:
+                    dist_from_action = abs(c - action_x) + abs(r - action_y) if action_x >= 0 else 999
+
+                    if prev_val != 0 and curr_val != 0 and prev_val != curr_val:
+                        color_flips.append((c, r, prev_val, curr_val, dist_from_action))
+                    elif dist_from_action <= 5:
+                        local_changes.append((c, r, prev_val, curr_val, dist_from_action))
+                    else:
+                        remote_changes.append((c, r, prev_val, curr_val, dist_from_action))
+
+        total_chg = len(local_changes) + len(remote_changes) + len(color_flips)
+        observation = {
+            'step': step,
+            'action_key': action_key,
+            'local_changes': len(local_changes),
+            'remote_changes': len(remote_changes),
+            'color_flips': len(color_flips),
+            'total_changes': total_chg,
+            'local_pct': len(local_changes) / max(total_chg, 1),
+            'remote_pct': len(remote_changes) / max(total_chg, 1),
+            'flip_pct': len(color_flips) / max(total_chg, 1),
+        }
+        self._observation_log.append(observation)
+        self._hypothesis_step_count += 1
+
+        # ── Rule inference from observations ──
+        if self._hypothesis_step_count >= 2:
+            # Analyze pattern across observations
+            avg_local = sum(o['local_pct'] for o in self._observation_log) / len(self._observation_log)
+            avg_remote = sum(o['remote_pct'] for o in self._observation_log) / len(self._observation_log)
+            avg_flip = sum(o['flip_pct'] for o in self._observation_log) / len(self._observation_log)
+
+            # Infer rule type
+            if avg_local > 0.5:
+                inferred_type = "push_mechanics"  # Local changes dominate → push/pull mechanics
+            elif avg_flip > 0.3:
+                inferred_type = "click_toggle"  # Color flips → toggle/switch mechanics
+            elif avg_remote > 0.3:
+                inferred_type = "remote_propagation"  # Remote changes → propagation/chain reaction
+            else:
+                inferred_type = "mixed"  # No clear dominant pattern
+
+            confidence = max(avg_local, avg_flip, avg_remote)
+
+            self._rule_hypothesis = {
+                'type': inferred_type,
+                'confidence': confidence,
+                'avg_local_pct': avg_local,
+                'avg_remote_pct': avg_remote,
+                'avg_flip_pct': avg_flip,
+                'observations': len(self._observation_log),
+            }
+
+            # ── Goal prediction based on inferred rule ──
+            if self._hypothesis_step_count >= self._MAX_HYPOTHESIS_STEPS or confidence > 0.6:
+                self._hypothesis_confirmed = True
+
+                # Predict goal state based on rule type
+                current_objects = self._cca_objects
+                predicted_goals: List[Dict[str, Any]] = []
+
+                if inferred_type == "push_mechanics":
+                    # Goal: push objects to target positions (goals/anomaly positions)
+                    goal_positions = self._goal_positions if self._goal_positions else []
+                    anomaly_targets = self._asd_anomaly_targets if self._asd_analyzed else []
+                    target_positions = goal_positions + list(anomaly_targets)
+                    for pos in target_positions[:5]:
+                        if isinstance(pos, (list, tuple)) and len(pos) >= 2:
+                            predicted_goals.append({
+                                'centroid': (float(pos[0]), float(pos[1])),
+                                'obj_type': 'predicted_goal',
+                                'size': 1,
+                                'color': -1,
+                            })
+
+                elif inferred_type == "click_toggle":
+                    # Goal: toggle all anomaly/special objects to a target state
+                    for obj in current_objects:
+                        if obj.get('obj_type') in ('anomaly', 'unknown') and obj.get('size', 0) < 50:
+                            predicted_goals.append({
+                                'centroid': obj['centroid'],
+                                'obj_type': 'predicted_goal',
+                                'size': obj['size'],
+                                'color': obj['color'],
+                            })
+
+                elif inferred_type == "remote_propagation":
+                    # Goal: trigger propagation to reach all target regions
+                    goal_color_set = set(self._goal_colors) if self._goal_colors else set()
+                    for obj in current_objects:
+                        if obj.get('obj_type') == 'goal' or obj.get('color') in goal_color_set:
+                            predicted_goals.append({
+                                'centroid': obj['centroid'],
+                                'obj_type': 'predicted_goal',
+                                'size': obj['size'],
+                                'color': obj['color'],
+                            })
+
+                self._predicted_goal_objects = predicted_goals
+
+        return observation
 
     # ── v6.3: Informed Search ────────────────────────────────────────────
 
