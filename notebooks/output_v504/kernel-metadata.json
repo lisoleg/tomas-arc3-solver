@@ -4,13 +4,10 @@
   "code_file": "submission.ipynb",
   "language": "python",
   "kernel_type": "notebook",
-  "is_private": true,
-  "enable_gpu": true,
-  "enable_tpu": false,
-  "enable_internet": false,
-  "keywords": [],
-  "dataset_sources": [],
-  "kernel_sources": [],
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_internet": "false",
   "competition_sources": ["arc-prize-2026-arc-agi-3"],
-  "model_sources": []
+  "dataset_sources": [],
+  "kernel_sources": []
 }
