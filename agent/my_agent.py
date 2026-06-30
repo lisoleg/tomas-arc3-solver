@@ -1,4 +1,4 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v5.0.4 (Smart Oracle Retry + Revisit-Allowed + ΔIC Priority Scan + Fast Stall + κ-Lock Guard).
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v5.0.5 (Goal-Oriented Navigation + Player Color Tracking + Goal Detection for Unseen Games).
 
 Strategy:
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
@@ -116,28 +116,27 @@ ACTION_NAME_TO_ID: Dict[str, int] = {
 
 
 class MyAgent(Agent):
-    """TOMAS ARC-AGI-3 Solver v5.0.4 — Replay Oracle + Dynamic Game-Type Detection + Grid-Scan Universal + RG-Flow Adaptive + Cognitive Inflation.
+    """TOMAS ARC-AGI-3 Solver v5.0.5 — Replay Oracle + Dynamic Game-Type Detection + Goal-Oriented Navigation + Grid-Scan Universal + RG-Flow Adaptive + Cognitive Inflation.
 
     Strategy priority:
       1. ARC3 Replay Oracle (precomputed human-optimal sequences — always try, then fallback)
       2. Dynamic game-type detection (infer click/keyboard/mixed from available_actions)
-      3. Grid-scan universal (ANY game with ACTION6 → systematic grid click scan)
-      4. ASD Anomaly Detection ("Attention Before Loss" — minority colors first)
-      5. RG-Flow Adaptive (early→high entropy exploration, late→κ-Snap lock)
-      6. 3-Life Strategy (Life1=explore, Life2=refine, Life3=execute)
-      7. Cognitive Inflation stall recovery (ΔIC avalanche BFS instead of random swap)
-      8. ΔIC-Driven Re-scan (frame change pixels → second scan round priority)
-      9. Delta-aware exploration (detect changed cells, navigate toward targets)
-      10. Pattern repeat (reuse effective action sequences)
-      11. Random fallback (last resort)
+      3. Goal-oriented navigation (detect player + goal, navigate toward goal instead of random nonzero)
+      4. Grid-scan universal (ANY game with ACTION6 → systematic grid click scan)
+      5. ASD Anomaly Detection ("Attention Before Loss" — minority colors first)
+      6. RG-Flow Adaptive (early→high entropy exploration, late→κ-Snap lock)
+      7. 3-Life Strategy (Life1=explore, Life2=refine, Life3=execute)
+      8. Cognitive Inflation stall recovery (ΔIC avalanche BFS instead of random swap)
+      9. ΔIC-Driven Re-scan (frame change pixels → second scan round priority)
+      10. Delta-aware exploration (detect changed cells, navigate toward targets)
+      11. Pattern repeat (reuse effective action sequences)
+      12. Random fallback (last resort)
 
-    v5.0.4 changes vs v5.0.3:
-      - Oracle skip logic removed: ALWAYS try Oracle first, fallback on GAME_OVER
-      - _visited_coords now allows revisit after N actions (revisit_allowed=True)
-      - Grid scan uses ΔIC priority: changed cells get rescan before full grid scan
-      - κ-Lock guard: only lock on actions that caused grid change (not wall-hit)
-      - Fast stall: threshold 4→6 in click games, 3→6 in keyboard games
-      - Oracle fallback: on GAME_OVER after Oracle, switch to grid-scan (not just retry)
+    v5.0.5 changes vs v5.0.4:
+      - Player color detection: track which color value moves with keyboard actions
+      - Goal detection: identify likely target/exit/goal positions from grid analysis
+      - Goal-oriented navigation: Phase 5 navigates toward detected goals, not random nonzero cells
+      - This is the KEY fix for competition unseen games — previously navigating toward walls/decoration
     """
 
     # Upper bound on actions per game.
@@ -239,6 +238,20 @@ class MyAgent(Agent):
         self._grid_scan_initialized: bool = False  # whether scan has been set up for this level
         self._effective_click_positions: List[Tuple[int, int]] = []  # clicks that caused grid change
         self._scan_expansion_radius: int = 2  # BFS expansion radius around effective clicks
+
+        # ── NEW v5.0.5: Goal-oriented navigation state ──
+        # Player color: the grid value that consistently moves with keyboard actions.
+        # We track this to separate the player from walls/decoration — critical for
+        # navigating toward goals instead of random nonzero cells.
+        self._player_color: Optional[int] = None  # Detected player sprite color value
+        self._player_color_candidates: Dict[int, int] = {}  # color -> frequency of movement
+        self._player_position_history: List[Tuple[int, int]] = []  # tracked player positions (x,y)
+
+        # Goal detection: positions in the grid that are likely targets/exits/goals.
+        # Identified by rarity, spatial patterns, border openings, and delta analysis.
+        self._goal_positions: List[Tuple[int, int]] = []  # detected goal (x,y) positions
+        self._goal_colors: List[int] = []  # detected goal color values
+        self._wall_colors: List[int] = []  # detected common wall/decoration colors (>50% of nonzero)
 
         # ── Initialize plan for level 0 ──
         self._compute_plan(0)
@@ -556,6 +569,13 @@ class MyAgent(Agent):
         self._grid_scan_queue = []
         self._grid_scan_initialized = False
         self._effective_click_positions = []
+        # ── Reset v5.0.5 goal-oriented navigation state ──
+        # Player color persists across levels (same game), but goals reset
+        self._player_color_candidates = {}
+        self._player_position_history = []
+        self._goal_positions = []
+        self._goal_colors = []
+        self._wall_colors = []
         # Keep pattern_memory across levels — patterns may repeat
 
     def _should_visit(self, x: int, y: int) -> bool:
@@ -907,6 +927,234 @@ class MyAgent(Agent):
             return (nonzero[0][0], nonzero[0][1])
 
         return None
+
+    # ── v5.0.5: Player color detection ─────────────────────────────────
+
+    def _detect_player_color_from_delta(
+        self,
+        delta: List[Tuple[int, int]],
+        frames: list[FrameData],
+        current_grid: Any,
+    ) -> None:
+        """Detect player color by analyzing cells that moved after a keyboard action.
+
+        When a keyboard action (ACTION1-4) causes a delta, some cells disappear
+        from old positions and new cells appear at new positions. The color value
+        that "moved" (disappeared at old, appeared at new) is the player sprite.
+
+        Args:
+            delta: Changed cells from last keyboard action.
+            frames: Frame history for accessing previous grid.
+            current_grid: Current grid after the action.
+        """
+        # Only detect after keyboard actions (not clicks or special)
+        if not self._action_history or self._action_history[-1] not in DIRECTION_ACTIONS:
+            return
+
+        # Get previous grid
+        prev_grid = None
+        if len(frames) >= 2 and frames[-2].frame is not None:
+            prev_grid = frames[-2].frame
+        elif len(self._grid_history) >= 2:
+            prev_grid = self._grid_history[-2]
+        if prev_grid is None or current_grid is None:
+            return
+
+        prev_layer = self._extract_layer0(prev_grid)
+        curr_layer = self._extract_layer0(current_grid)
+        if not prev_layer or not curr_layer:
+            return
+
+        # Find cells that appeared (new nonzero in current) and disappeared (old nonzero gone)
+        appeared: Dict[int, int] = {}  # color -> count of cells that appeared
+        disappeared: Dict[int, int] = {}  # color -> count of cells that disappeared
+
+        h = min(len(prev_layer), len(curr_layer))
+        if h == 0:
+            return
+        w = min(len(prev_layer[0]), len(curr_layer[0]))
+        if w == 0:
+            return
+
+        for r in range(h):
+            for c in range(w):
+                try:
+                    old_val = prev_layer[r][c]
+                    new_val = curr_layer[r][c]
+                    if old_val == 0 or old_val == -1 and new_val != 0 and new_val != -1:
+                        appeared[new_val] = appeared.get(new_val, 0) + 1
+                    elif new_val == 0 or new_val == -1 and old_val != 0 and old_val != -1:
+                        disappeared[old_val] = disappeared.get(old_val, 0) + 1
+                    elif old_val != new_val and old_val != 0 and old_val != -1 and new_val != 0 and new_val != -1:
+                        # Cell changed color — both appeared and disappeared
+                        appeared[new_val] = appeared.get(new_val, 0) + 1
+                        disappeared[old_val] = disappeared.get(old_val, 0) + 1
+                except (IndexError, TypeError):
+                    continue
+
+        # The player color is the one that both disappeared and appeared
+        # (it moved from old position to new position)
+        for color in disappeared:
+            if color in appeared:
+                # This color moved — it's likely the player
+                # Weight by how many cells of this color moved (1-3 cells typical for player sprite)
+                moved_count = min(disappeared[color], appeared[color])
+                if moved_count <= 5:  # Player sprites are usually small (1-5 cells)
+                    self._player_color_candidates[color] = (
+                        self._player_color_candidates.get(color, 0) + moved_count
+                    )
+
+        # Determine player color from candidates
+        if self._player_color_candidates:
+            # The color with highest cumulative movement count is most likely the player
+            sorted_candidates = sorted(
+                self._player_color_candidates.items(),
+                key=lambda x: x[1],
+                reverse=True
+            )
+            # Only accept if the top candidate has significantly more evidence than others
+            top_color = sorted_candidates[0][0]
+            top_count = sorted_candidates[0][1]
+            second_count = sorted_candidates[1][1] if len(sorted_candidates) > 1 else 0
+            # Accept if top has >2x more evidence than second (or only one candidate)
+            if top_count >= 3 and (top_count > second_count * 2 or len(sorted_candidates) == 1):
+                self._player_color = top_color
+
+    # ── v5.0.5: Goal detection ──────────────────────────────────────────
+
+    def _detect_goal_positions(self, grid: Any) -> None:
+        """Detect likely goal/exit/target positions from grid analysis.
+
+        Uses multiple heuristics:
+          1. Rare colors — cells with colors appearing in <10% of nonzero cells
+          2. Border openings — cells at edges that are nonzero (possible exits)
+          3. Isolated clusters — small groups of unique colors (goals/switches)
+          4. Exclude player color and common wall colors
+
+        Args:
+            grid: Current frame grid data.
+        """
+        layer = self._extract_layer0(grid)
+        if not layer:
+            return
+
+        h = len(layer)
+        if h == 0:
+            return
+        w = len(layer[0])
+        if w == 0:
+            return
+
+        # Count color frequencies
+        color_counts: Dict[int, int] = {}
+        color_positions: Dict[int, List[Tuple[int, int]]] = {}
+        total_nonzero = 0
+
+        for r in range(h):
+            for c in range(w):
+                try:
+                    val = layer[r][c]
+                    if val != 0 and val != -1:
+                        color_counts[val] = color_counts.get(val, 0) + 1
+                        if val not in color_positions:
+                            color_positions[val] = []
+                        color_positions[val].append((c, r))  # (x, y) format
+                        total_nonzero += 1
+                except (IndexError, TypeError):
+                    continue
+
+        if total_nonzero == 0:
+            return
+
+        # Identify wall colors: colors appearing in >30% of nonzero cells
+        # These are likely walls/decoration, NOT goals
+        self._wall_colors = []
+        for color, count in color_counts.items():
+            if count > total_nonzero * 0.3:
+                self._wall_colors.append(color)
+
+        # Identify goal colors: rare colors NOT player color, NOT wall colors
+        # Goals/exits/switches typically have rare, distinctive colors
+        self._goal_colors = []
+        goal_positions_set: Set[Tuple[int, int]] = set()
+
+        # Sort colors by frequency (ascending) — rarest first
+        sorted_colors = sorted(color_counts.items(), key=lambda x: x[1])
+
+        for color, count in sorted_colors:
+            # Skip if it's the player color
+            if self._player_color is not None and color == self._player_color:
+                continue
+            # Skip if it's a wall color (common)
+            if color in self._wall_colors:
+                continue
+            # Goal candidate: rare color (<10% of nonzero cells)
+            # or medium-rare (<25%) but NOT in wall_colors
+            if count <= total_nonzero * 0.10 or (count <= total_nonzero * 0.25 and count <= 20):
+                self._goal_colors.append(color)
+                for pos in color_positions[color]:
+                    goal_positions_set.add(pos)
+
+        # Heuristic 2: Border openings — nonzero cells at grid edges
+        # These are often exits/doors/passages
+        for r in range(h):
+            for c in [0, w - 1]:  # Left and right edges
+                try:
+                    val = layer[r][c]
+                    if val != 0 and val != -1:
+                        if self._player_color is not None and val == self._player_color:
+                            continue
+                        if val not in self._wall_colors:
+                            goal_positions_set.add((c, r))
+                except (IndexError, TypeError):
+                    continue
+        for c in range(w):
+            for r in [0, h - 1]:  # Top and bottom edges
+                try:
+                    val = layer[r][c]
+                    if val != 0 and val != -1:
+                        if self._player_color is not None and val == self._player_color:
+                            continue
+                        if val not in self._wall_colors:
+                            goal_positions_set.add((c, r))
+                except (IndexError, TypeError):
+                    continue
+
+        # Heuristic 3: Delta click pool positions — cells that changed recently
+        # These are interactive elements (switches, buttons, teleporters)
+        for x, y in self._delta_click_pool[:20]:
+            if (x, y) not in goal_positions_set:
+                # Only add if it's not near the player (not player trail)
+                if self._estimated_player_pos:
+                    px, py = self._estimated_player_pos
+                    if abs(x - px) + abs(y - py) > 3:  # Not immediately adjacent to player
+                        goal_positions_set.add((x, y))
+
+        # Update goal positions list
+        self._goal_positions = list(goal_positions_set)
+
+        # Sort goals by priority: rarest colors first, then border positions
+        # This gives us a priority queue of targets to navigate toward
+        def goal_priority(pos: Tuple[int, int]) -> float:
+            x, y = pos
+            try:
+                val = layer[y][x]
+            except (IndexError, TypeError):
+                return 100.0
+            # Lower priority number = more important
+            # Rarity: fewer occurrences = more likely a goal
+            rarity = 1.0 / (color_counts.get(val, 1) + 1)
+            # Border bonus: cells at edges are more likely exits
+            border_bonus = 0.0
+            if x == 0 or x == w - 1 or y == 0 or y == h - 1:
+                border_bonus = 2.0
+            # Delta bonus: cells that changed recently
+            delta_bonus = 0.0
+            if (x, y) in [(dx, dy) for dx, dy in self._delta_click_pool]:
+                delta_bonus = 1.5
+            return -(rarity + border_bonus + delta_bonus)
+
+        self._goal_positions.sort(key=goal_priority)
 
     def _learn_direction_from_delta(
         self,
@@ -1284,9 +1532,22 @@ class MyAgent(Agent):
             if new_pos:
                 self._prev_estimated_player_pos = self._estimated_player_pos
                 self._estimated_player_pos = new_pos
+                # v5.0.5: Track player position for goal-oriented navigation
+                self._player_position_history.append(new_pos)
+                # Keep history bounded (last 50 positions)
+                if len(self._player_position_history) > 50:
+                    self._player_position_history = self._player_position_history[-50:]
         elif not self._estimated_player_pos:
             # First frame — try to estimate initial position
             self._estimated_player_pos = self._estimate_player_position([], "", current_grid)
+
+        # v5.0.5: Detect player color from delta analysis
+        if delta and self._action_history and self._action_history[-1] in DIRECTION_ACTIONS:
+            self._detect_player_color_from_delta(delta, frames, current_grid)
+
+        # v5.0.5: Detect goal positions from grid analysis (every 10 actions)
+        if self._action_count % 10 == 0 or not self._goal_positions:
+            self._detect_goal_positions(current_grid)
 
         # Update grid hash for next step's pattern detection
         self._last_grid_hash = self._current_grid_hash
@@ -1708,46 +1969,78 @@ class MyAgent(Agent):
             self._action_history.append("ACTION5")
             return action
 
-        # ── Phase 5: Navigate toward target cells ──
-        # Use learned direction map to move toward interesting cells.
+        # ── Phase 5: Goal-oriented navigation (v5.0.5) ──
+        # Navigate toward DETECTED GOALS instead of random nonzero cells.
+        # Previously (v5.0.4), navigated toward nearest nonzero cell — but most
+        # nonzero cells are walls/decoration, NOT goals. This caused competition
+        # unseen games to score 0.00 because the agent wandered aimlessly.
+        # Now we use _goal_positions (detected from rarity, border, delta analysis)
+        # and _player_color (detected from movement tracking) to navigate
+        # toward actual goals/exits/switches.
         if self._estimated_player_pos and self._direction_map:
-            # Find navigation targets: non-zero cells that are far from player
-            nonzero = self._find_nonzero_cells(grid)
-            if nonzero and self._navigate_path:
-                # Follow pre-computed navigation path
+            # Follow pre-computed navigation path
+            if self._navigate_path:
                 next_action_name = self._navigate_path.pop(0)
                 if ACTION_NAME_TO_ID.get(next_action_name, 0) in available_set:
                     action = getattr(GameAction, next_action_name)
-                    action.reasoning = f"navigate-path: {next_action_name}"
+                    action.reasoning = f"goal-navigate-path: {next_action_name}"
                     self._action_history.append(next_action_name)
                     return action
                 else:
                     # Action not available — clear path and recalculate
                     self._navigate_path = []
 
-            # Compute new navigation target if needed
-            if nonzero and not self._navigate_path:
-                # Pick a target that's far from player and hasn't been visited
-                px, py = self._estimated_player_pos
-                # Sort targets by distance (farthest first for exploration)
-                targets = [(x, y, val) for x, y, val in nonzero
-                           if f"{x},{y}" not in self._visited_coords]
-                if targets:
-                    # Sort by distance from player — closest first for efficiency
-                    targets.sort(key=lambda t: abs(t[0] - px) + abs(t[1] - py))
-                    target = (targets[0][0], targets[0][1])
-                    self._navigate_target = target
-                    self._navigate_path = self._compute_navigate_path(
-                        (px, py), target
-                    )
-                    if self._navigate_path:
-                        next_action_name = self._navigate_path.pop(0)
-                        action_id = ACTION_NAME_TO_ID.get(next_action_name, 0)
-                        if action_id in available_set:
-                            action = getattr(GameAction, next_action_name)
-                            action.reasoning = f"navigate-to-target: {next_action_name} toward {target}"
-                            self._action_history.append(next_action_name)
-                            return action
+            # v5.0.5: Compute navigation toward detected GOALS first
+            # If we have goal positions, navigate toward the closest unvisited goal
+            px, py = self._estimated_player_pos
+            nav_target = None
+
+            if self._goal_positions:
+                # Navigate toward closest unvisited goal
+                goal_targets = [(gx, gy) for gx, gy in self._goal_positions
+                               if f"{gx},{gy}" not in self._visited_coords]
+                if goal_targets:
+                    # Sort by distance from player — closest goal first
+                    goal_targets.sort(key=lambda g: abs(g[0] - px) + abs(g[1] - py))
+                    nav_target = goal_targets[0]
+
+            # Fallback: if no goals detected, use nonzero cells BUT EXCLUDE player color and walls
+            if nav_target is None:
+                nonzero = self._find_nonzero_cells(grid)
+                if nonzero:
+                    # v5.0.5: Filter out player color cells and common wall colors
+                    # Player color cells are where the player IS, not where it should GO
+                    # Wall colors are background — navigating toward them is pointless
+                    filtered_targets = [(x, y, val) for x, y, val in nonzero
+                                       if f"{x},{y}" not in self._visited_coords
+                                       and val != self._player_color  # Don't navigate to player
+                                       and val not in self._wall_colors  # Don't navigate to walls
+                                       ]
+                    # If filtering eliminated everything, fall back to nonzero without wall filter
+                    if not filtered_targets:
+                        filtered_targets = [(x, y, val) for x, y, val in nonzero
+                                           if f"{x},{y}" not in self._visited_coords
+                                           and val != self._player_color
+                                           ]
+                    if filtered_targets:
+                        # Sort by distance from player — closest first
+                        filtered_targets.sort(key=lambda t: abs(t[0] - px) + abs(t[1] - py))
+                        nav_target = (filtered_targets[0][0], filtered_targets[0][1])
+
+            # Compute navigation path to target
+            if nav_target:
+                self._navigate_target = nav_target
+                self._navigate_path = self._compute_navigate_path(
+                    (px, py), nav_target
+                )
+                if self._navigate_path:
+                    next_action_name = self._navigate_path.pop(0)
+                    action_id = ACTION_NAME_TO_ID.get(next_action_name, 0)
+                    if action_id in available_set:
+                        action = getattr(GameAction, next_action_name)
+                        action.reasoning = f"goal-navigate: {next_action_name} toward goal {nav_target} (player_color={self._player_color})"
+                        self._action_history.append(next_action_name)
+                        return action
 
         # ── Phase 6: Click on non-zero cells (sprite targeting) ──
         # For click/mixed games, click on interesting sprite cells.
