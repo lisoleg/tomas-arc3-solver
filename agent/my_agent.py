@@ -251,14 +251,14 @@ class MyAgent(Agent):
         # Identified by rarity, spatial patterns, border openings, and delta analysis.
         self._goal_positions: List[Tuple[int, int]] = []  # detected goal (x,y) positions
         self._goal_colors: List[int] = []  # detected goal color values
-        self._wall_colors: List[int] = []  # detected common wall/decoration colors (>50% of nonzero)
+        self._wall_colors: List[int] = []  # detected common wall/decoration colors (>30% of nonzero)
 
         # ── Initialize plan for level 0 ──
         self._compute_plan(0)
 
     @property
     def name(self) -> str:
-        return f"tomas.v5.0.4.{self.MAX_ACTIONS}"
+        return f"tomas.v5.0.6.{self.MAX_ACTIONS}"
 
     @property
     def _stall_threshold(self) -> int:
@@ -866,22 +866,40 @@ class MyAgent(Agent):
         last_action: str,
         grid: Any,
     ) -> Optional[Tuple[int, int]]:
-        """Estimate player position from delta cells and action context.
+        """Estimate player position from delta cells, action context, and known color.
 
-        Strategy:
-          1. If delta cells form a cluster, the cluster center is likely
-             near the player.
-          2. If we know the direction map, extrapolate from previous position.
-          3. Otherwise, find the most "active" non-zero cell in the grid.
+        v5.0.6: Enhanced with fast player color-based positioning. If _player_color
+        is known, we can find the player directly in the grid without waiting for
+        delta clusters. This enables goal-oriented navigation from frame 1.
+
+        Strategy (in priority order):
+          1. If _player_color is known → locate player by color scan (FASTEST)
+          2. If delta cells form a cluster, cluster center is likely near player
+          3. If we know direction map, extrapolate from previous position
+          4. Otherwise, find the most "active" rare-color cell in the grid
 
         Args:
             delta: Changed cells from last action.
             last_action: The action that caused this delta.
-            grid: Current frame grid.
+            grid: Current frame grid data.
 
         Returns:
             Estimated (x, y) player position, or None.
         """
+        # v5.0.6: PRIORITY 1 — Direct color-based positioning (fastest, most accurate)
+        if self._player_color is not None:
+            color_pos = self._locate_player_by_color(grid)
+            if color_pos is not None:
+                # Refine with delta if available — delta confirms recent movement
+                if delta and last_action in self._direction_map:
+                    dx, dy = self._direction_map[last_action]
+                    prev_x, prev_y = self._prev_estimated_player_pos or color_pos
+                    predicted = (prev_x + dx, prev_y + dy)
+                    # If predicted position matches color_pos, trust it
+                    if abs(predicted[0] - color_pos[0]) + abs(predicted[1] - color_pos[1]) <= 2:
+                        return predicted
+                return color_pos
+
         if delta:
             # Cluster analysis: find center of mass of changed cells
             avg_x = sum(x for x, y in delta) / len(delta)
@@ -914,7 +932,13 @@ class MyAgent(Agent):
         if self._prev_estimated_player_pos:
             return self._prev_estimated_player_pos
 
-        # First time: find a "unique" cell that might be the player
+        # v5.0.6: First time with no delta — try color-based positioning
+        if self._player_color is not None:
+            color_pos = self._locate_player_by_color(grid)
+            if color_pos is not None:
+                return color_pos
+
+        # Fallback: find a "unique" cell that might be the player
         nonzero = self._find_nonzero_cells(grid)
         if nonzero:
             # Cells with rare values are more likely to be the player
@@ -927,6 +951,73 @@ class MyAgent(Agent):
             return (nonzero[0][0], nonzero[0][1])
 
         return None
+
+    # ── v5.0.6: Fast player position by color ──────────────────────────────
+
+    def _locate_player_by_color(self, grid: Any) -> Optional[Tuple[int, int]]:
+        """Directly locate player position by scanning for _player_color in grid.
+
+        v5.0.6: If _player_color is known, we can find the player IMMEDIATELY
+        by scanning the grid for cells with that color value — no need to wait
+        for delta clusters or keyboard movement analysis. This gives us a player
+        position estimate on the FIRST frame, enabling goal-oriented navigation
+        from the very beginning.
+
+        Args:
+            grid: Current frame grid data.
+
+        Returns:
+            Estimated (x, y) player position, or None if color not found.
+        """
+        if self._player_color is None:
+            return None
+
+        layer = self._extract_layer0(grid)
+        if not layer:
+            return None
+
+        h = len(layer)
+        w = len(layer[0]) if h > 0 else 0
+        if w == 0:
+            return None
+
+        # Collect all cells matching player color
+        player_cells: List[Tuple[int, int]] = []
+        for r in range(h):
+            for c in range(w):
+                try:
+                    if layer[r][c] == self._player_color:
+                        player_cells.append((c, r))  # (x, y) format
+                except (IndexError, TypeError):
+                    continue
+
+        if not player_cells:
+            return None
+
+        # Player sprites are typically 1-5 cells forming a connected cluster.
+        # Find the center of mass of the player color cells.
+        avg_x = sum(x for x, y in player_cells) / len(player_cells)
+        avg_y = sum(y for x, y in player_cells) / len(player_cells)
+
+        # If only 1-3 cells, just return the center directly
+        if len(player_cells) <= 3:
+            return (int(round(avg_x)), int(round(avg_y)))
+
+        # For larger clusters, find the most "connected" cell (the one with
+        # most adjacent player_color cells — this is likely the player's center)
+        best_pos = (int(round(avg_x)), int(round(avg_y)))
+        max_adj = 0
+        for x, y in player_cells:
+            adj_count = 0
+            for dx, dy in [(0, -1), (0, 1), (-1, 0), (1, 0)]:
+                nx, ny = x + dx, y + dy
+                if (nx, ny) in [(px, py) for px, py in player_cells]:
+                    adj_count += 1
+            if adj_count > max_adj:
+                max_adj = adj_count
+                best_pos = (x, y)
+
+        return best_pos
 
     # ── v5.0.5: Player color detection ─────────────────────────────────
 
@@ -981,9 +1072,9 @@ class MyAgent(Agent):
                 try:
                     old_val = prev_layer[r][c]
                     new_val = curr_layer[r][c]
-                    if old_val == 0 or old_val == -1 and new_val != 0 and new_val != -1:
+                    if (old_val == 0 or old_val == -1) and (new_val != 0 and new_val != -1):
                         appeared[new_val] = appeared.get(new_val, 0) + 1
-                    elif new_val == 0 or new_val == -1 and old_val != 0 and old_val != -1:
+                    elif (new_val == 0 or new_val == -1) and (old_val != 0 and old_val != -1):
                         disappeared[old_val] = disappeared.get(old_val, 0) + 1
                     elif old_val != new_val and old_val != 0 and old_val != -1 and new_val != 0 and new_val != -1:
                         # Cell changed color — both appeared and disappeared
@@ -1199,11 +1290,160 @@ class MyAgent(Agent):
     def _compute_navigate_path(
         self, start: Tuple[int, int], target: Tuple[int, int]
     ) -> List[str]:
-        """Compute a path of keyboard actions from start to target.
+        """Compute a collision-aware BFS path of keyboard actions from start to target.
 
-        Uses the learned direction map to plan a sequence of actions.
-        Falls back to Manhattan-distance-based guessing if direction map
-        is incomplete.
+        v5.0.6: Replaces greedy Manhattan-distance approach with BFS that uses
+        the grid's wall_color data to find obstacle-free paths. The greedy approach
+        would get stuck on walls because it blindly moved toward the target without
+        considering obstacles.
+
+        Algorithm:
+          1. Extract layer0 grid and mark wall_color cells as impassable
+          2. BFS from start to target, exploring all 4 directions
+          3. Convert BFS coordinate path to action names using _direction_map
+
+        Args:
+            start: Current estimated player position (x, y).
+            target: Target position (x, y).
+
+        Returns:
+            List of action names (ACTION1-4) to navigate toward target.
+        """
+        # Get grid dimensions and wall obstacle data
+        if not self._grid_history:
+            return self._compute_navigate_path_greedy(start, target)
+
+        current_grid = self._grid_history[-1]
+        layer = self._extract_layer0(current_grid)
+        if not layer or not layer[0]:
+            return self._compute_navigate_path_greedy(start, target)
+
+        h = len(layer)
+        w = len(layer[0])
+        sx, sy = start
+        tx, ty = target
+
+        # Build obstacle map: cells with wall_colors are impassable
+        # Also treat player_color cells as passable (player can move through itself)
+        obstacles: Set[Tuple[int, int]] = set()
+        for r in range(h):
+            for c in range(w):
+                try:
+                    val = layer[r][c]
+                    if val != 0 and val != -1 and val in self._wall_colors:
+                        obstacles.add((c, r))  # (x, y) format
+                except (IndexError, TypeError):
+                    continue
+
+        # BFS from start to target
+        visited: Set[Tuple[int, int]] = {start}
+        # Queue stores (current_x, current_y, path_of_coords)
+        queue: List[Tuple[int, int, List[Tuple[int, int]]]] = [(sx, sy, [(sx, sy)])]
+
+        # Direction offsets for 4 cardinal directions
+        # These map to the 4 keyboard actions in ARC-AGI-3
+        # We'll try all 4 and use _direction_map to convert to action names later
+        bfs_directions = [
+            (0, -1),   # Up (decrease y)
+            (0, 1),    # Down (increase y)
+            (-1, 0),   # Left (decrease x)
+            (1, 0),    # Right (increase x)
+        ]
+
+        max_bfs_steps = min(h * w, 500)  # Limit BFS to avoid timeouts
+        bfs_steps = 0
+
+        while queue and bfs_steps < max_bfs_steps:
+            cx, cy, coord_path = queue.pop(0)  # BFS = FIFO
+            bfs_steps += 1
+
+            # Check if we reached the target (within 1 cell for tolerance)
+            if abs(cx - tx) <= 1 and abs(cy - ty) <= 1:
+                # Reached target! Convert coord path to action names
+                return self._coord_path_to_actions(coord_path + [(tx, ty)])
+
+            for dx, dy in bfs_directions:
+                nx, ny = cx + dx, cy + dy
+                # Bounds check
+                if nx < 0 or nx >= w or ny < 0 or ny >= h:
+                    continue
+                # Obstacle check
+                if (nx, ny) in obstacles:
+                    continue
+                # Visited check
+                if (nx, ny) in visited:
+                    continue
+                visited.add((nx, ny))
+                queue.append((nx, ny, coord_path + [(nx, ny)]))
+
+        # BFS failed (target unreachable or too far) — fall back to greedy
+        return self._compute_navigate_path_greedy(start, target)
+
+    def _coord_path_to_actions(
+        self, coord_path: List[Tuple[int, int]]
+    ) -> List[str]:
+        """Convert a coordinate path (list of (x,y) positions) to action names.
+
+        Uses the learned _direction_map to determine which keyboard action
+        corresponds to each coordinate transition. Falls back to standard
+        ARC3 mapping if direction map is incomplete.
+
+        Args:
+            coord_path: Sequence of (x, y) positions along the path.
+
+        Returns:
+            List of action names (ACTION1-4) corresponding to the path.
+        """
+        actions: List[str] = []
+        for i in range(len(coord_path) - 1):
+            prev_x, prev_y = coord_path[i]
+            next_x, next_y = coord_path[i + 1]
+            dx = next_x - prev_x
+            dy = next_y - prev_y
+
+            if dx == 0 and dy == 0:
+                continue  # No movement
+
+            # Find which action produces this (dx, dy) offset
+            best_action = None
+            for action_name in DIRECTION_ACTIONS:
+                if action_name in self._direction_map:
+                    adx, ady = self._direction_map[action_name]
+                    if adx == dx and ady == dy:
+                        best_action = action_name
+                        break
+
+            if best_action is None:
+                # Fall back to standard mapping: ACTION1=UP, ACTION2=DOWN,
+                # ACTION3=LEFT, ACTION4=RIGHT
+                if dy < 0:
+                    best_action = "ACTION1"  # UP
+                elif dy > 0:
+                    best_action = "ACTION2"  # DOWN
+                elif dx < 0:
+                    best_action = "ACTION3"  # LEFT
+                elif dx > 0:
+                    best_action = "ACTION4"  # RIGHT
+                else:
+                    continue  # No movement
+
+            actions.append(best_action)
+
+        # Limit path length to prevent over-planning
+        max_steps = 40
+        if len(actions) > max_steps:
+            actions = actions[:max_steps]
+
+        return actions
+
+    def _compute_navigate_path_greedy(
+        self, start: Tuple[int, int], target: Tuple[int, int]
+    ) -> List[str]:
+        """Fallback greedy Manhattan-distance path planning (pre-v5.0.6).
+
+        Used when BFS fails or grid data is unavailable. Picks the best
+        direction at each step based on alignment with desired displacement,
+        without considering wall obstacles.
 
         Args:
             start: Current estimated player position (x, y).
@@ -1235,7 +1475,6 @@ class MyAgent(Agent):
                     # Score = how much the action aligns with the desired direction
                     score = 0.0
                     if dx != 0:
-                        # Want to move in dx direction
                         score += (adx * dx) / abs(dx) if dx != 0 else 0
                     if dy != 0:
                         score += (ady * dy) / abs(dy) if dy != 0 else 0
@@ -1248,9 +1487,6 @@ class MyAgent(Agent):
                         best_score = score
                         best_action = action_name
                 else:
-                    # Unknown direction — assign heuristic score based on
-                    # typical ARC3 mapping: ACTION1=UP(-y), ACTION2=DOWN(+y),
-                    # ACTION3=LEFT(-x), ACTION4=RIGHT(+x)
                     heuristic_dy = 0
                     heuristic_dx = 0
                     if action_name == "ACTION1":
@@ -1267,20 +1503,17 @@ class MyAgent(Agent):
                         score += (heuristic_dx * dx) / abs(dx)
                     if dy != 0 and heuristic_dy != 0:
                         score += (heuristic_dy * dy) / abs(dy)
-                    # Prefer known directions over unknown
                     score -= 0.5
                     if score > best_score:
                         best_score = score
                         best_action = action_name
 
             if best_action:
-                # Apply the direction to update position
                 if best_action in self._direction_map:
                     adx, ady = self._direction_map[best_action]
                     cx += adx
                     cy += ady
                 else:
-                    # Use heuristic
                     if best_action == "ACTION1":
                         cy -= 1
                     elif best_action == "ACTION2":
@@ -1291,7 +1524,6 @@ class MyAgent(Agent):
                         cx += 1
                 path.append(best_action)
             else:
-                # No viable action — break
                 break
 
             steps += 1
