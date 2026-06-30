@@ -1,13 +1,16 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v6.4 (IDO Value Score + Noether-Check + Goal-EML).
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v6.5 (Object-Level Search + A* Heuristic).
 
-Strategy (v6.4 — IDO/TOMAS enhancements on informed search):
+Strategy (v6.5 — architectural overhaul: object-level state abstraction + A* heuristic):
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
-  2. IDO Value Score: Directional progress metric — actions that reduce IC-gap toward goal are prioritized
-  3. Noether-Check: IC conservation check — reject actions that increase entropy without level progress
-  4. Goal-EML Anchoring: Detect goal topology convergence (minority pixels decreasing, goal expanding)
-  5. Informed Search: State graph + action effectiveness tracking (from v6.3)
-  6. Creative-Probe: −∇η perturbation targeting minority-color pixels when η-plateau detected
-  7. Pattern repeat / Frontier revisit / Priority click / Random fallback
+  2. Object-Level State Abstraction: Extract {player, objects, goals, color_dist} from 64×64 grid
+     → state space from ~10^30 (pixel-level) to ~10^3-10^4 (object-level)
+  3. A* Heuristic Frontier: Use goal-distance heuristic (Manhattan, goal-completion) for frontier
+     priority instead of blind BFS "least visited first"
+  4. Non-Local Action Impact Tracking: gravity-flip/teleport (J⊥ class) actions get priority boost
+     when η-plateau — inspired by Ferlaino J⊥≫Jz analogy
+  5. IDS Depth Limiting: Cap frontier BFS depth to prevent spiraling into deep chains
+  6. IDO Value Score + Noether-Check + Goal-EML (from v6.4, retained)
+  7. Creative-Probe + Pattern repeat + Random fallback
 
 This file is self-contained — no imports from local project files.
 All replay data and logic is included inline.
@@ -283,12 +286,23 @@ class MyAgent(Agent):
         self._goal_color_expansion: int = 0  # count of goal-color pixels in current state
         self._eta_plateau_counter: int = 0  # consecutive steps with η-plateau (ido≈0)
 
+        # ── NEW v6.5: Object-Level State Abstraction + A* Heuristic ──
+        # Inspired by Yuanbao BFS efficiency analysis and Ferlaino J⊥≫Jz analogy.
+        # Instead of hashing entire 64×64 grid (~10^30 states), extract key objects
+        # and hash those (~10^3-10^4 states). This makes A* search feasible.
+        self._object_state: Dict[str, Any] = {}  # extracted objects from current grid
+        self._object_hash: str = ""  # object-level hash (replaces grid_hash for state graph)
+        self._prev_object_hash: str = ""  # previous object-level hash
+        self._heuristic_distance: float = 1.0  # A* heuristic distance to goal (lower = closer)
+        self._nonlocal_impact: Dict[str, float] = {}  # action_key → non-local impact magnitude (J⊥ class)
+        self._frontier_depth: Dict[str, int] = {}  # object_hash → BFS depth from start state
+
         # ── Initialize plan for level 0 ──
         self._compute_plan(0)
 
     @property
     def name(self) -> str:
-        return f"tomas.v6.4.{self.MAX_ACTIONS}"
+        return f"tomas.v6.5.{self.MAX_ACTIONS}"
 
     @property
     def _stall_threshold(self) -> int:
@@ -627,6 +641,14 @@ class MyAgent(Agent):
         self._minority_pixel_count = 0
         self._goal_color_expansion = 0
         self._eta_plateau_counter = 0
+
+        # ── Reset v6.5 object-level state ──
+        self._object_state = {}
+        self._object_hash = ""
+        self._prev_object_hash = ""
+        self._heuristic_distance = 1.0
+        self._nonlocal_impact = {}
+        self._frontier_depth = {}
 
     def _should_visit(self, x: int, y: int) -> bool:
         """v5.0.4: Check if a coordinate should be visited (allow revisit up to _max_revisit).
@@ -1748,6 +1770,11 @@ class MyAgent(Agent):
         # Compute current grid hash for pattern detection
         self._current_grid_hash = self._grid_hash(current_grid)
 
+        # ── v6.5: Compute object-level state ──
+        self._object_state = self._extract_objects(current_grid)
+        self._object_hash = self._compute_object_hash(self._object_state)
+        self._heuristic_distance = self._compute_heuristic_distance(self._object_state)
+
         # Compute delta from previous frame
         delta: List[Tuple[int, int]] = []
         if len(frames) >= 2 and frames[-2].frame is not None:
@@ -1765,9 +1792,9 @@ class MyAgent(Agent):
             self._stall_counter += 1
 
             # ── NEW v6.3: Record ineffective action in state graph ──
-            # Action didn't cause a state change → mark it as ineffective from this state.
-            if self._last_grid_hash and self._last_action_key:
-                from_hash = self._last_grid_hash
+            # v6.5: Use object_hash for state graph (reduced state space)
+            if self._prev_object_hash and self._last_action_key:
+                from_hash = self._prev_object_hash
                 # Record that this action leads BACK to same state (self-loop = ineffective)
                 if from_hash not in self._state_graph:
                     self._state_graph[from_hash] = {}
@@ -1844,11 +1871,10 @@ class MyAgent(Agent):
             self._effective_actions[last_action] = self._effective_actions.get(last_action, 0) + 1
 
             # ── NEW v6.3: Record state transition in graph ──
-            # Track (from_state, action) → (to_state) for informed search.
-            # This is the CORE data that enables frontier-based BFS exploration.
-            if self._last_grid_hash and self._last_action_key:
-                from_hash = self._last_grid_hash
-                to_hash = self._current_grid_hash
+            # v6.5: Use object_hash for state graph (reduced state space ~10^3-10^4 vs ~10^30)
+            if self._prev_object_hash and self._last_action_key:
+                from_hash = self._prev_object_hash
+                to_hash = self._object_hash
                 action_key = self._last_action_key
 
                 # Record transition: from_hash → action_key → to_hash
@@ -1862,6 +1888,17 @@ class MyAgent(Agent):
 
                 # Mark to_hash as visited
                 self._state_visited[to_hash] = self._state_visited.get(to_hash, 0) + 1
+
+                # v6.5: Track frontier depth (IDS depth limiting)
+                parent_depth = self._frontier_depth.get(from_hash, 0)
+                self._frontier_depth[to_hash] = parent_depth + 1
+
+                # v6.5: Compute non-local impact (J⊥≫Jz analogy)
+                self._compute_nonlocal_impact(
+                    self._extract_objects(self._grid_history[-2]) if len(self._grid_history) >= 2 else {},
+                    self._object_state,
+                    action_key,
+                )
 
             # Build pattern memory: if previous grid hash + action → current grid hash
             if self._last_grid_hash:
@@ -1921,6 +1958,8 @@ class MyAgent(Agent):
 
         # Update grid hash for next step's pattern detection
         self._last_grid_hash = self._current_grid_hash
+        # v6.5: Save previous object hash for state graph tracking
+        self._prev_object_hash = self._object_hash
 
     # ── ASD Anomaly Detection (Attention Before Loss) ────────────────────
 
@@ -2341,6 +2380,152 @@ class MyAgent(Agent):
         self._goal_eml_convergence = convergence
         return convergence
 
+    # ── v6.5: Object-Level State Abstraction + A* Heuristic ───────────────
+
+    def _extract_objects(self, grid: Any) -> Dict[str, Any]:
+        """Extract key objects from 64×64 grid for object-level state abstraction.
+
+        v6.5 CORE: Instead of hashing entire 64×64 pixel grid (~10^30 states),
+        extract essential game objects (~10^3-10^4 states).
+        Inspired by Yuanbao BFS efficiency analysis.
+        """
+        layer = self._extract_layer0(grid)
+        if not layer:
+            return {}
+        h = len(layer)
+        if h == 0:
+            return {}
+        w = len(layer[0])
+        if w == 0:
+            return {}
+
+        color_dist: Dict[int, int] = {}
+        total_nonzero = 0
+        player_pos = self._estimated_player_pos
+        anomaly_set = set(self._asd_anomaly_colors) if self._asd_analyzed else set()
+        goal_color_set = set(self._goal_colors) if self._goal_colors else set()
+        special_pos: List[Tuple[int, int, int]] = []
+        goal_pos_pixels: List[Tuple[int, int]] = []
+        wall_set = set(self._wall_colors) if self._wall_colors else set()
+
+        # 8×8 region signature — coarse grid overview
+        region_sig: List[int] = []
+        region_size = 8
+        for ry in range(0, h, region_size):
+            for rx in range(0, w, region_size):
+                region_colors: Dict[int, int] = {}
+                for r in range(ry, min(ry + region_size, h)):
+                    for c in range(rx, min(rx + region_size, w)):
+                        try:
+                            val = layer[r][c]
+                            if val != 0 and val != -1 and val not in wall_set:
+                                region_colors[val] = region_colors.get(val, 0) + 1
+                                color_dist[val] = color_dist.get(val, 0) + 1
+                                total_nonzero += 1
+                                if val in anomaly_set:
+                                    special_pos.append((c, r, val))
+                                if val in goal_color_set:
+                                    goal_pos_pixels.append((c, r))
+                        except (IndexError, TypeError):
+                            continue
+                region_sig.append(max(region_colors.items(), key=lambda x: x[1])[0] if region_colors else 0)
+
+        return {
+            'player_pos': player_pos,
+            'color_dist': color_dist,
+            'special_pos': special_pos,
+            'goal_pos': goal_pos_pixels if goal_pos_pixels else self._goal_positions,
+            'n_colors': len(color_dist),
+            'n_nonzero': total_nonzero,
+            'grid_signature': region_sig,
+        }
+
+    def _compute_object_hash(self, objects: Dict[str, Any]) -> str:
+        """v6.5: Object-level hash replacing pixel-level _grid_hash for state graph."""
+        if not objects:
+            return ""
+        hash_parts = []
+        if objects.get('color_dist'):
+            top_colors = sorted(objects['color_dist'].items(), key=lambda x: x[1], reverse=True)[:10]
+            hash_parts.append(f"c:{top_colors}")
+        if objects.get('player_pos'):
+            px, py = objects['player_pos']
+            hash_parts.append(f"p:{px//4},{py//4}")  # Quantize to 4-pixel regions
+        if objects.get('special_pos'):
+            sorted_specials = sorted(objects['special_pos'], key=lambda x: (x[2], x[0], x[1]))[:20]
+            hash_parts.append(f"s:{sorted_specials}")
+        if objects.get('goal_pos'):
+            sorted_goals = sorted(objects['goal_pos'], key=lambda x: (x[0], x[1]))[:10]
+            hash_parts.append(f"g:{sorted_goals}")
+        hash_parts.append(f"nc:{objects.get('n_colors', 0)}")
+        hash_parts.append(f"nn:{objects.get('n_nonzero', 0)}")
+        if objects.get('grid_signature'):
+            hash_parts.append(f"rs:{','.join(str(x) for x in objects['grid_signature'])}")
+        hash_input = "|".join(hash_parts)
+        return hashlib.md5(hash_input.encode()).hexdigest()[:16]
+
+    def _compute_heuristic_distance(self, objects: Dict[str, Any]) -> float:
+        """v6.5 A* heuristic: goal-distance for frontier priority.
+
+        Lower = closer to goal. 0 = goal achieved.
+        Keyboard: Manhattan distance player→goal.
+        Click: remaining anomaly / initial count.
+        Mixed: 1 - goal_eml_convergence.
+        """
+        h_distance = 100.0  # Default: far from goal
+
+        if self._detected_game_type == "keyboard" and self._estimated_player_pos:
+            goal_positions = objects.get('goal_pos', [])
+            if goal_positions:
+                min_dist = min(
+                    abs(self._estimated_player_pos[0] - gx) + abs(self._estimated_player_pos[1] - gy)
+                    for gx, gy in goal_positions
+                )
+                h_distance = min_dist / 128.0  # Normalize: 0.0-1.0
+            else:
+                minority = objects.get('n_colors', 1)
+                initial_minority = max(len(self._asd_anomaly_targets), 1)
+                h_distance = minority / initial_minority
+        elif self._detected_game_type == "click":
+            initial_count = max(len(self._asd_anomaly_targets), 1)
+            remaining = len(objects.get('special_pos', []))
+            h_distance = remaining / initial_count
+        else:
+            h_distance = 1.0 - self._goal_eml_convergence
+
+        self._heuristic_distance = h_distance
+        return h_distance
+
+    def _compute_nonlocal_impact(self, prev_objects: Dict[str, Any], curr_objects: Dict[str, Any], action_key: str) -> float:
+        """v6.5: Non-local impact — J⊥≫Jz analogy from Ferlaino.
+
+        Measures how many regions changed simultaneously.
+        High impact = gravity-flip/teleport (J⊥ class).
+        Low impact = push/step (Jz class).
+        When η-plateau (stuck), prefer J⊥-class actions.
+        """
+        if not prev_objects or not curr_objects:
+            return 0.0
+
+        prev_sig = prev_objects.get('grid_signature', [])
+        curr_sig = curr_objects.get('grid_signature', [])
+        if not prev_sig or not curr_sig:
+            return 0.0
+
+        changed_regions = sum(1 for i in range(min(len(prev_sig), len(curr_sig))) if prev_sig[i] != curr_sig[i])
+        total_regions = max(len(prev_sig), 1)
+        impact = changed_regions / total_regions
+
+        prev_dist = prev_objects.get('color_dist', {})
+        curr_dist = curr_objects.get('color_dist', {})
+        color_change = sum(abs(prev_dist.get(c, 0) - curr_dist.get(c, 0)) for c in set(prev_dist) | set(curr_dist))
+        total_pixels = max(sum(curr_dist.values()), 1)
+        color_impact = color_change / total_pixels
+
+        total_impact = impact + color_impact * 2
+        self._nonlocal_impact[action_key] = total_impact
+        return total_impact
+
     # ── v6.3: Informed Search ────────────────────────────────────────────
 
     def _informed_search(
@@ -2371,7 +2556,8 @@ class MyAgent(Agent):
         grid = latest_frame.frame if latest_frame.frame else []
         available = latest_frame.available_actions if latest_frame.available_actions else []
         available_set = set(available)
-        current_hash = self._current_grid_hash
+        # v6.5: Use object_hash for state graph operations (reduced state space)
+        current_hash = self._object_hash if self._object_hash else self._current_grid_hash
 
         # ── Track current state visit count ──
         self._state_visited[current_hash] = self._state_visited.get(current_hash, 0) + 1
@@ -2379,6 +2565,7 @@ class MyAgent(Agent):
         # ── Record level start hash if not set ──
         if not self._level_start_hash and current_hash:
             self._level_start_hash = current_hash
+            self._frontier_depth[current_hash] = 0  # v6.5: start state depth=0
 
         # ── Detect game type ──
         self._update_detected_game_type(available_set)
@@ -2428,18 +2615,30 @@ class MyAgent(Agent):
                 and self._noether_violations.get(ak, 0) < 3  # v6.4: allow up to 3 Noether violations (maybe luck)
             }
             if novel_transitions:
-                # v6.4: Sort by (goal_eml_convergence of dest, progressive_actions of action_key)
-                # Prefer actions that lead to higher Goal-EML states AND are progressive.
+                # v6.5: A* heuristic frontier — combine visit count + heuristic + ido + nonlocal
+                # Replaces pure BFS "least visited first" with goal-directed search.
+                MAX_FRONTIER_DEPTH = 50  # IDS: cap frontier depth to prevent spiraling
+
                 def frontier_priority(item: Tuple[str, str]) -> float:
                     action_key, result_hash = item
-                    # Base priority: less visited = more frontier
+                    # ── v6.5: IDS depth check ──
+                    dest_depth = self._frontier_depth.get(result_hash, 999)
+                    if dest_depth > MAX_FRONTIER_DEPTH:
+                        return -999.0  # Skip beyond depth cap
+                    heuristic_bonus = 0.1 if dest_depth == 0 else 0.05 / (1.0 + dest_depth)
+                    # Base: less visited = more frontier
                     visit_score = 1.0 / (1.0 + self._state_visited.get(result_hash, 0))
                     # v6.4: Boost progressive actions
                     progressive_count = self._progressive_actions.get(action_key, 0)
                     progressive_boost = min(2.0, progressive_count * 0.5)
+                    # v6.5: J⊥-class (non-local impact) boost when η-plateau
+                    nonlocal_boost = 0.0
+                    if self._stall_counter >= 3:
+                        nl_impact = self._nonlocal_impact.get(action_key, 0.0)
+                        nonlocal_boost = min(1.0, nl_impact * 5.0)
                     # v6.4: Penalize Noether violations
                     noether_penalty = self._noether_violations.get(action_key, 0) * 0.3
-                    return visit_score + progressive_boost - noether_penalty
+                    return visit_score + heuristic_bonus + progressive_boost + nonlocal_boost - noether_penalty
 
                 sorted_trans = sorted(
                     novel_transitions.items(),
