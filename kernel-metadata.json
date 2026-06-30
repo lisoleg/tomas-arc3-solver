@@ -1,0 +1,12 @@
+{
+  "id": "aureioo/arc-prize-2026-arc-agi-3-v610",
+  "title": "TOMAS ARC AGI 3 v6.1 Path Fix",
+  "code_file": "notebooks/submission.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": false,
+  "enable_gpu": true,
+  "enable_internet": false,
+  "dataset_sources": [],
+  "competition_sources": ["arc-prize-2026-arc-agi-3"]
+}

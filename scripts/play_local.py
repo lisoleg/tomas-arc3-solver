@@ -86,8 +86,9 @@ def main() -> None:
               f"(this is what Kaggle does in competition rerun).\n")
 
     MyAgentCls = load_my_agent_class()
+    # Override MAX_ACTIONS with --max-steps if larger (local testing needs more budget)
     if hasattr(MyAgentCls, "MAX_ACTIONS"):
-        MyAgentCls.MAX_ACTIONS = min(MyAgentCls.MAX_ACTIONS, args.max_steps)
+        MyAgentCls.MAX_ACTIONS = max(MyAgentCls.MAX_ACTIONS, args.max_steps)
 
     per_game = []
     for i, game_id in enumerate(game_ids, 1):

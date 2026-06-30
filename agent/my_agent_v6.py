@@ -1,13 +1,17 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v6.4 (IDO Value Score + Noether-Check + Goal-EML).
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v6.0 (Goose Lite + GPU Framework + Action Tracking: E-value Threshold + Noether Conservation + Quantile-LTT Conservative Life3).
 
-Strategy (v6.4 — IDO/TOMAS enhancements on informed search):
+Strategy:
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
-  2. IDO Value Score: Directional progress metric — actions that reduce IC-gap toward goal are prioritized
-  3. Noether-Check: IC conservation check — reject actions that increase entropy without level progress
-  4. Goal-EML Anchoring: Detect goal topology convergence (minority pixels decreasing, goal expanding)
-  5. Informed Search: State graph + action effectiveness tracking (from v6.3)
-  6. Creative-Probe: −∇η perturbation targeting minority-color pixels when η-plateau detected
-  7. Pattern repeat / Frontier revisit / Priority click / Random fallback
+  2. ASD Anomaly Detection: "Attention Before Loss" — target minority-color pixels first
+  3. 3-Life Strategy: Life1=explore, Life2=refine, Life3=Quantile-LTT conservative execute
+  4. Delta-aware exploration: Frame delta detection to find interactive cells
+  5. Systematic keyboard navigation: Probe directions, learn mapping, navigate to targets
+  6. Special action probing: Systematically test ACTION5 to understand its effect
+  7. Pattern repeat: Remember effective action sequences for similar grid configurations
+  8. Enhanced perception: Color frequency analysis + rarity-based targeting
+  9. E-value player detection: Anytime-valid evidence accumulation (LTT-IDO)
+  10. Noether conservation guard: IC delta anomaly rejects invalid navigation paths
+  11. Random fallback: Last resort
 
 This file is self-contained — no imports from local project files.
 All replay data and logic is included inline.
@@ -25,6 +29,15 @@ import random
 import time
 import hashlib
 from typing import Any, Dict, List, Optional, Set, Tuple
+
+# GPU Acceleration Framework (per Yuanbao analysis)
+try:
+    import cupy as cp
+    HAS_GPU = True
+except ImportError:
+    cp = None
+    HAS_GPU = False
+
 
 from arcengine import FrameData, GameAction, GameState
 
@@ -138,10 +151,10 @@ class MyAgent(Agent):
     """
 
     # Upper bound on actions per game.
-    # v6.3: NEVER give up — match Stochastic Goose (#1 team) philosophy.
-    # RandomAgent baseline uses 1000000; Goose uses float('inf').
-    # Low MAX_ACTIONS causes early termination → 0 score for unfinished levels.
-    MAX_ACTIONS = int(os.environ.get("ARC3_MAX_ACTIONS", "1000000"))
+    # Oracle replay: ~20-200 steps/level × 7 levels = at most ~1400 steps.
+    # Fallback exploration budget: generous but bounded to avoid 9h Kaggle timeout.
+    # Supports ARC3_MAX_ACTIONS env override for competition vs test tuning.
+    MAX_ACTIONS = int(os.environ.get("ARC3_MAX_ACTIONS", "2000"))
 
     # Global wall-clock limit per game instance (seconds).
     # Kaggle allows 9 hours total. With 25 games, budget ≈ 19 min/game.
@@ -251,44 +264,12 @@ class MyAgent(Agent):
         self._goal_colors: List[int] = []  # detected goal color values
         self._wall_colors: List[int] = []  # detected common wall/decoration colors (>30% of nonzero)
 
-        # ── NEW v6.3: State graph for informed search ──
-        # Inspired by FORGE (GraphExplorer, score 0.43) and Stochastic Goose (score 1.21).
-        # Track state→action→new_state transitions to prioritize effective actions.
-        # This is the CORE mechanism that replaces the complex multi-phase exploration.
-        self._state_graph: Dict[str, Dict[str, str]] = {}  # grid_hash → {action_key: result_hash}
-        self._state_visited: Dict[str, int] = {}  # grid_hash → visit count
-        self._state_queue: List[str] = []  # BFS frontier: states with untried actions
-        self._action_change_rate: Dict[str, Tuple[int, int]] = {}  # action_key → (changes, total_uses)
-        self._last_action_key: str = ""  # action_key of last action (for state graph edge recording)
-        self._level_start_hash: str = ""  # hash of grid when level started (for BFS backtracking)
-
-        # ── NEW v6.4: IDO Value Score + Noether-Check + Goal-EML ──
-        # Inspired by TOMAS/IDO theory from Yuanbao analysis.
-        # ido_value_score: Measures whether a grid change represents PROGRESS (reducing IC-gap)
-        #   toward the goal state, not just "any change". Positive = progressive, negative = backslide.
-        # Noether-Check: IC conservation along path — reject "physics-impossible" actions that
-        #   increase entropy without level progress (walls broken, teleportation, etc.)
-        # Goal-EML: Explicit goal topology tracking — minority pixels decreasing → goal converging.
-        self._ido_value_score: float = 0.0  # last computed ido_value_score
-        self._ido_value_history: List[float] = []  # ido_value_score per step
-        self._backslide_actions: Dict[str, int] = {}  # action_key → count of backslide (negative ido)
-        self._progressive_actions: Dict[str, int] = {}  # action_key → count of progressive (positive ido)
-        self._last_ic_value: float = 0.0  # IC value of previous state (for ido computation)
-        self._current_ic_value: float = 0.0  # IC value of current state
-        self._ic_goal_value: float = 0.0  # IC value of goal/ideal state (estimated from level_start)
-        self._noether_eps: float = 0.15  # ε for Noether-Check: IC(s_next) ≤ IC(s_prev) + ε
-        self._noether_violations: Dict[str, int] = {}  # action_key → Noether violation count
-        self._goal_eml_convergence: float = 0.0  # Goal-EML convergence metric (0-1, 1=goal achieved)
-        self._minority_pixel_count: int = 0  # count of minority/anomaly pixels in current state
-        self._goal_color_expansion: int = 0  # count of goal-color pixels in current state
-        self._eta_plateau_counter: int = 0  # consecutive steps with η-plateau (ido≈0)
-
         # ── Initialize plan for level 0 ──
         self._compute_plan(0)
 
     @property
     def name(self) -> str:
-        return f"tomas.v6.4.{self.MAX_ACTIONS}"
+        return f"tomas.v5.0.7.{self.MAX_ACTIONS}"
 
     @property
     def _stall_threshold(self) -> int:
@@ -607,26 +588,6 @@ class MyAgent(Agent):
         self._goal_colors = []
         self._wall_colors = []
         # Keep pattern_memory across levels — patterns may repeat
-        # ── Reset v6.3 state graph for new level ──
-        self._state_graph = {}
-        self._state_visited = {}
-        self._state_queue = []
-        self._action_change_rate = {}
-        self._last_action_key = ""
-        self._level_start_hash = ""
-        # ── Reset v6.4 IDO/Noether state for new level ──
-        self._ido_value_score = 0.0
-        self._ido_value_history = []
-        self._backslide_actions = {}
-        self._progressive_actions = {}
-        self._last_ic_value = 0.0
-        self._current_ic_value = 0.0
-        self._ic_goal_value = 0.0
-        self._noether_violations = {}
-        self._goal_eml_convergence = 0.0
-        self._minority_pixel_count = 0
-        self._goal_color_expansion = 0
-        self._eta_plateau_counter = 0
 
     def _should_visit(self, x: int, y: int) -> bool:
         """v5.0.4: Check if a coordinate should be visited (allow revisit up to _max_revisit).
@@ -1710,21 +1671,14 @@ class MyAgent(Agent):
             if data and action.is_complex():
                 action.set_data(data)
                 action.reasoning = {"why": "replay oracle", "step": self._plan_idx}
-                # v6.3: Record action_key for state graph tracking
-                if action_name == "ACTION6" and data:
-                    self._last_action_key = f"ACTION6@{data.get('x', 0)},{data.get('y', 0)}"
-                else:
-                    self._last_action_key = action_name
             else:
                 action.reasoning = f"replay oracle step {self._plan_idx}/{len(self._plan)}"
-                # v6.3: Record action_key for state graph tracking
-                self._last_action_key = action_name
 
             self._action_history.append(action_name)
             return action
 
-        # ── v6.3: Informed search fallback ──
-        return self._informed_search(frames, latest_frame)
+        # ── Delta-aware smart exploration fallback ──
+        return self._smart_exploration(frames, latest_frame)
 
     def _record_and_analyze(
         self, frames: list[FrameData], latest_frame: FrameData
@@ -1763,21 +1717,6 @@ class MyAgent(Agent):
         if len(delta) == 0 and self._action_history:
             # No grid change after our last action — we might be stuck
             self._stall_counter += 1
-
-            # ── NEW v6.3: Record ineffective action in state graph ──
-            # Action didn't cause a state change → mark it as ineffective from this state.
-            if self._last_grid_hash and self._last_action_key:
-                from_hash = self._last_grid_hash
-                # Record that this action leads BACK to same state (self-loop = ineffective)
-                if from_hash not in self._state_graph:
-                    self._state_graph[from_hash] = {}
-                self._state_graph[from_hash][self._last_action_key] = from_hash  # self-loop
-                # Update effectiveness rate: no change
-                eff, total = self._action_change_rate.get(self._last_action_key, (0, 0))
-                self._action_change_rate[self._last_action_key] = (eff, total + 1)
-
-                # Record inactive action
-                self._inactive_actions[self._last_action_key] = self._inactive_actions.get(self._last_action_key, 0) + 1
         else:
             self._stall_counter = 0
             # v5.0.3: Deactivate inflation when grid changes (stall broken)
@@ -1786,39 +1725,6 @@ class MyAgent(Agent):
         # v5.0.3: Compute ΔIC for cognitive inflation
         if len(delta) > 0 and len(self._grid_history) >= 2:
             self._compute_ic_delta(self._grid_history[-2], current_grid)
-
-        # ── NEW v6.4: Compute IDO Value Score and Noether-Check ──
-        # Replace binary "grid changed or not" with directional progress metric.
-        # This is the CORE improvement from TOMAS/IDO theory analysis.
-        levels_progressed = latest_frame.levels_completed > self._prev_levels_completed
-        if len(self._grid_history) >= 2 and self._action_history:
-            prev_grid_for_ido = self._grid_history[-2]
-            ido_score = self._compute_ido_value_score(prev_grid_for_ido, current_grid, levels_progressed)
-
-            # Noether-Check: validate IC conservation
-            if self._last_action_key:
-                noether_ok = self._noether_check(prev_grid_for_ido, current_grid, self._last_action_key, levels_progressed)
-
-                # Update action classification based on ido and Noether
-                if ido_score > 0.05:
-                    # Progressive action — reduces IC-gap toward goal
-                    self._progressive_actions[self._last_action_key] = self._progressive_actions.get(self._last_action_key, 0) + 1
-                elif ido_score < -0.05:
-                    # Backslide action — increases IC without level progress
-                    self._backslide_actions[self._last_action_key] = self._backslide_actions.get(self._last_action_key, 0) + 1
-                elif abs(ido_score) <= 0.05 and not noether_ok:
-                    # Noether violation without meaningful ido — physics-impossible
-                    self._backslide_actions[self._last_action_key] = self._backslide_actions.get(self._last_action_key, 0) + 1
-
-            # Track η-plateau: consecutive steps with ido near zero
-            if abs(ido_score) <= 0.02:
-                self._eta_plateau_counter += 1
-            else:
-                self._eta_plateau_counter = 0
-
-        # ── NEW v6.4: Compute Goal-EML convergence ──
-        if self._asd_analyzed:
-            self._compute_goal_eml(current_grid)
 
         # Update levels completed tracking
         if latest_frame.levels_completed > self._prev_levels_completed:
@@ -1842,26 +1748,6 @@ class MyAgent(Agent):
 
             # Record that this action caused a change
             self._effective_actions[last_action] = self._effective_actions.get(last_action, 0) + 1
-
-            # ── NEW v6.3: Record state transition in graph ──
-            # Track (from_state, action) → (to_state) for informed search.
-            # This is the CORE data that enables frontier-based BFS exploration.
-            if self._last_grid_hash and self._last_action_key:
-                from_hash = self._last_grid_hash
-                to_hash = self._current_grid_hash
-                action_key = self._last_action_key
-
-                # Record transition: from_hash → action_key → to_hash
-                if from_hash not in self._state_graph:
-                    self._state_graph[from_hash] = {}
-                self._state_graph[from_hash][action_key] = to_hash
-
-                # Update action effectiveness rate
-                eff, total = self._action_change_rate.get(action_key, (0, 0))
-                self._action_change_rate[action_key] = (eff + 1, total + 1)
-
-                # Mark to_hash as visited
-                self._state_visited[to_hash] = self._state_visited.get(to_hash, 0) + 1
 
             # Build pattern memory: if previous grid hash + action → current grid hash
             if self._last_grid_hash:
@@ -2135,697 +2021,7 @@ class MyAgent(Agent):
         # If no verified actions, return None and let Phase 6/7/8 handle it.
         return None
 
-    # ── v6.4: IDO Value Score + Noether-Check + Goal-EML ────────────────────
-
-    def _compute_ic_value(self, grid: Any) -> float:
-        """Compute Information Cardinality (IC) of a grid state.
-
-        IC = (distinct_colors × distinct_nonzero_regions) / total_nonzero_cells
-        Lower IC = simpler/more ordered grid (closer to goal/solved state)
-        Higher IC = more complex/fragmented grid (likely backslide or noise)
-
-        Args:
-            grid: Grid data from FrameData.
-
-        Returns:
-            IC value (float). Range: typically 0.0 - 50.0.
-        """
-        layer = self._extract_layer0(grid)
-        if not layer:
-            return 0.0
-        h = len(layer)
-        if h == 0:
-            return 0.0
-        w = len(layer[0])
-        if w == 0:
-            return 0.0
-
-        # Count distinct non-zero colors
-        colors: Set[int] = set()
-        total_nonzero = 0
-        for r in range(h):
-            for c in range(w):
-                try:
-                    val = layer[r][c]
-                    if val != 0 and val != -1:
-                        colors.add(val)
-                        total_nonzero += 1
-                except (IndexError, TypeError):
-                    continue
-
-        if total_nonzero == 0:
-            return 0.0
-
-        # Count connected regions (simple heuristic: count color-value transitions)
-        transitions = 0
-        for r in range(h):
-            for c in range(w - 1):
-                try:
-                    if layer[r][c] != layer[r][c+1] and layer[r][c] != 0 and layer[r][c+1] != 0:
-                        transitions += 1
-                except (IndexError, TypeError):
-                    continue
-        for r in range(h - 1):
-            for c in range(w):
-                try:
-                    if layer[r][c] != layer[r+1][c] and layer[r][c] != 0 and layer[r+1][c] != 0:
-                        transitions += 1
-                except (IndexError, TypeError):
-                    continue
-
-        # IC = (color_complexity × region_complexity) / total_content
-        ic = (len(colors) * (1 + transitions / max(total_nonzero, 1))) / max(total_nonzero / 100, 1)
-        return ic
-
-    def _compute_ido_value_score(self, prev_grid: Any, curr_grid: Any, levels_progressed: bool) -> float:
-        """Compute IDO Value Score — directional progress metric.
-
-        ido_value_score = v_after - v_before
-        where v = (ic_goal - ic_current) / ic_goal
-        Positive ido = grid moved toward simpler/solved state (progress)
-        Negative ido = grid became more complex without level advance (backslide)
-
-        If levels_progressed (level was completed), override to MAX_POSITIVE
-        because completing a level is always true progress regardless of IC.
-
-        Args:
-            prev_grid: Previous frame grid.
-            curr_grid: Current frame grid.
-            levels_progressed: Whether levels_completed increased.
-
-        Returns:
-            ido_value_score (float). Positive = progress, negative = backslide.
-        """
-        if levels_progressed:
-            # Level completion = maximum progress, regardless of IC
-            return 1.0
-
-        ic_before = self._compute_ic_value(prev_grid)
-        ic_after = self._compute_ic_value(curr_grid)
-        ic_goal = self._ic_goal_value
-
-        # If ic_goal not set, use ic_before as baseline (first step)
-        if ic_goal <= 0:
-            ic_goal = ic_before * 0.5  # Assume goal is 50% simpler than start
-            self._ic_goal_value = ic_goal
-
-        # Compute v_before and v_after
-        v_before = (ic_goal - ic_before) / ic_goal if ic_goal > 0 else 0.0
-        v_after = (ic_goal - ic_after) / ic_goal if ic_goal > 0 else 0.0
-
-        # ido = v_after - v_before
-        ido = v_after - v_before
-
-        # Clamp to reasonable range
-        ido = max(-1.0, min(1.0, ido))
-
-        self._ido_value_score = ido
-        self._ido_value_history.append(ido)
-        self._last_ic_value = ic_before
-        self._current_ic_value = ic_after
-
-        return ido
-
-    def _noether_check(self, prev_grid: Any, curr_grid: Any, action_key: str, levels_progressed: bool) -> bool:
-        """Noether-Check: IC conservation along path.
-
-        Checks if IC(s_next) ≤ IC(s_prev) + EPS_NOETHER.
-        Violations indicate "physics-impossible" changes — entropy increased
-        without level progress (walls broken, teleportation, random noise).
-
-        Actions that violate Noether-Check are marked as backslide and deprioritized.
-
-        Args:
-            prev_grid: Previous frame grid.
-            curr_grid: Current frame grid.
-            action_key: The action_key that caused this transition.
-            levels_progressed: Whether levels_completed increased.
-
-        Returns:
-            True = Noether-consistent (action is physically plausible)
-            False = Noether-violation (action likely backslide/noise)
-        """
-        if levels_progressed:
-            # Level progress overrides Noether — completing a level is always valid
-            return True
-
-        ic_before = self._compute_ic_value(prev_grid)
-        ic_after = self._compute_ic_value(curr_grid)
-
-        # Noether condition: IC(s_next) ≤ IC(s_prev) + ε
-        noether_ok = ic_after <= ic_before + self._noether_eps
-
-        if not noether_ok:
-            self._noether_violations[action_key] = self._noether_violations.get(action_key, 0) + 1
-
-        return noether_ok
-
-    def _compute_goal_eml(self, grid: Any) -> float:
-        """Compute Goal-EML convergence metric.
-
-        Goal-EML anchoring: detect whether grid is moving toward a "solved" topology.
-        Convergence = 1 - (minority_pixels / initial_minority_pixels)
-        Higher convergence = closer to goal (minority pixels disappearing → goal achieved)
-
-        Also tracks goal-color expansion: more goal-colored pixels = closer to victory.
-
-        Args:
-            grid: Current frame grid.
-
-        Returns:
-            Goal-EML convergence metric (0.0 - 1.0).
-        """
-        layer = self._extract_layer0(grid)
-        if not layer:
-            return 0.0
-        h = len(layer)
-        if h == 0:
-            return 0.0
-        w = len(layer[0])
-        if w == 0:
-            return 0.0
-
-        # Count current minority/anomaly pixels
-        current_minority = 0
-        anomaly_set = set(self._asd_anomaly_colors)
-        goal_color_set = set(self._goal_colors)
-        goal_pixels = 0
-
-        for r in range(h):
-            for c in range(w):
-                try:
-                    val = layer[r][c]
-                    if val != 0 and val != -1:
-                        if val in anomaly_set:
-                            current_minority += 1
-                        if val in goal_color_set:
-                            goal_pixels += 1
-                except (IndexError, TypeError):
-                    continue
-
-        self._minority_pixel_count = current_minority
-        self._goal_color_expansion = goal_pixels
-
-        # Convergence = progress toward eliminating minority pixels
-        initial_minority = max(len(self._asd_anomaly_targets), 1)
-        if current_minority == 0:
-            convergence = 1.0  # All anomaly pixels gone = goal achieved
-        else:
-            convergence = 1.0 - (current_minority / initial_minority)
-
-        # Boost convergence if goal colors are expanding
-        if goal_pixels > 0 and goal_color_set:
-            goal_boost = min(0.2, goal_pixels / 100)  # Up to 0.2 boost
-            convergence = min(1.0, convergence + goal_boost)
-
-        self._goal_eml_convergence = convergence
-        return convergence
-
-    # ── v6.3: Informed Search ────────────────────────────────────────────
-
-    def _informed_search(
-        self, frames: list[FrameData], latest_frame: FrameData
-    ) -> GameAction:
-        """Informed search using state graph and action effectiveness tracking.
-
-        v6.3 CORE mechanism — replaces the complex multi-phase _smart_exploration.
-        Inspired by Stochastic Goose (#1, score 1.21) and FORGE (score 0.43).
-
-        Key principle: Track which actions cause state changes → prefer effective
-        actions → avoid ineffective ones → BFS to frontier states when stuck.
-
-        Phases:
-          1. Pattern repeat: Known state → known effective action
-          2. Frontier revisit: Re-execute actions that led to NEW states
-          3. Effective action priority: Prefer actions with high change rate
-          4. Novel exploration: Try untested actions/clicks
-          5. Random fallback
-
-        Args:
-            frames: All previous frames.
-            latest_frame: Current frame data.
-
-        Returns:
-            GameAction to execute.
-        """
-        grid = latest_frame.frame if latest_frame.frame else []
-        available = latest_frame.available_actions if latest_frame.available_actions else []
-        available_set = set(available)
-        current_hash = self._current_grid_hash
-
-        # ── Track current state visit count ──
-        self._state_visited[current_hash] = self._state_visited.get(current_hash, 0) + 1
-
-        # ── Record level start hash if not set ──
-        if not self._level_start_hash and current_hash:
-            self._level_start_hash = current_hash
-
-        # ── Detect game type ──
-        self._update_detected_game_type(available_set)
-
-        # ── Phase 1: Pattern repeat (v6.4: + Goal-EML convergence boost) ──
-        # If we've seen this exact state and know what action led to a NEW state,
-        # try it again. This is the most reliable path to progress.
-        # v6.4: If Goal-EML convergence ≥ 0.8, aggressively repeat progressive actions
-        # — we're close to the goal, don't waste steps on exploration.
-        if self._goal_eml_convergence >= 0.8 and self._progressive_actions:
-            # Close to goal → repeat the most progressive action
-            best_prog = max(self._progressive_actions.items(), key=lambda x: x[1])
-            prog_action_key = best_prog[0]
-            action_name, click_data = self._parse_action_key(prog_action_key, available_set)
-            if action_name:
-                self._last_action_key = prog_action_key
-                action = getattr(GameAction, action_name)
-                if click_data and action.is_complex():
-                    action.set_data(click_data)
-                action.reasoning = f"informed-goal-eml-lock: {prog_action_key} (eml={self._goal_eml_convergence:.2f})"
-                self._action_history.append(action_name)
-                return action
-
-        if current_hash in self._pattern_memory:
-            seq = self._pattern_memory[current_hash]
-            if seq:
-                action_name = seq[0]
-                if ACTION_NAME_TO_ID.get(action_name, 0) in available_set:
-                    self._last_action_key = action_name
-                    action = getattr(GameAction, action_name)
-                    action.reasoning = f"informed-pattern: {action_name} for hash {current_hash[:8]}"
-                    self._action_history.append(action_name)
-                    return action
-
-        # ── Phase 1b: State graph frontier revisit (v6.4: deprioritize backslide/Noether-violations) ──
-        # If from this state we know transitions to OTHER states, re-execute
-        # the ones that led to less-visited states (frontier exploration).
-        # v6.4: Filter out backslide and Noether-violating actions — they
-        # lead to states that are LESS desirable (higher IC, no level progress).
-        if current_hash in self._state_graph:
-            transitions = self._state_graph[current_hash]
-            # Filter: only transitions that lead to DIFFERENT states (not self-loops)
-            novel_transitions = {
-                ak: rh for ak, rh in transitions.items()
-                if rh != current_hash  # skip self-loops (ineffective actions)
-                and ak not in self._backslide_actions  # v6.4: skip backslide actions
-                and self._noether_violations.get(ak, 0) < 3  # v6.4: allow up to 3 Noether violations (maybe luck)
-            }
-            if novel_transitions:
-                # v6.4: Sort by (goal_eml_convergence of dest, progressive_actions of action_key)
-                # Prefer actions that lead to higher Goal-EML states AND are progressive.
-                def frontier_priority(item: Tuple[str, str]) -> float:
-                    action_key, result_hash = item
-                    # Base priority: less visited = more frontier
-                    visit_score = 1.0 / (1.0 + self._state_visited.get(result_hash, 0))
-                    # v6.4: Boost progressive actions
-                    progressive_count = self._progressive_actions.get(action_key, 0)
-                    progressive_boost = min(2.0, progressive_count * 0.5)
-                    # v6.4: Penalize Noether violations
-                    noether_penalty = self._noether_violations.get(action_key, 0) * 0.3
-                    return visit_score + progressive_boost - noether_penalty
-
-                sorted_trans = sorted(
-                    novel_transitions.items(),
-                    key=frontier_priority,
-                    reverse=True  # highest priority first
-                )
-                for action_key, result_hash in sorted_trans:
-                    # Parse action_key to get action_name and possibly click coords
-                    action_name, click_data = self._parse_action_key(action_key, available_set)
-                    if action_name:
-                        self._last_action_key = action_key
-                        action = getattr(GameAction, action_name)
-                        if click_data and action.is_complex():
-                            action.set_data(click_data)
-                        ido_info = f"prog={self._progressive_actions.get(action_key, 0)}"
-                        action.reasoning = f"informed-frontier: {action_key} → {result_hash[:8]} (visits={self._state_visited.get(result_hash, 0)}, {ido_info})"
-                        self._action_history.append(action_name)
-                        return action
-
-        # ── Phase 2: Click games — priority click targeting (v6.4: Goal-EML + Creative-Probe) ──
-        # For games with ACTION6, use rarity + delta + expansion priority queue.
-        # v6.4: When Goal-EML convergence is high, target goal-proximity clicks.
-        # When η-plateau detected, target ASD anomaly pixels (Creative-Probe).
-        if 6 in available_set:
-            # v6.4: Goal-EML guided click — click near goal positions when convergence < 0.5
-            if self._goal_positions and self._goal_eml_convergence < 0.5 and self._asd_anomaly_targets:
-                for x, y in self._asd_anomaly_targets:
-                    # Find anomaly targets near goal positions
-                    min_dist = min(abs(x - gx) + abs(y - gy) for gx, gy in self._goal_positions)
-                    if min_dist <= 5 and f"{x},{y}" not in self._visited_coords:
-                        self._visited_coords.add(f"{x},{y}")
-                        x = max(0, min(63, x))
-                        y = max(0, min(63, y))
-                        action_key = f"ACTION6@{x},{y}"
-                        self._last_action_key = action_key
-                        action = GameAction.ACTION6
-                        action.set_data({"x": x, "y": y})
-                        action.reasoning = {"why": "v6.4-goal-eml-click", "target": (x, y), "eml": self._goal_eml_convergence}
-                        self._action_history.append("ACTION6")
-                        return action
-
-            click_action = self._priority_click_search(grid, available_set)
-            if click_action is not None:
-                return click_action
-
-        # ── Phase 3: Effective keyboard action priority (v6.4: ido-weighted) ──
-        # For keyboard games, prefer directions that previously caused changes.
-        # v6.4: Use ido_value_score weighted effectiveness — progressive > neutral > backslide.
-        # Also penalize Noether-violating directions.
-        keyboard_available = any(a in available_set for a in [1, 2, 3, 4])
-        if keyboard_available:
-            effective_action = self._effective_keyboard_search(available_set)
-            if effective_action is not None:
-                return effective_action
-
-        # ── Phase 3b: Try ACTION5 (SPECIAL) if available ──
-        if 5 in available_set:
-            # Probe SPECIAL if not tested, or use it if effective
-            if not self._special_probed:
-                self._special_probed = True
-                self._last_action_key = "ACTION5"
-                action = GameAction.ACTION5
-                action.reasoning = "informed-special-probe"
-                self._action_history.append("ACTION5")
-                return action
-            elif self._effective_actions.get("ACTION5", 0) > 0:
-                self._last_action_key = "ACTION5"
-                action = GameAction.ACTION5
-                action.reasoning = "informed-special-effective"
-                self._action_history.append("ACTION5")
-                return action
-
-        # ── Phase 3c: Try ACTION7 if available ──
-        if 7 in available_set:
-            self._last_action_key = "ACTION7"
-            action = GameAction.ACTION7
-            action.reasoning = "informed-action7-probe"
-            self._action_history.append("ACTION7")
-            return action
-
-        # ── Phase 4: Novel exploration ──
-        # If we're stuck at the same state, try actions we haven tried from here.
-        # For clicks: try random positions on the grid.
-        # For keyboard: try directions we haven't probed.
-        if self._stall_counter >= 2:
-            novel_action = self._novel_probe(grid, available_set)
-            if novel_action is not None:
-                return novel_action
-
-        # ── Phase 5: Random fallback ──
-        return self._random_fallback(latest_frame, available_set)
-
-    def _parse_action_key(
-        self, action_key: str, available_set: Set[int]
-    ) -> Tuple[Optional[str], Optional[Dict]]:
-        """Parse an action_key string into (action_name, click_data).
-
-        Action keys are either plain action names (ACTION1, ACTION2, etc.)
-        or click keys (ACTION6@x,y) for click games.
-
-        Returns:
-            (action_name, click_data_dict_or_None). None if action not available.
-        """
-        if "@" in action_key:
-            # Click action: ACTION6@x,y
-            parts = action_key.split("@")
-            action_name = parts[0]
-            if action_name == "ACTION6" and 6 in available_set:
-                coords = parts[1].split(",")
-                try:
-                    x, y = int(coords[0]), int(coords[1])
-                    return ("ACTION6", {"x": x, "y": y})
-                except (ValueError, IndexError):
-                    return ("ACTION6", None)
-            return (None, None)
-        else:
-            # Keyboard/action name
-            action_id = ACTION_NAME_TO_ID.get(action_key, 0)
-            if action_id in available_set:
-                return (action_key, None)
-            return (None, None)
-
-    def _priority_click_search(
-        self, grid: Any, available_set: Set[int]
-    ) -> Optional[GameAction]:
-        """Priority-based click targeting for click/puzzle games.
-
-        Uses three priority sources:
-          1. Delta cells (cells that changed between frames) — highest priority
-          2. Rarity cells (cells with uncommon color values) — second priority
-          3. Expansion cells (neighbors of effective clicks) — third priority
-
-        Returns:
-            GameAction with ACTION6 and click coordinates, or None.
-        """
-        # Priority 1: Delta click pool — cells that recently changed
-        if self._delta_click_pool:
-            while self._delta_click_pool:
-                x, y = self._delta_click_pool.pop(0)
-                if self._should_visit(x, y):
-                    x = max(0, min(63, x))
-                    y = max(0, min(63, y))
-                    action_key = f"ACTION6@{x},{y}"
-                    self._last_action_key = action_key
-                    action = GameAction.ACTION6
-                    action.set_data({"x": x, "y": y})
-                    action.reasoning = {"why": "informed-delta-click", "target": (x, y)}
-                    self._action_history.append("ACTION6")
-                    return action
-
-        # Priority 2: Grid scan — rarity-based systematic scan (v6.4: Goal-EML guided)
-        # When Goal-EML convergence is low (< 0.3), prefer targets near goal positions.
-        if not self._grid_scan_initialized:
-            self._init_grid_click_scan(grid)
-        if self._grid_scan_queue:
-            # v6.4: Re-order scan queue by Goal-EML priority if convergence is low
-            if self._goal_positions and self._goal_eml_convergence < 0.3:
-                def goal_proximity(item: Tuple[int, int]) -> float:
-                    x, y = item
-                    min_dist = min(abs(x - gx) + abs(y - gy) for gx, gy in self._goal_positions)
-                    return min_dist
-                self._grid_scan_queue.sort(key=goal_proximity)
-
-            while self._grid_scan_queue:
-                x, y = self._grid_scan_queue.pop(0)
-                if self._should_visit(x, y):
-                    x = max(0, min(63, x))
-                    y = max(0, min(63, y))
-                    action_key = f"ACTION6@{x},{y}"
-                    self._last_action_key = action_key
-                    action = GameAction.ACTION6
-                    action.set_data({"x": x, "y": y})
-                    action.reasoning = {"why": "informed-rarity-click", "target": (x, y), "game_type": self._detected_game_type}
-                    self._action_history.append("ACTION6")
-                    return action
-
-        # Priority 3: Neighborhood expansion around effective clicks
-        for ex, ey in self._effective_click_positions[-5:]:
-            self._expand_scan_from_click(ex, ey, grid)
-        # Re-init and try again
-        self._grid_scan_initialized = False
-        self._init_grid_click_scan(grid)
-        if self._grid_scan_queue:
-            x, y = self._grid_scan_queue.pop(0)
-            if self._should_visit(x, y):
-                x = max(0, min(63, x))
-                y = max(0, min(63, y))
-                action_key = f"ACTION6@{x},{y}"
-                self._last_action_key = action_key
-                action = GameAction.ACTION6
-                action.set_data({"x": x, "y": y})
-                action.reasoning = {"why": "informed-expansion-click", "target": (x, y)}
-                self._action_history.append("ACTION6")
-                return action
-
-        return None
-
-    def _effective_keyboard_search(
-        self, available_set: Set[int]
-    ) -> Optional[GameAction]:
-        """Select keyboard action based on effectiveness tracking + ido value score.
-
-        v6.4: Enhanced with ido_value_score — progressive actions get higher priority,
-        backslide actions get lower priority. Noether-violating actions are penalized.
-
-        Uses the action_change_rate dictionary to compute effectiveness ratios
-        and prefer directions with the highest change rate.
-
-        Returns:
-            GameAction for the most effective keyboard direction, or None.
-        """
-        # Collect available keyboard actions
-        keyboard_actions = [
-            a for a in DIRECTION_ACTIONS
-            if ACTION_NAME_TO_ID.get(a, 0) in available_set
-        ]
-        if not keyboard_actions:
-            return None
-
-        # v6.4: Compute weighted effectiveness using ido_value_score
-        # Base: effectiveness ratio (changes/total_uses)
-        # Boost: progressive_actions count (actions that reduced IC-gap)
-        # Penalty: backslide_actions + noether_violations (actions that backslid or broke physics)
-        def weighted_effectiveness(action_name: str) -> float:
-            eff, total = self._action_change_rate.get(action_name, (0, 0))
-            # Base rate
-            if total == 0:
-                base_rate = 0.5  # untested = moderate priority
-            else:
-                base_rate = eff / total
-
-            # v6.4: Progressive boost — actions that consistently reduce IC-gap
-            progressive = self._progressive_actions.get(action_name, 0)
-            progressive_boost = min(1.0, progressive * 0.3)
-
-            # v6.4: Backslide penalty — actions that consistently increase IC
-            backslide = self._backslide_actions.get(action_name, 0)
-            backslide_penalty = min(0.8, backslide * 0.2)
-
-            # v6.4: Noether penalty — physics-violating actions
-            noether = self._noether_violations.get(action_name, 0)
-            noether_penalty = min(0.5, noether * 0.15)
-
-            return base_rate + progressive_boost - backslide_penalty - noether_penalty
-
-        # Sort by weighted effectiveness (highest first)
-        sorted_actions = sorted(
-            keyboard_actions,
-            key=weighted_effectiveness,
-            reverse=True
-        )
-
-        # Pick the most effective direction
-        best = sorted_actions[0]
-        self._last_action_key = best
-        action = getattr(GameAction, best)
-        w_eff = weighted_effectiveness(best)
-        action.reasoning = f"informed-keyboard: {best} (w_eff={w_eff:.2f}, prog={self._progressive_actions.get(best, 0)}, back={self._backslide_actions.get(best, 0)})"
-        self._action_history.append(best)
-        return action
-
-    def _novel_probe(
-        self, grid: Any, available_set: Set[int]
-    ) -> Optional[GameAction]:
-        """Try novel/untested actions when stuck.
-
-        v6.4: Creative-Probe enhancement — when η-plateau detected (ido≈0 for
-        consecutive steps), target minority-color pixels with −∇η perturbation.
-        Instead of random clicks, prioritize ASD anomaly targets (minority pixels)
-        to break through the plateau.
-
-        For click games: try ASD anomaly targets first, then random nonzero positions.
-        For keyboard games: try unprobed directions or anti-effectiveness directions.
-
-        Returns:
-            GameAction for a novel probe, or None.
-        """
-        # ── v6.4: Creative-Probe for click games ──
-        # When η-plateau detected, target minority-color pixels (−∇η direction)
-        if 6 in available_set:
-            # v6.4 Creative-Probe: Priority 1 — ASD anomaly targets
-            if self._eta_plateau_counter >= 3 and self._asd_anomaly_targets:
-                # η-plateau: stuck at ido≈0 for 3+ steps → probe minority pixels
-                for x, y in self._asd_anomaly_targets:
-                    coord_key = f"{x},{y}"
-                    if coord_key not in self._visited_coords:
-                        self._visited_coords.add(coord_key)
-                        x = max(0, min(63, x))
-                        y = max(0, min(63, y))
-                        action_key = f"ACTION6@{x},{y}"
-                        self._last_action_key = action_key
-                        action = GameAction.ACTION6
-                        action.set_data({"x": x, "y": y})
-                        action.reasoning = {"why": "v6.4-creative-probe", "target": (x, y), "eta_plateau": self._eta_plateau_counter}
-                        self._action_history.append("ACTION6")
-                        return action
-
-            # Priority 2: delta click pool cells (v6.4: filter out backslide click positions)
-            nonzero = self._find_nonzero_cells(grid)
-            rare_targets = [(x, y, val) for x, y, val in nonzero
-                           if f"{x},{y}" not in self._visited_coords
-                           and val not in self._wall_colors
-                           and val != self._player_color
-                           ]
-            # v6.4: Filter out click positions that caused backslide
-            backslide_coords = set()
-            for ak in self._backslide_actions:
-                if "@" in ak:
-                    try:
-                        coords = ak.split("@")[1].split(",")
-                        backslide_coords.add(f"{int(coords[0])},{int(coords[1])}")
-                    except (ValueError, IndexError):
-                        pass
-            rare_targets = [(x, y, val) for x, y, val in rare_targets
-                           if f"{x},{y}" not in backslide_coords
-                           ]
-            if not rare_targets:
-                rare_targets = [(x, y, val) for x, y, val in nonzero
-                               if f"{x},{y}" not in self._visited_coords
-                               ]
-            if rare_targets:
-                # v6.4: Sort by Goal-EML convergence potential — prefer targets near goal positions
-                if self._goal_positions and self._goal_eml_convergence < 0.5:
-                    # When convergence is low, prefer targets near goal positions
-                    def goal_distance(t: Tuple[int, int, int]) -> float:
-                        x, y, val = t
-                        min_dist = min(abs(x - gx) + abs(y - gy) for gx, gy in self._goal_positions) if self._goal_positions else 1000
-                        return min_dist
-                    rare_targets.sort(key=goal_distance)
-
-                x, y, val = rare_targets[0]  # Pick best target (not random!)
-                x = max(0, min(63, x))
-                y = max(0, min(63, y))
-                action_key = f"ACTION6@{x},{y}"
-                self._last_action_key = action_key
-                action = GameAction.ACTION6
-                action.set_data({"x": x, "y": y})
-                action.reasoning = {"why": "v6.4-novel-click", "target": (x, y), "val": val, "eml": self._goal_eml_convergence}
-                self._action_history.append("ACTION6")
-                return action
-
-            # Try random grid positions if no nonzero cells
-            x = random.randint(0, 63)
-            y = random.randint(0, 63)
-            action_key = f"ACTION6@{x},{y}"
-            self._last_action_key = action_key
-            action = GameAction.ACTION6
-            action.set_data({"x": x, "y": y})
-            action.reasoning = {"why": "informed-novel-random-click", "target": (x, y)}
-            self._action_history.append("ACTION6")
-            return action
-
-        # For keyboard games: try unprobed directions
-        keyboard_available = [a for a in DIRECTION_ACTIONS
-                              if ACTION_NAME_TO_ID.get(a, 0) in available_set]
-        unprobed = [a for a in keyboard_available
-                    if a not in self._direction_probed]
-        if unprobed:
-            action_name = random.choice(unprobed)
-            self._direction_probed[action_name] = True
-            self._last_action_key = action_name
-            action = getattr(GameAction, action_name)
-            action.reasoning = f"informed-novel-probe: {action_name}"
-            self._action_history.append(action_name)
-            return action
-
-        # All probed — try random direction with anti-stall bias
-        if keyboard_available:
-            # Prefer LESS effective directions when stuck (try something new)
-            def anti_effectiveness(action_name: str) -> float:
-                eff, total = self._action_change_rate.get(action_name, (0, 0))
-                if total == 0:
-                    return 1.0  # untested = high novelty
-                return 1.0 - (eff / total)  # LESS effective = more novel
-
-            weights = [anti_effectiveness(a) + 0.1 for a in keyboard_available]
-            action_name = random.choices(keyboard_available, weights=weights, k=1)[0]
-            self._last_action_key = action_name
-            action = getattr(GameAction, action_name)
-            action.reasoning = f"informed-novel-direction: {action_name} (anti-stall)"
-            self._action_history.append(action_name)
-            return action
-
-        return None
-
-    # ── Delta-aware smart exploration (LEGACY — kept for fallback) ───────
+    # ── Delta-aware smart exploration ────────────────────────────────────
 
     def _smart_exploration(
         self, frames: list[FrameData], latest_frame: FrameData

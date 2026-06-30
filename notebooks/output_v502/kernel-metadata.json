@@ -1,16 +1,16 @@
 {
-  "id": "aureioo/arc-prize-2026-arc-agi-3-v640",
-  "title": "arc prize 2026 arc agi 3 v640",
+  "id": "aureioo/arc-prize-2026-arc-agi-3-v502",
+  "title": "arc-prize-2026-arc-agi-3-v502",
   "code_file": "submission.ipynb",
   "language": "python",
   "kernel_type": "notebook",
-  "is_private": false,
+  "is_private": true,
   "enable_gpu": true,
   "enable_tpu": false,
   "enable_internet": false,
   "keywords": [],
   "dataset_sources": [],
   "kernel_sources": [],
-  "competition_sources": ["arc-prize-2026-arc-agi-3"],
+  "competition_sources": [],
   "model_sources": []
 }
