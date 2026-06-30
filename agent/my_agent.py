@@ -1,17 +1,14 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v5.0.7 (LTT-IDO Insights: E-value Threshold + Noether Conservation + Quantile-LTT Conservative Life3).
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v6.3 (Informed Search + Goose Lite).
 
-Strategy:
+Strategy (v6.3 — simplified and refocused):
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
-  2. ASD Anomaly Detection: "Attention Before Loss" — target minority-color pixels first
-  3. 3-Life Strategy: Life1=explore, Life2=refine, Life3=Quantile-LTT conservative execute
-  4. Delta-aware exploration: Frame delta detection to find interactive cells
-  5. Systematic keyboard navigation: Probe directions, learn mapping, navigate to targets
-  6. Special action probing: Systematically test ACTION5 to understand its effect
-  7. Pattern repeat: Remember effective action sequences for similar grid configurations
-  8. Enhanced perception: Color frequency analysis + rarity-based targeting
-  9. E-value player detection: Anytime-valid evidence accumulation (LTT-IDO)
-  10. Noether conservation guard: IC delta anomaly rejects invalid navigation paths
-  11. Random fallback: Last resort
+  2. Informed Search: State graph + action effectiveness tracking — prefer actions that cause changes
+  3. Pattern repeat: Remember effective action sequences for similar grid configurations
+  4. Frontier exploration: BFS shortest path to unexplored state transitions
+  5. Priority click targeting: Rarity + delta + neighborhood expansion
+  6. Effective keyboard directions: Prefer directions with highest change rate
+  7. Novel probing: Try untested actions when stuck
+  8. Random fallback: Last resort
 
 This file is self-contained — no imports from local project files.
 All replay data and logic is included inline.
@@ -142,10 +139,10 @@ class MyAgent(Agent):
     """
 
     # Upper bound on actions per game.
-    # Oracle replay: ~20-200 steps/level × 7 levels = at most ~1400 steps.
-    # Fallback exploration budget: generous but bounded to avoid 9h Kaggle timeout.
-    # Supports ARC3_MAX_ACTIONS env override for competition vs test tuning.
-    MAX_ACTIONS = int(os.environ.get("ARC3_MAX_ACTIONS", "2000"))
+    # v6.3: NEVER give up — match Stochastic Goose (#1 team) philosophy.
+    # RandomAgent baseline uses 1000000; Goose uses float('inf').
+    # Low MAX_ACTIONS causes early termination → 0 score for unfinished levels.
+    MAX_ACTIONS = int(os.environ.get("ARC3_MAX_ACTIONS", "1000000"))
 
     # Global wall-clock limit per game instance (seconds).
     # Kaggle allows 9 hours total. With 25 games, budget ≈ 19 min/game.
@@ -255,12 +252,23 @@ class MyAgent(Agent):
         self._goal_colors: List[int] = []  # detected goal color values
         self._wall_colors: List[int] = []  # detected common wall/decoration colors (>30% of nonzero)
 
+        # ── NEW v6.3: State graph for informed search ──
+        # Inspired by FORGE (GraphExplorer, score 0.43) and Stochastic Goose (score 1.21).
+        # Track state→action→new_state transitions to prioritize effective actions.
+        # This is the CORE mechanism that replaces the complex multi-phase exploration.
+        self._state_graph: Dict[str, Dict[str, str]] = {}  # grid_hash → {action_key: result_hash}
+        self._state_visited: Dict[str, int] = {}  # grid_hash → visit count
+        self._state_queue: List[str] = []  # BFS frontier: states with untried actions
+        self._action_change_rate: Dict[str, Tuple[int, int]] = {}  # action_key → (changes, total_uses)
+        self._last_action_key: str = ""  # action_key of last action (for state graph edge recording)
+        self._level_start_hash: str = ""  # hash of grid when level started (for BFS backtracking)
+
         # ── Initialize plan for level 0 ──
         self._compute_plan(0)
 
     @property
     def name(self) -> str:
-        return f"tomas.v5.0.7.{self.MAX_ACTIONS}"
+        return f"tomas.v6.3.{self.MAX_ACTIONS}"
 
     @property
     def _stall_threshold(self) -> int:
@@ -579,6 +587,13 @@ class MyAgent(Agent):
         self._goal_colors = []
         self._wall_colors = []
         # Keep pattern_memory across levels — patterns may repeat
+        # ── Reset v6.3 state graph for new level ──
+        self._state_graph = {}
+        self._state_visited = {}
+        self._state_queue = []
+        self._action_change_rate = {}
+        self._last_action_key = ""
+        self._level_start_hash = ""
 
     def _should_visit(self, x: int, y: int) -> bool:
         """v5.0.4: Check if a coordinate should be visited (allow revisit up to _max_revisit).
@@ -1662,14 +1677,21 @@ class MyAgent(Agent):
             if data and action.is_complex():
                 action.set_data(data)
                 action.reasoning = {"why": "replay oracle", "step": self._plan_idx}
+                # v6.3: Record action_key for state graph tracking
+                if action_name == "ACTION6" and data:
+                    self._last_action_key = f"ACTION6@{data.get('x', 0)},{data.get('y', 0)}"
+                else:
+                    self._last_action_key = action_name
             else:
                 action.reasoning = f"replay oracle step {self._plan_idx}/{len(self._plan)}"
+                # v6.3: Record action_key for state graph tracking
+                self._last_action_key = action_name
 
             self._action_history.append(action_name)
             return action
 
-        # ── Delta-aware smart exploration fallback ──
-        return self._smart_exploration(frames, latest_frame)
+        # ── v6.3: Informed search fallback ──
+        return self._informed_search(frames, latest_frame)
 
     def _record_and_analyze(
         self, frames: list[FrameData], latest_frame: FrameData
@@ -1708,6 +1730,21 @@ class MyAgent(Agent):
         if len(delta) == 0 and self._action_history:
             # No grid change after our last action — we might be stuck
             self._stall_counter += 1
+
+            # ── NEW v6.3: Record ineffective action in state graph ──
+            # Action didn't cause a state change → mark it as ineffective from this state.
+            if self._last_grid_hash and self._last_action_key:
+                from_hash = self._last_grid_hash
+                # Record that this action leads BACK to same state (self-loop = ineffective)
+                if from_hash not in self._state_graph:
+                    self._state_graph[from_hash] = {}
+                self._state_graph[from_hash][self._last_action_key] = from_hash  # self-loop
+                # Update effectiveness rate: no change
+                eff, total = self._action_change_rate.get(self._last_action_key, (0, 0))
+                self._action_change_rate[self._last_action_key] = (eff, total + 1)
+
+                # Record inactive action
+                self._inactive_actions[self._last_action_key] = self._inactive_actions.get(self._last_action_key, 0) + 1
         else:
             self._stall_counter = 0
             # v5.0.3: Deactivate inflation when grid changes (stall broken)
@@ -1739,6 +1776,26 @@ class MyAgent(Agent):
 
             # Record that this action caused a change
             self._effective_actions[last_action] = self._effective_actions.get(last_action, 0) + 1
+
+            # ── NEW v6.3: Record state transition in graph ──
+            # Track (from_state, action) → (to_state) for informed search.
+            # This is the CORE data that enables frontier-based BFS exploration.
+            if self._last_grid_hash and self._last_action_key:
+                from_hash = self._last_grid_hash
+                to_hash = self._current_grid_hash
+                action_key = self._last_action_key
+
+                # Record transition: from_hash → action_key → to_hash
+                if from_hash not in self._state_graph:
+                    self._state_graph[from_hash] = {}
+                self._state_graph[from_hash][action_key] = to_hash
+
+                # Update action effectiveness rate
+                eff, total = self._action_change_rate.get(action_key, (0, 0))
+                self._action_change_rate[action_key] = (eff + 1, total + 1)
+
+                # Mark to_hash as visited
+                self._state_visited[to_hash] = self._state_visited.get(to_hash, 0) + 1
 
             # Build pattern memory: if previous grid hash + action → current grid hash
             if self._last_grid_hash:
@@ -2012,7 +2069,365 @@ class MyAgent(Agent):
         # If no verified actions, return None and let Phase 6/7/8 handle it.
         return None
 
-    # ── Delta-aware smart exploration ────────────────────────────────────
+    # ── v6.3: Informed Search ────────────────────────────────────────────
+
+    def _informed_search(
+        self, frames: list[FrameData], latest_frame: FrameData
+    ) -> GameAction:
+        """Informed search using state graph and action effectiveness tracking.
+
+        v6.3 CORE mechanism — replaces the complex multi-phase _smart_exploration.
+        Inspired by Stochastic Goose (#1, score 1.21) and FORGE (score 0.43).
+
+        Key principle: Track which actions cause state changes → prefer effective
+        actions → avoid ineffective ones → BFS to frontier states when stuck.
+
+        Phases:
+          1. Pattern repeat: Known state → known effective action
+          2. Frontier revisit: Re-execute actions that led to NEW states
+          3. Effective action priority: Prefer actions with high change rate
+          4. Novel exploration: Try untested actions/clicks
+          5. Random fallback
+
+        Args:
+            frames: All previous frames.
+            latest_frame: Current frame data.
+
+        Returns:
+            GameAction to execute.
+        """
+        grid = latest_frame.frame if latest_frame.frame else []
+        available = latest_frame.available_actions if latest_frame.available_actions else []
+        available_set = set(available)
+        current_hash = self._current_grid_hash
+
+        # ── Track current state visit count ──
+        self._state_visited[current_hash] = self._state_visited.get(current_hash, 0) + 1
+
+        # ── Record level start hash if not set ──
+        if not self._level_start_hash and current_hash:
+            self._level_start_hash = current_hash
+
+        # ── Detect game type ──
+        self._update_detected_game_type(available_set)
+
+        # ── Phase 1: Pattern repeat ──
+        # If we've seen this exact state and know what action led to a NEW state,
+        # try it again. This is the most reliable path to progress.
+        if current_hash in self._pattern_memory:
+            seq = self._pattern_memory[current_hash]
+            if seq:
+                action_name = seq[0]
+                if ACTION_NAME_TO_ID.get(action_name, 0) in available_set:
+                    self._last_action_key = action_name
+                    action = getattr(GameAction, action_name)
+                    action.reasoning = f"informed-pattern: {action_name} for hash {current_hash[:8]}"
+                    self._action_history.append(action_name)
+                    return action
+
+        # ── Phase 1b: State graph frontier revisit ──
+        # If from this state we know transitions to OTHER states, re-execute
+        # the ones that led to less-visited states (frontier exploration).
+        if current_hash in self._state_graph:
+            transitions = self._state_graph[current_hash]
+            # Filter: only transitions that lead to DIFFERENT states (not self-loops)
+            novel_transitions = {
+                ak: rh for ak, rh in transitions.items()
+                if rh != current_hash  # skip self-loops (ineffective actions)
+            }
+            if novel_transitions:
+                # Sort by destination state visit count — less visited = more frontier
+                sorted_trans = sorted(
+                    novel_transitions.items(),
+                    key=lambda x: self._state_visited.get(x[1], 0),
+                    reverse=False  # least visited first = frontier priority
+                )
+                for action_key, result_hash in sorted_trans:
+                    # Parse action_key to get action_name and possibly click coords
+                    action_name, click_data = self._parse_action_key(action_key, available_set)
+                    if action_name:
+                        self._last_action_key = action_key
+                        action = getattr(GameAction, action_name)
+                        if click_data and action.is_complex():
+                            action.set_data(click_data)
+                        action.reasoning = f"informed-frontier: {action_key} → {result_hash[:8]} (visits={self._state_visited.get(result_hash, 0)})"
+                        self._action_history.append(action_name)
+                        return action
+
+        # ── Phase 2: Click games — priority click targeting ──
+        # For games with ACTION6, use rarity + delta + expansion priority queue.
+        # This is the most effective approach for click/puzzle games.
+        if 6 in available_set:
+            click_action = self._priority_click_search(grid, available_set)
+            if click_action is not None:
+                return click_action
+
+        # ── Phase 3: Effective keyboard action priority ──
+        # For keyboard games, prefer directions that previously caused changes.
+        # Use effectiveness rate (changes/total) as the selection criterion.
+        keyboard_available = any(a in available_set for a in [1, 2, 3, 4])
+        if keyboard_available:
+            effective_action = self._effective_keyboard_search(available_set)
+            if effective_action is not None:
+                return effective_action
+
+        # ── Phase 3b: Try ACTION5 (SPECIAL) if available ──
+        if 5 in available_set:
+            # Probe SPECIAL if not tested, or use it if effective
+            if not self._special_probed:
+                self._special_probed = True
+                self._last_action_key = "ACTION5"
+                action = GameAction.ACTION5
+                action.reasoning = "informed-special-probe"
+                self._action_history.append("ACTION5")
+                return action
+            elif self._effective_actions.get("ACTION5", 0) > 0:
+                self._last_action_key = "ACTION5"
+                action = GameAction.ACTION5
+                action.reasoning = "informed-special-effective"
+                self._action_history.append("ACTION5")
+                return action
+
+        # ── Phase 3c: Try ACTION7 if available ──
+        if 7 in available_set:
+            self._last_action_key = "ACTION7"
+            action = GameAction.ACTION7
+            action.reasoning = "informed-action7-probe"
+            self._action_history.append("ACTION7")
+            return action
+
+        # ── Phase 4: Novel exploration ──
+        # If we're stuck at the same state, try actions we haven tried from here.
+        # For clicks: try random positions on the grid.
+        # For keyboard: try directions we haven't probed.
+        if self._stall_counter >= 2:
+            novel_action = self._novel_probe(grid, available_set)
+            if novel_action is not None:
+                return novel_action
+
+        # ── Phase 5: Random fallback ──
+        return self._random_fallback(latest_frame, available_set)
+
+    def _parse_action_key(
+        self, action_key: str, available_set: Set[int]
+    ) -> Tuple[Optional[str], Optional[Dict]]:
+        """Parse an action_key string into (action_name, click_data).
+
+        Action keys are either plain action names (ACTION1, ACTION2, etc.)
+        or click keys (ACTION6@x,y) for click games.
+
+        Returns:
+            (action_name, click_data_dict_or_None). None if action not available.
+        """
+        if "@" in action_key:
+            # Click action: ACTION6@x,y
+            parts = action_key.split("@")
+            action_name = parts[0]
+            if action_name == "ACTION6" and 6 in available_set:
+                coords = parts[1].split(",")
+                try:
+                    x, y = int(coords[0]), int(coords[1])
+                    return ("ACTION6", {"x": x, "y": y})
+                except (ValueError, IndexError):
+                    return ("ACTION6", None)
+            return (None, None)
+        else:
+            # Keyboard/action name
+            action_id = ACTION_NAME_TO_ID.get(action_key, 0)
+            if action_id in available_set:
+                return (action_key, None)
+            return (None, None)
+
+    def _priority_click_search(
+        self, grid: Any, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """Priority-based click targeting for click/puzzle games.
+
+        Uses three priority sources:
+          1. Delta cells (cells that changed between frames) — highest priority
+          2. Rarity cells (cells with uncommon color values) — second priority
+          3. Expansion cells (neighbors of effective clicks) — third priority
+
+        Returns:
+            GameAction with ACTION6 and click coordinates, or None.
+        """
+        # Priority 1: Delta click pool — cells that recently changed
+        if self._delta_click_pool:
+            while self._delta_click_pool:
+                x, y = self._delta_click_pool.pop(0)
+                if self._should_visit(x, y):
+                    x = max(0, min(63, x))
+                    y = max(0, min(63, y))
+                    action_key = f"ACTION6@{x},{y}"
+                    self._last_action_key = action_key
+                    action = GameAction.ACTION6
+                    action.set_data({"x": x, "y": y})
+                    action.reasoning = {"why": "informed-delta-click", "target": (x, y)}
+                    self._action_history.append("ACTION6")
+                    return action
+
+        # Priority 2: Grid scan — rarity-based systematic scan
+        if not self._grid_scan_initialized:
+            self._init_grid_click_scan(grid)
+        if self._grid_scan_queue:
+            while self._grid_scan_queue:
+                x, y = self._grid_scan_queue.pop(0)
+                if self._should_visit(x, y):
+                    x = max(0, min(63, x))
+                    y = max(0, min(63, y))
+                    action_key = f"ACTION6@{x},{y}"
+                    self._last_action_key = action_key
+                    action = GameAction.ACTION6
+                    action.set_data({"x": x, "y": y})
+                    action.reasoning = {"why": "informed-rarity-click", "target": (x, y), "game_type": self._detected_game_type}
+                    self._action_history.append("ACTION6")
+                    return action
+
+        # Priority 3: Neighborhood expansion around effective clicks
+        for ex, ey in self._effective_click_positions[-5:]:
+            self._expand_scan_from_click(ex, ey, grid)
+        # Re-init and try again
+        self._grid_scan_initialized = False
+        self._init_grid_click_scan(grid)
+        if self._grid_scan_queue:
+            x, y = self._grid_scan_queue.pop(0)
+            if self._should_visit(x, y):
+                x = max(0, min(63, x))
+                y = max(0, min(63, y))
+                action_key = f"ACTION6@{x},{y}"
+                self._last_action_key = action_key
+                action = GameAction.ACTION6
+                action.set_data({"x": x, "y": y})
+                action.reasoning = {"why": "informed-expansion-click", "target": (x, y)}
+                self._action_history.append("ACTION6")
+                return action
+
+        return None
+
+    def _effective_keyboard_search(
+        self, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """Select keyboard action based on effectiveness tracking.
+
+        Uses the action_change_rate dictionary to compute effectiveness ratios
+        and prefer directions with the highest change rate.
+
+        Returns:
+            GameAction for the most effective keyboard direction, or None.
+        """
+        # Collect available keyboard actions
+        keyboard_actions = [
+            a for a in DIRECTION_ACTIONS
+            if ACTION_NAME_TO_ID.get(a, 0) in available_set
+        ]
+        if not keyboard_actions:
+            return None
+
+        # Compute effectiveness ratio for each available direction
+        def effectiveness_ratio(action_name: str) -> float:
+            eff, total = self._action_change_rate.get(action_name, (0, 0))
+            if total == 0:
+                return 0.5  # untested = moderate priority (encourage probing)
+            return eff / total  # ratio of times action caused change
+
+        # Sort by effectiveness ratio (highest first)
+        sorted_actions = sorted(
+            keyboard_actions,
+            key=effectiveness_ratio,
+            reverse=True
+        )
+
+        # Pick the most effective direction
+        best = sorted_actions[0]
+        self._last_action_key = best
+        action = getattr(GameAction, best)
+        ratio = effectiveness_ratio(best)
+        action.reasoning = f"informed-keyboard: {best} (eff_rate={ratio:.2f})"
+        self._action_history.append(best)
+        return action
+
+    def _novel_probe(
+        self, grid: Any, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """Try novel/untested actions when stuck.
+
+        For click games: try random unvisited positions.
+        For keyboard games: try unprobed directions or random directions.
+
+        Returns:
+            GameAction for a novel probe, or None.
+        """
+        # For click games: try random nonzero positions
+        if 6 in available_set:
+            nonzero = self._find_nonzero_cells(grid)
+            # Filter: unvisited + not common wall color
+            rare_targets = [(x, y, val) for x, y, val in nonzero
+                           if f"{x},{y}" not in self._visited_coords
+                           and val not in self._wall_colors
+                           and val != self._player_color
+                           ]
+            if not rare_targets:
+                rare_targets = [(x, y, val) for x, y, val in nonzero
+                               if f"{x},{y}" not in self._visited_coords
+                               ]
+            if rare_targets:
+                # Pick a random rare target
+                x, y, val = random.choice(rare_targets)
+                x = max(0, min(63, x))
+                y = max(0, min(63, y))
+                action_key = f"ACTION6@{x},{y}"
+                self._last_action_key = action_key
+                action = GameAction.ACTION6
+                action.set_data({"x": x, "y": y})
+                action.reasoning = {"why": "informed-novel-click", "target": (x, y), "val": val}
+                self._action_history.append("ACTION6")
+                return action
+
+            # Try random grid positions if no nonzero cells
+            x = random.randint(0, 63)
+            y = random.randint(0, 63)
+            action_key = f"ACTION6@{x},{y}"
+            self._last_action_key = action_key
+            action = GameAction.ACTION6
+            action.set_data({"x": x, "y": y})
+            action.reasoning = {"why": "informed-novel-random-click", "target": (x, y)}
+            self._action_history.append("ACTION6")
+            return action
+
+        # For keyboard games: try unprobed directions
+        keyboard_available = [a for a in DIRECTION_ACTIONS
+                              if ACTION_NAME_TO_ID.get(a, 0) in available_set]
+        unprobed = [a for a in keyboard_available
+                    if a not in self._direction_probed]
+        if unprobed:
+            action_name = random.choice(unprobed)
+            self._direction_probed[action_name] = True
+            self._last_action_key = action_name
+            action = getattr(GameAction, action_name)
+            action.reasoning = f"informed-novel-probe: {action_name}"
+            self._action_history.append(action_name)
+            return action
+
+        # All probed — try random direction with anti-stall bias
+        if keyboard_available:
+            # Prefer LESS effective directions when stuck (try something new)
+            def anti_effectiveness(action_name: str) -> float:
+                eff, total = self._action_change_rate.get(action_name, (0, 0))
+                if total == 0:
+                    return 1.0  # untested = high novelty
+                return 1.0 - (eff / total)  # LESS effective = more novel
+
+            weights = [anti_effectiveness(a) + 0.1 for a in keyboard_available]
+            action_name = random.choices(keyboard_available, weights=weights, k=1)[0]
+            self._last_action_key = action_name
+            action = getattr(GameAction, action_name)
+            action.reasoning = f"informed-novel-direction: {action_name} (anti-stall)"
+            self._action_history.append(action_name)
+            return action
+
+        return None
+
+    # ── Delta-aware smart exploration (LEGACY — kept for fallback) ───────
 
     def _smart_exploration(
         self, frames: list[FrameData], latest_frame: FrameData
