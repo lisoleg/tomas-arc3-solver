@@ -64,9 +64,14 @@ def build() -> dict:
     agent_body = AGENT_SRC.read_text()
 
     install_cell = code_cell(
-        "!pip install --no-index --find-links \\\n"
-        "    /kaggle/input/competitions/arc-prize-2026-arc-agi-3/arc_agi_3_wheels \\\n"
-        "    arc-agi python-dotenv"
+        "import os\n"
+        "wheels_path = '/kaggle/input/competitions/arc-prize-2026-arc-agi-3/arc_agi_3_wheels'\n"
+        "if os.path.isdir(wheels_path):\n"
+        "    # Competition rerun: no internet — install from local wheels only\n"
+        "    !pip install --no-index --find-links $wheels_path arc-agi python-dotenv\n"
+        "else:\n"
+        "    # Commit mode: internet available — install from PyPI\n"
+        "    !pip install arc-agi python-dotenv"
     )
 
     # We write the agent to /tmp/ (not /kaggle/working/) so it does NOT appear
@@ -173,7 +178,7 @@ def build() -> dict:
             },
             "kaggle": {
                 "accelerator": accel["name"],
-                "isInternetEnabled": False,
+                "isInternetEnabled": True,
                 "isGpuEnabled": accel["gpu"],
                 "language": "python",
                 "sourceType": "notebook",
