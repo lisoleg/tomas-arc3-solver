@@ -1,6 +1,6 @@
 {
-  "id": "aureioo/arc-prize-2026-arc-agi-3-v650",
-  "title": "TOMAS ARC AGI 3 v6.5 Object-Level Search",
+  "id": "aureioo/tomas-arc-agi-3-v6-6-cca-rule-hypothesis",
+  "title": "TOMAS ARC AGI 3 v6 6 CCA Rule Hypothesis",
   "code_file": "submission.ipynb",
   "language": "python",
   "kernel_type": "notebook",
@@ -11,6 +11,8 @@
   "keywords": [],
   "dataset_sources": [],
   "kernel_sources": [],
-  "competition_sources": ["arc-prize-2026-arc-agi-3"],
+  "competition_sources": [
+    "arc-prize-2026-arc-agi-3"
+  ],
   "model_sources": []
 }

@@ -64,14 +64,9 @@ def build() -> dict:
     agent_body = AGENT_SRC.read_text()
 
     install_cell = code_cell(
-        "import os\n"
-        "wheels_path = '/kaggle/input/competitions/arc-prize-2026-arc-agi-3/arc_agi_3_wheels'\n"
-        "if os.path.isdir(wheels_path):\n"
-        "    # Competition rerun: no internet — install from local wheels only\n"
-        "    !pip install --no-index --find-links $wheels_path arc-agi python-dotenv\n"
-        "else:\n"
-        "    # Commit mode: internet available — install from PyPI\n"
-        "    !pip install arc-agi python-dotenv"
+        "!pip install --no-index --find-links \\\n"
+        "    /kaggle/input/arc-prize-2026-arc-agi-3/arc_agi_3_wheels \\\n"
+        "    arc-agi python-dotenv"
     )
 
     # We write the agent to /tmp/ (not /kaggle/working/) so it does NOT appear
@@ -92,7 +87,7 @@ def build() -> dict:
                   --retry-max-time 600 http://gateway:8001/api/games
 
             # Copy the framework into a writable location.
-            !cp -r /kaggle/input/competitions/arc-prize-2026-arc-agi-3/ARC-AGI-3-Agents \\
+            !cp -r /kaggle/input/arc-prize-2026-arc-agi-3/ARC-AGI-3-Agents \\
                    /kaggle/working/ARC-AGI-3-Agents
 
             # Drop our agent in as a framework template.
@@ -178,7 +173,7 @@ def build() -> dict:
             },
             "kaggle": {
                 "accelerator": accel["name"],
-                "isInternetEnabled": True,
+                "isInternetEnabled": False,
                 "isGpuEnabled": accel["gpu"],
                 "language": "python",
                 "sourceType": "notebook",
@@ -191,7 +186,8 @@ def build() -> dict:
                 "# ARC Prize 2026 — ARC-AGI-3 Submission\n\n"
                 "Built from `agent/my_agent.py` via `scripts/build_notebook.py`. "
                 "Do not edit cells directly — edit the source file and re-run "
-                "`make submit`."
+                "`make submit`.\n\n"
+                "**Version 7.1** — Phase 2: Strategy Preservation + Structural Clicks + Budget-Aware + Frontier Re-open + Stall Reset (2026-06-30)"
             ),
             install_cell,
             write_agent_cell,
@@ -209,15 +205,25 @@ def main() -> None:
           f"(accelerator: {ACCELERATOR})")
 
     # Keep notebooks/kernel-metadata.json in sync so the user never has to
-    # edit it just to flip CPU ↔ GPU.
+    # edit it just to flip CPU ↔ GPU or internet access.
     if METADATA_PATH.exists():
         meta = json.loads(METADATA_PATH.read_text())
-        wanted = _ACCELERATORS[ACCELERATOR]["gpu"]
-        if meta.get("enable_gpu") != wanted:
-            meta["enable_gpu"] = wanted
-            METADATA_PATH.write_text(json.dumps(meta, indent=2) + "\n")
-            print(f"[build_notebook] Synced enable_gpu={wanted} in "
+        wanted_gpu = _ACCELERATORS[ACCELERATOR]["gpu"]
+        if meta.get("enable_gpu") != wanted_gpu:
+            meta["enable_gpu"] = wanted_gpu
+        # ARC-AGI-3 competition requires NO internet access.
+        # Force enable_internet=false regardless of what metadata says.
+        if meta.get("enable_internet") != False:
+            meta["enable_internet"] = False
+            print(f"[build_notebook] Synced enable_internet=False in "
                   f"{METADATA_PATH.relative_to(ROOT)}")
+        if meta.get("enable_gpu") != wanted_gpu:
+            METADATA_PATH.write_text(json.dumps(meta, indent=2) + "\n")
+            print(f"[build_notebook] Synced enable_gpu={wanted_gpu} in "
+                  f"{METADATA_PATH.relative_to(ROOT)}")
+        else:
+            # Still write if internet was changed
+            METADATA_PATH.write_text(json.dumps(meta, indent=2) + "\n")
 
 
 if __name__ == "__main__":
