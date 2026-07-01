@@ -1,6 +1,6 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v7.0 (5-Tier Priority + Full-Frame Hash + Frontier BFS + Trigger-Aware Pruning).
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v7.1 (Phase 2: Strategy Preservation + Structural Clicks + Budget-Aware + Frontier Re-open + Stall Reset).
 
-Strategy (v7.0 — 5-Tier Priority System with Full-Frame Hash Dedup + Frontier BFS Navigation):
+Strategy (v7.1 — Phase 2 enhancements over v7.0 5-Tier Priority System):
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
   2. CCA (Connected Component Analysis): Flood-fill BFS to identify contiguous color regions
      as real "objects" — replaces crude 8×8 region signature from v6.5.
@@ -15,13 +15,25 @@ Strategy (v7.0 — 5-Tier Priority System with Full-Frame Hash Dedup + Frontier 
      Tier 1 (Untried): Actions never tried from current state — highest priority
      Tier 2 (Frontier): BFS navigate to states with untried actions
      Tier 3 (Predicted-change): Trigger-aware + Rule Hypothesis + effectiveness-weighted
+     Tier 3.5 (Stall Recovery): v7.1 — strategy reset when stuck ≥5 steps
      Tier 4 (Novel): ASD/delta/rarity creative exploration
      Tier 5 (Stochastic): Effectiveness-weighted random fallback
   6. v7.0 Trigger-Aware Pruning: Skip self-loops, Noether-violating actions (≥5),
      backslide actions (≥8), nonzero/anomaly click filtering
-  7. IDO Value Score + Noether-Check + Goal-EML (from v6.4, retained)
-  8. Non-Local Action Impact Tracking (from v6.5, retained)
-  9. All click search methods (_priority_click_search, _effective_keyboard_search, etc.)
+  7. v7.1 P2-1: Level-Transition Strategy Preservation — lightweight _reset_state_data()
+     preserves game mechanics learning across levels; full _reset_exploration_state()
+     only on new game start or extreme stall recovery.
+  8. v7.1 P2-2: Structural Click Target Detection — isolated pixels, color boundaries,
+     small connected regions as Priority 1.5 in _generate_click_candidates.
+  9. v7.1 P2-3: Budget-Aware Tier Weighting — explore/balanced/lock phases adjust
+     Goal-EML lock threshold and Tier 4 stall threshold.
+  10. v7.1 P2-4: Frontier Re-open — when frontier empty, scan state_graph to find
+     states with untried actions instead of giving up.
+  11. v7.1 P2-5: Stall Strategy Reset — when stuck ≥5 steps, reset direction probes,
+     re-analyze ASD, try random direction/click to break fixed pattern.
+  12. IDO Value Score + Noether-Check + Goal-EML (from v6.4, retained)
+  13. Non-Local Action Impact Tracking (from v6.5, retained)
+  14. All click search methods (_priority_click_search, _effective_keyboard_search, etc.)
      retained as internal helpers for Tier 3/4/5.
 
 This file is self-contained — no imports from local project files.
@@ -129,30 +141,38 @@ ACTION_NAME_TO_ID: Dict[str, int] = {
 
 
 class MyAgent(Agent):
-    """TOMAS ARC-AGI-3 Solver v7.0 — 5-Tier Priority + Full-Frame Hash + Frontier BFS + Trigger-Aware Pruning.
+    """TOMAS ARC-AGI-3 Solver v7.1 — Phase 2: Strategy Preservation + Structural Clicks + Budget-Aware + Frontier Re-open + Stall Reset.
 
-    v7.0 Strategy priority:
+    v7.1 Strategy priority (Phase 2 enhancements over v7.0):
       1. ARC3 Replay Oracle (precomputed human-optimal sequences — always try, then fallback)
       2. Dynamic game-type detection (infer click/keyboard/mixed from available_actions)
       3. v7.0 Full-Frame Hash Dedup (MD5 of entire grid for EXACT state deduplication)
-      4. v7.0 5-Tier Priority Search:
+      4. v7.1 Level-Transition Strategy Preservation (P2-1):
+         - Lightweight _reset_state_data() preserves game mechanics across levels
+         - Full _reset_exploration_state() only for new game start
+      5. v7.0+v7.1 5-Tier Priority Search:
          Tier 1 (Untried): Actions never tried from current state
          Tier 2 (Frontier): BFS navigate to states with untried actions
          Tier 3 (Predicted-change): Trigger-aware + effectiveness + rule hypothesis
+         Tier 3.5 (Stall Recovery): v7.1 — strategy reset when stuck ≥5 steps
          Tier 4 (Novel): ASD/delta/rarity exploration
          Tier 5 (Stochastic): Effectiveness-weighted random fallback
-      5. v7.0 Trigger-Aware Pruning (skip self-loops, Noether-violations, backslides)
-      6. CCA (Connected Component Analysis) + Rule Hypothesis Engine (retained for heuristics)
-      7. IDO Value Score + Noether-Check + Goal-EML (from v6.4, retained)
-      8. Goal-EML lock when convergence ≥ 0.8 (near-goal aggressive progressive repeat)
-      9. All legacy search methods retained as internal helpers
+      6. v7.1 Structural Click Targets (P2-2): isolated pixels, color boundaries as Priority 1.5
+      7. v7.1 Budget-Aware Tier Weighting (P2-3): explore/balanced/lock phases adjust thresholds
+      8. v7.1 Frontier Re-open (P2-4): scan state_graph when frontier empty
+      9. v7.1 Stall Strategy Reset (P2-5): random direction/click when stuck ≥5
+      10. v7.0 Trigger-Aware Pruning (skip self-loops, Noether-violations, backslides)
+      11. CCA + Rule Hypothesis Engine (retained for heuristics)
+      12. IDO Value Score + Noether-Check + Goal-EML (from v6.4, retained)
+      13. Goal-EML lock with budget-aware threshold (0.5 in lock phase vs 0.8)
+      14. All legacy search methods retained as internal helpers
 
-    v7.0 changes vs v6.6:
-      - Full-frame MD5 hash replaces coarse CCA-based hash for state graph (exact dedup)
-      - Frontier BFS navigation: navigate back to states with untried actions
-      - Unified 5-tier priority system replaces ad-hoc Phase 1-5 ordering
-      - Trigger-aware pruning: skip known-ineffective actions before trying them
-      - CCA _object_hash retained for heuristic computation (still valuable)
+    v7.1 changes vs v7.0:
+      - P2-1: _reset_state_data() preserves game mechanics learning across levels
+      - P2-2: _detect_structural_click_targets() finds isolated pixels + color boundaries
+      - P2-3: Budget-aware tier weighting (Goal-EML threshold, Tier 4 stall threshold)
+      - P2-4: Frontier re-open when _frontier_states empty
+      - P2-5: Stall recovery with random direction/click at stall_counter >= 5
     """
 
     # Upper bound on actions per game.
@@ -332,12 +352,18 @@ class MyAgent(Agent):
         self._frontier_states: Set[str] = set()  # states with untried actions (frontier for BFS)
         self._untried_actions_cache: Dict[str, List[str]] = {}  # state_hash → list of untried action keys
 
+        # ── NEW v7.1: Game transition tracking ──
+        # Track game_id transitions to decide between lightweight vs full reset.
+        # When game_id changes → full _reset_exploration_state (new game, clear all).
+        # Same game, different level → lightweight _reset_state_data (preserve mechanics).
+        self._prev_game_id: str = ""  # v7.1: Track game transitions for full reset
+
         # ── Initialize plan for level 0 ──
         self._compute_plan(0)
 
     @property
     def name(self) -> str:
-        return f"tomas.v7.0.{self.MAX_ACTIONS}"
+        return f"tomas.v7.1.{self.MAX_ACTIONS}"
 
     @property
     def _stall_threshold(self) -> int:
@@ -577,10 +603,10 @@ class MyAgent(Agent):
             self._grid_scan_initialized = False
             self._grid_scan_queue = []
         else:
-            # No replay data — reset exploration state for new level
+            # No replay data — lightweight reset for new level (preserve game mechanics)
             self._plan = []
             self._plan_idx = 0
-            self._reset_exploration_state()
+            self._reset_state_data()  # v7.1: Preserve game mechanics learning!
 
     def _convert_replay(self, sequence: List) -> List[Tuple[str, Optional[Dict]]]:
         """Convert arc3.games replay sequence to (action_name, data) tuples.
@@ -605,8 +631,120 @@ class MyAgent(Agent):
                     plan.append((action_name, None))
         return plan
 
+    def _reset_state_data(self) -> None:
+        """v7.1: Lightweight state reset — preserves game mechanics learning.
+
+        Resets state-level data (hashes, graph, visited coords, frontier)
+        but PRESERVES game mechanics knowledge accumulated across levels:
+        - _action_change_rate (which actions tend to change grid)
+        - _progressive_actions (which actions lead to progress)
+        - _backslide_actions (which actions lead to regression)
+        - _noether_violations (which actions violate conservation)
+        - _detected_game_type (game type classification)
+        - _direction_map (which directions work)
+        - _rule_hypothesis (inferred game mechanics)
+        - _hypothesis_confirmed, _hypothesis_step_count
+
+        Use for: level transitions within same game, GAME_OVER retries.
+        Do NOT use for: new game start (use full _reset_exploration_state instead).
+        """
+        # ── Reset state-level data (hashes, graph, visited) ──
+        self._visited_coords = set()
+        self._visited_counts = {}
+        self._delta_history = []
+        self._delta_click_pool = []
+        self._estimated_player_pos = None
+        self._prev_estimated_player_pos = None
+        self._direction_probed = {}
+        self._direction_probe_count = 0
+        self._special_probed = False
+        self._special_effect_delta = None
+        self._special_effect_summary = ""
+        self._stall_counter = 0
+        self._prev_levels_completed = self._levels_done
+        self._action_count = 0
+        self._rg_flow_phase = "explore"
+        self._ic_delta = 0.0
+        self._inflation_probes = []
+        self._inflation_active = False
+        self._last_grid_hash = ""
+        self._current_grid_hash = ""
+        self._exploration_phase = "probe"
+        self._navigate_target = None
+        self._navigate_path = []
+        self._grid_hash_action_map = {}
+        # ASD state reset (game mechanics preserved)
+        self._asd_anomaly_colors = []
+        self._asd_anomaly_targets = []
+        self._asd_analyzed = False
+        self._asd_top_rarity = {}
+        # 3-Life state reset
+        self._game_over_count = 0
+        self._life_phase = "life1"
+        self._life1_discoveries = {}
+        self._life1_effective_actions = []
+        self._life1_effective_clicks = []
+        # Grid click scan reset
+        self._grid_scan_queue = []
+        self._grid_scan_initialized = False
+        self._effective_click_positions = []
+        # Goal-oriented navigation reset
+        self._player_position_history = []
+        self._goal_positions = []
+        self._goal_colors = []
+        self._wall_colors = []
+        # ── v6.3 state graph reset (per-level) ──
+        self._state_graph = {}
+        self._state_visited = {}
+        self._state_queue = []
+        self._last_action_key = ""
+        self._level_start_hash = ""
+        # IDO per-level reset
+        self._ido_value_score = 0.0
+        self._ido_value_history = []
+        self._last_ic_value = 0.0
+        self._current_ic_value = 0.0
+        self._ic_goal_value = 0.0
+        self._goal_eml_convergence = 0.0
+        self._minority_pixel_count = 0
+        self._goal_color_expansion = 0
+        self._eta_plateau_counter = 0
+        # ── v6.5 object-level state reset ──
+        self._object_state = {}
+        self._object_hash = ""
+        self._prev_object_hash = ""
+        self._heuristic_distance = 1.0
+        self._nonlocal_impact = {}
+        self._frontier_depth = {}
+        # ── v6.6 CCA state reset (objects change per level) ──
+        self._cca_objects = []
+        self._observation_log = []
+        self._predicted_goal_objects = []
+        # ── v7.0 hash + frontier reset ──
+        self._state_hash = ""
+        self._prev_state_hash = ""
+        self._frontier_states = set()
+        self._untried_actions_cache = {}
+
+        # ── PRESERVED (game mechanics — NOT reset) ──
+        # self._action_change_rate  — which actions tend to change the grid
+        # self._progressive_actions  — which actions lead to progress
+        # self._backslide_actions  — which actions lead to regression
+        # self._noether_violations  — which actions violate conservation
+        # self._detected_game_type  — game type classification
+        # self._direction_map  — which directions work for player movement
+        # self._rule_hypothesis  — inferred game mechanics (push/toggle/propagation)
+        # self._hypothesis_confirmed  — whether hypothesis was confirmed
+        # self._hypothesis_step_count  — how many steps hypothesis was observed
+        # self._player_color_candidates  — player color (persist across levels)
+        # self._pattern_memory  — pattern memory (persist across levels)
+
     def _reset_exploration_state(self) -> None:
-        """Reset exploration state when entering a new level without replay data."""
+        """v7.1: Full reset — clears ALL state data including game mechanics.
+
+        Used for: new game start (game_id changed), extreme stall recovery (stall_counter>=10).
+        For level transitions within same game, use _reset_state_data() instead.
+        """
         self._visited_coords = set()
         self._visited_counts = {}  # v5.0.4: Reset visit counts for new level
         self._delta_history = []
@@ -1709,6 +1847,13 @@ class MyAgent(Agent):
         Separated from choose_action to allow clean try/except wrapping.
         """
 
+        # ── v7.1: Full reset when game_id changes (new game, not just new level) ──
+        current_game_id = self.game_id if self.game_id else ""
+        if current_game_id and current_game_id != self._prev_game_id:
+            if self._prev_game_id:  # Not the very first game
+                self._reset_exploration_state()  # Full reset for new game
+            self._prev_game_id = current_game_id
+
         # ── Handle level transitions ──
         if latest_frame.levels_completed > self._levels_done:
             self._levels_done = latest_frame.levels_completed
@@ -1739,7 +1884,7 @@ class MyAgent(Agent):
                 # Oracle plan failed — abandon it, switch to exploration
                 self._plan = []
                 self._plan_idx = 0
-                self._reset_exploration_state()
+                self._reset_state_data()  # v7.1: Preserve game mechanics on retry
                 self._grid_scan_initialized = False
                 self._grid_scan_queue = []
                 # Don't count this as a full retry — it's a strategy switch
@@ -1748,7 +1893,7 @@ class MyAgent(Agent):
                 # Too many retries — abandon plan, try exploration
                 self._plan = []
                 self._plan_idx = 0
-                self._reset_exploration_state()
+                self._reset_state_data()  # v7.1: Preserve game mechanics on retry
             else:
                 # In Life1, record discoveries before retry
                 if self._life_phase == "life1" or self._life_phase == "life2":
@@ -3064,6 +3209,14 @@ class MyAgent(Agent):
                 if ak not in tried_actions and f"{x},{y}" not in self._visited_coords:
                     candidates.append(ak)
 
+        # Priority 1.5: Structural click targets (isolated pixels, color boundaries)
+        # v7.1: Detect structurally interesting click targets from grid analysis
+        structural_targets = self._detect_structural_click_targets(grid)
+        for x, y in structural_targets[:20]:
+            ak = f"ACTION6@{x},{y}"
+            if ak not in tried_actions and f"{x},{y}" not in self._visited_coords:
+                candidates.append(ak)
+
         # Priority 2: Delta click pool (recently changed cells)
         for x, y in self._delta_click_pool[:10]:
             ak = f"ACTION6@{x},{y}"
@@ -3091,6 +3244,73 @@ class MyAgent(Agent):
                 candidates.append(ak)
 
         return candidates[:50]  # Limit click candidates
+
+    def _detect_structural_click_targets(self, grid: Any) -> List[Tuple[int, int]]:
+        """v7.1: Detect structurally interesting click targets from grid analysis.
+
+        Finds cells that are likely interactive based on structural properties:
+        - Isolated pixels: cells whose color differs from ALL 8 neighbors (likely buttons/switches)
+        - Color boundaries: cells at the edge of a color transition (likely doors/walls)
+        - Small connected regions: connected color areas of area <= 5 (likely interactive elements)
+
+        Returns list of (x, y) coordinates sorted by structural interest score.
+        """
+        layer = self._extract_layer0(grid)
+        if not layer:
+            return []
+
+        h = len(layer)
+        w = len(layer[0]) if h > 0 else 0
+        targets: List[Tuple[int, int, float]] = []  # (x, y, score)
+
+        for y in range(h):
+            for x in range(w):
+                cell_color = layer[y][x]
+                if cell_color == 0:  # Skip background
+                    continue
+
+                # Check 8 neighbors
+                neighbor_colors = []
+                for dy in range(-1, 2):
+                    for dx in range(-1, 2):
+                        if dx == 0 and dy == 0:
+                            continue
+                        nx, ny = x + dx, y + dy
+                        if 0 <= nx < w and 0 <= ny < h:
+                            neighbor_colors.append(layer[ny][nx])
+
+                if not neighbor_colors:
+                    continue
+
+                # Score 1: Isolated pixel (all neighbors different from cell)
+                same_neighbors = sum(1 for nc in neighbor_colors if nc == cell_color)
+                different_neighbors = sum(1 for nc in neighbor_colors if nc != cell_color and nc != 0)
+
+                if same_neighbors == 0 and different_neighbors >= 3:
+                    # Fully isolated from own color — likely interactive button/switch
+                    targets.append((x, y, 3.0 + different_neighbors * 0.5))
+                elif same_neighbors <= 1 and different_neighbors >= 4:
+                    # Nearly isolated — likely interactive
+                    targets.append((x, y, 2.0 + different_neighbors * 0.3))
+
+                # Score 2: Color boundary (cell at transition between two regions)
+                unique_neighbor_colors = set(nc for nc in neighbor_colors if nc != 0)
+                if len(unique_neighbor_colors) >= 3:
+                    # Cell at junction of 3+ colors — likely door/wall/gate
+                    targets.append((x, y, 1.5 + len(unique_neighbor_colors) * 0.3))
+
+        # Sort by score descending
+        targets.sort(key=lambda t: t[2], reverse=True)
+
+        # Deduplicate (same cell might be scored multiple ways)
+        seen: Set[Tuple[int, int]] = set()
+        result: List[Tuple[int, int]] = []
+        for x, y, score in targets:
+            if (x, y) not in seen:
+                seen.add((x, y))
+                result.append((x, y))
+
+        return result[:30]  # Limit to 30 structural targets
 
     def _get_predicted_change_actions(
         self, current_hash: str, available_set: Set[int], grid: Any
@@ -3162,11 +3382,14 @@ class MyAgent(Agent):
     def _navigate_to_frontier(
         self, current_hash: str, available_set: Set[int]
     ) -> Optional[GameAction]:
-        """v7.0: BFS navigate to nearest frontier state when current state is exhausted.
+        """v7.1: BFS navigate to nearest frontier state when current state is exhausted.
 
         When all known actions at current state are tried (or all lead to self-loops/
         backslide), BFS through the transition graph to find the nearest frontier state
         (one with untried actions), then return the first action on the path to it.
+
+        v7.1: Added frontier re-open mechanism — when frontier is empty, scan
+        state_graph for states with untried actions instead of giving up.
 
         Args:
             current_hash: Full-frame hash of current state.
@@ -3175,6 +3398,20 @@ class MyAgent(Agent):
         Returns:
             GameAction to execute (first step on path to frontier), or None.
         """
+        # v7.1: Frontier re-open — if frontier is empty, scan state_graph for states with untried actions
+        if not self._frontier_states and self._state_graph:
+            # Re-open: find states in state_graph where some available actions weren't tried
+            for state_hash, transitions in self._state_graph.items():
+                if state_hash == current_hash:
+                    continue  # Skip current state (we already exhausted it)
+                # Check if this state might have untried actions
+                # A state is frontier if it has fewer transitions than the typical number of available actions
+                n_known_actions = len(transitions)
+                # If a state has < 4 known transitions, it probably has untried actions
+                # (most games have 4-7 available actions)
+                if n_known_actions < 4 and self._state_visited.get(state_hash, 0) < 3:
+                    self._frontier_states.add(state_hash)
+
         if not self._frontier_states or not self._state_graph:
             return None
 
@@ -3239,13 +3476,20 @@ class MyAgent(Agent):
     def _informed_search(
         self, frames: list[FrameData], latest_frame: FrameData
     ) -> GameAction:
-        """v7.0: 5-tier priority search with full-frame hash + frontier BFS + trigger-aware pruning.
+        """v7.1: 5-tier priority search + budget-aware weighting + stall recovery.
 
         Tier 1: Untried actions at current state (never repeat what's known)
         Tier 2: Frontier BFS — navigate to states with untried actions
         Tier 3: Predicted-change — trigger-aware + effectiveness + rule hypothesis
+        Tier 3.5: Stall recovery — strategy reset when stuck ≥5 steps (v7.1)
         Tier 4: Novel exploration — ASD/delta/rarity targets
         Tier 5: Stochastic fallback — effectiveness-weighted random
+
+        v7.1 additions:
+        - Budget-aware tier weighting (P2-3): explore/balanced/lock phases adjust
+          Goal-EML lock threshold and Tier 4 stall threshold.
+        - Stall strategy reset (P2-5): when stuck ≥5, reset direction probes,
+          re-analyze ASD, try random direction/click to break pattern.
 
         Args:
             frames: All previous frames.
@@ -3260,6 +3504,10 @@ class MyAgent(Agent):
         # v7.0: Use full-frame hash for state graph (exact dedup)
         current_hash = self._state_hash if self._state_hash else self._current_grid_hash
 
+        # ── v7.1: Budget-aware tier weighting ──
+        self._update_rg_flow()
+        budget_phase = self._rg_flow_phase
+
         # ── Track current state visit count ──
         self._state_visited[current_hash] = self._state_visited.get(current_hash, 0) + 1
 
@@ -3271,8 +3519,10 @@ class MyAgent(Agent):
         # ── Detect game type ──
         self._update_detected_game_type(available_set)
 
-        # ── v6.4: Goal-EML lock (retain — critical for near-goal states) ──
-        if self._goal_eml_convergence >= 0.8 and self._progressive_actions:
+        # ── v6.4+v7.1: Goal-EML lock with budget-aware threshold ──
+        # v7.1: Lower threshold in lock phase (0.5 vs 0.8) — more aggressive lock when budget low
+        eml_threshold = 0.5 if budget_phase == "lock" else 0.8
+        if self._goal_eml_convergence >= eml_threshold and self._progressive_actions:
             best_prog = max(self._progressive_actions.items(), key=lambda x: x[1])
             prog_action_key = best_prog[0]
             action_name, click_data = self._parse_action_key(prog_action_key, available_set)
@@ -3282,8 +3532,8 @@ class MyAgent(Agent):
                 if click_data and action.is_complex():
                     action.set_data(click_data)
                 action.reasoning = (
-                    f"v7.0-goal-eml-lock: {prog_action_key} "
-                    f"(eml={self._goal_eml_convergence:.2f})"
+                    f"v7.1-goal-eml-lock: {prog_action_key} "
+                    f"(eml={self._goal_eml_convergence:.2f}, threshold={eml_threshold})"
                 )
                 self._action_history.append(action_name)
                 return action
@@ -3381,9 +3631,58 @@ class MyAgent(Agent):
             self._action_history.append("ACTION7")
             return action
 
+        # ── TIER 3.5: v7.1 Stall strategy reset ──
+        # When stuck for many steps, reset strategy and try fundamentally different approaches
+        if self._stall_counter >= 5:
+            # Reset direction probing (try new directions)
+            self._direction_probed = {}
+            self._direction_probe_count = 0
+
+            # Re-analyze ASD for fresh anomaly targets
+            if not self._asd_analyzed and latest_frame.frame:
+                self._asd_analyze_first_frame(latest_frame.frame)
+
+            # Strategy switch: try action type we haven't used much
+            keyboard_available = any(a in available_set for a in [1, 2, 3, 4])
+            if keyboard_available:
+                # Try a random direction (break fixed movement pattern)
+                random_dirs = ["ACTION1", "ACTION2", "ACTION3", "ACTION4"]
+                shuffled = random_dirs.copy()
+                random.shuffle(shuffled)
+                for action_name in shuffled:
+                    aid = ACTION_NAME_TO_ID.get(action_name, 0)
+                    if aid in available_set:
+                        self._last_action_key = action_name
+                        action = getattr(GameAction, action_name)
+                        action.reasoning = f"v7.1-stall-recovery: {action_name} (stall={self._stall_counter})"
+                        self._action_history.append(action_name)
+                        return action
+
+            if 6 in available_set:
+                # Try a random nonzero cell (break fixed click pattern)
+                layer = self._extract_layer0(grid) if grid else []
+                nonzero_cells = [
+                    (x, y) for y in range(len(layer))
+                    for x in range(len(layer[y]))
+                    if layer[y][x] != 0
+                ] if layer else []
+                if nonzero_cells:
+                    x, y = random.choice(nonzero_cells)
+                    x = max(0, min(63, x))
+                    y = max(0, min(63, y))
+                    action_key = f"ACTION6@{x},{y}"
+                    self._last_action_key = action_key
+                    action = GameAction.ACTION6
+                    action.set_data({"x": x, "y": y})
+                    action.reasoning = f"v7.1-stall-recovery-click: ({x},{y}) (stall={self._stall_counter})"
+                    self._action_history.append("ACTION6")
+                    return action
+
         # ── TIER 4: Novel exploration ──
         # ASD/delta/rarity targets, creative probe
-        if self._stall_counter >= 2:
+        # v7.1: Budget-aware stall threshold — higher threshold in lock phase
+        stall_threshold = 5 if budget_phase == "lock" else 2
+        if self._stall_counter >= stall_threshold:
             novel_action = self._novel_probe(grid, available_set)
             if novel_action is not None:
                 return novel_action
