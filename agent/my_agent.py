@@ -1,17 +1,28 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v6.6 (CCA + Rule Hypothesis Engine).
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v7.0 (5-Tier Priority + Full-Frame Hash + Frontier BFS + Trigger-Aware Pruning).
 
-Strategy (v6.6 — CCA + Rule Hypothesis Engine: proper object detection + game mechanic inference):
+Strategy (v7.0 — 5-Tier Priority System with Full-Frame Hash Dedup + Frontier BFS Navigation):
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
   2. CCA (Connected Component Analysis): Flood-fill BFS to identify contiguous color regions
      as real "objects" — replaces crude 8×8 region signature from v6.5.
      Implements Perceptual Abstraction Functor F from TOMAS-Hybrid theory.
+     Retained for heuristic computation and Rule Hypothesis Engine.
   3. Rule Hypothesis Engine: Observe grid changes in first 3-5 steps → infer game mechanics
      (push/toggle/propagation) → predict goal state. Layer I (Induction) approximation.
-  4. Object-Level State Abstraction + A* Heuristic (from v6.5, now CCA-enhanced)
-  5. Non-Local Action Impact Tracking: CCA-based object centroid displacement for J⊥ class detection
-  6. IDS Depth Limiting (from v6.5, retained)
+  4. v7.0 Full-Frame Hash Dedup: MD5(entire grid frame) for EXACT state deduplication.
+     Replaces coarse CCA-based _object_hash for state graph operations.
+     _object_hash retained for heuristic computation (CCA object info still valuable).
+  5. v7.0 5-Tier Priority Search:
+     Tier 1 (Untried): Actions never tried from current state — highest priority
+     Tier 2 (Frontier): BFS navigate to states with untried actions
+     Tier 3 (Predicted-change): Trigger-aware + Rule Hypothesis + effectiveness-weighted
+     Tier 4 (Novel): ASD/delta/rarity creative exploration
+     Tier 5 (Stochastic): Effectiveness-weighted random fallback
+  6. v7.0 Trigger-Aware Pruning: Skip self-loops, Noether-violating actions (≥5),
+     backslide actions (≥8), nonzero/anomaly click filtering
   7. IDO Value Score + Noether-Check + Goal-EML (from v6.4, retained)
-  8. Creative-Probe + Pattern repeat + Random fallback
+  8. Non-Local Action Impact Tracking (from v6.5, retained)
+  9. All click search methods (_priority_click_search, _effective_keyboard_search, etc.)
+     retained as internal helpers for Tier 3/4/5.
 
 This file is self-contained — no imports from local project files.
 All replay data and logic is included inline.
@@ -118,27 +129,30 @@ ACTION_NAME_TO_ID: Dict[str, int] = {
 
 
 class MyAgent(Agent):
-    """TOMAS ARC-AGI-3 Solver v5.0.5 — Replay Oracle + Dynamic Game-Type Detection + Goal-Oriented Navigation + Grid-Scan Universal + RG-Flow Adaptive + Cognitive Inflation.
+    """TOMAS ARC-AGI-3 Solver v7.0 — 5-Tier Priority + Full-Frame Hash + Frontier BFS + Trigger-Aware Pruning.
 
-    Strategy priority:
+    v7.0 Strategy priority:
       1. ARC3 Replay Oracle (precomputed human-optimal sequences — always try, then fallback)
       2. Dynamic game-type detection (infer click/keyboard/mixed from available_actions)
-      3. Goal-oriented navigation (detect player + goal, navigate toward goal instead of random nonzero)
-      4. Grid-scan universal (ANY game with ACTION6 → systematic grid click scan)
-      5. ASD Anomaly Detection ("Attention Before Loss" — minority colors first)
-      6. RG-Flow Adaptive (early→high entropy exploration, late→κ-Snap lock)
-      7. 3-Life Strategy (Life1=explore, Life2=refine, Life3=execute)
-      8. Cognitive Inflation stall recovery (ΔIC avalanche BFS instead of random swap)
-      9. ΔIC-Driven Re-scan (frame change pixels → second scan round priority)
-      10. Delta-aware exploration (detect changed cells, navigate toward targets)
-      11. Pattern repeat (reuse effective action sequences)
-      12. Random fallback (last resort)
+      3. v7.0 Full-Frame Hash Dedup (MD5 of entire grid for EXACT state deduplication)
+      4. v7.0 5-Tier Priority Search:
+         Tier 1 (Untried): Actions never tried from current state
+         Tier 2 (Frontier): BFS navigate to states with untried actions
+         Tier 3 (Predicted-change): Trigger-aware + effectiveness + rule hypothesis
+         Tier 4 (Novel): ASD/delta/rarity exploration
+         Tier 5 (Stochastic): Effectiveness-weighted random fallback
+      5. v7.0 Trigger-Aware Pruning (skip self-loops, Noether-violations, backslides)
+      6. CCA (Connected Component Analysis) + Rule Hypothesis Engine (retained for heuristics)
+      7. IDO Value Score + Noether-Check + Goal-EML (from v6.4, retained)
+      8. Goal-EML lock when convergence ≥ 0.8 (near-goal aggressive progressive repeat)
+      9. All legacy search methods retained as internal helpers
 
-    v5.0.5 changes vs v5.0.4:
-      - Player color detection: track which color value moves with keyboard actions
-      - Goal detection: identify likely target/exit/goal positions from grid analysis
-      - Goal-oriented navigation: Phase 5 navigates toward detected goals, not random nonzero cells
-      - This is the KEY fix for competition unseen games — previously navigating toward walls/decoration
+    v7.0 changes vs v6.6:
+      - Full-frame MD5 hash replaces coarse CCA-based hash for state graph (exact dedup)
+      - Frontier BFS navigation: navigate back to states with untried actions
+      - Unified 5-tier priority system replaces ad-hoc Phase 1-5 ordering
+      - Trigger-aware pruning: skip known-ineffective actions before trying them
+      - CCA _object_hash retained for heuristic computation (still valuable)
     """
 
     # Upper bound on actions per game.
@@ -310,12 +324,20 @@ class MyAgent(Agent):
         self._MAX_HYPOTHESIS_STEPS: int = 5  # max steps to observe before confirming hypothesis
         self._predicted_goal_objects: List[Dict[str, Any]] = []  # predicted goal state objects
 
+        # ── NEW v7.0: Full-frame hash for exact state dedup ──
+        # MD5 of entire grid frame — exact dedup replaces coarse CCA-based hash
+        # for state graph operations. CCA hash (_object_hash) retained for heuristics.
+        self._state_hash: str = ""  # MD5 of entire grid frame — exact dedup
+        self._prev_state_hash: str = ""  # previous full-frame hash
+        self._frontier_states: Set[str] = set()  # states with untried actions (frontier for BFS)
+        self._untried_actions_cache: Dict[str, List[str]] = {}  # state_hash → list of untried action keys
+
         # ── Initialize plan for level 0 ──
         self._compute_plan(0)
 
     @property
     def name(self) -> str:
-        return f"tomas.v6.6.{self.MAX_ACTIONS}"
+        return f"tomas.v7.0.{self.MAX_ACTIONS}"
 
     @property
     def _stall_threshold(self) -> int:
@@ -670,6 +692,12 @@ class MyAgent(Agent):
         self._hypothesis_confirmed = False
         self._hypothesis_step_count = 0
         self._predicted_goal_objects = []
+
+        # ── Reset v7.0 full-frame hash state ──
+        self._state_hash = ""
+        self._prev_state_hash = ""
+        self._frontier_states = set()
+        self._untried_actions_cache = {}
 
     def _should_visit(self, x: int, y: int) -> bool:
         """v5.0.4: Check if a coordinate should be visited (allow revisit up to _max_revisit).
@@ -1791,6 +1819,11 @@ class MyAgent(Agent):
         # Compute current grid hash for pattern detection
         self._current_grid_hash = self._grid_hash(current_grid)
 
+        # v7.0: Full-frame hash for state graph (exact dedup)
+        # _prev_state_hash saves the previous state hash before overwriting
+        self._prev_state_hash = self._state_hash
+        self._state_hash = self._compute_state_hash(current_grid)
+
         # ── v6.5: Compute object-level state ──
         self._object_state = self._extract_objects(current_grid)
         self._object_hash = self._compute_object_hash(self._object_state)
@@ -1832,13 +1865,15 @@ class MyAgent(Agent):
             self._stall_counter += 1
 
             # ── NEW v6.3: Record ineffective action in state graph ──
-            # v6.5: Use object_hash for state graph (reduced state space)
-            if self._prev_object_hash and self._last_action_key:
-                from_hash = self._prev_object_hash
+            # v7.0: Use full-frame _state_hash for state graph (exact dedup)
+            if self._prev_state_hash and self._last_action_key:
+                from_hash = self._prev_state_hash
                 # Record that this action leads BACK to same state (self-loop = ineffective)
                 if from_hash not in self._state_graph:
                     self._state_graph[from_hash] = {}
                 self._state_graph[from_hash][self._last_action_key] = from_hash  # self-loop
+                # v7.0: Invalidate untried actions cache for this state
+                self._untried_actions_cache.pop(from_hash, None)
                 # Update effectiveness rate: no change
                 eff, total = self._action_change_rate.get(self._last_action_key, (0, 0))
                 self._action_change_rate[self._last_action_key] = (eff, total + 1)
@@ -1911,16 +1946,26 @@ class MyAgent(Agent):
             self._effective_actions[last_action] = self._effective_actions.get(last_action, 0) + 1
 
             # ── NEW v6.3: Record state transition in graph ──
-            # v6.5: Use object_hash for state graph (reduced state space ~10^3-10^4 vs ~10^30)
-            if self._prev_object_hash and self._last_action_key:
-                from_hash = self._prev_object_hash
-                to_hash = self._object_hash
+            # v7.0: Use full-frame _state_hash for state graph (exact dedup)
+            if self._prev_state_hash and self._last_action_key:
+                from_hash = self._prev_state_hash
+                to_hash = self._state_hash
                 action_key = self._last_action_key
 
                 # Record transition: from_hash → action_key → to_hash
                 if from_hash not in self._state_graph:
                     self._state_graph[from_hash] = {}
                 self._state_graph[from_hash][action_key] = to_hash
+
+                # v7.0: Invalidate untried actions cache for from_hash (action now tried)
+                self._untried_actions_cache.pop(from_hash, None)
+
+                # v7.0: Update frontier states
+                # If to_hash is new (not previously in state_graph as a source), it's a frontier
+                if to_hash not in self._state_graph:
+                    self._frontier_states.add(to_hash)
+                # If from_hash now has this action tried, check if it's still a frontier
+                # (a frontier state has untried actions — we check lazily in _navigate_to_frontier)
 
                 # Update action effectiveness rate
                 eff, total = self._action_change_rate.get(action_key, (0, 0))
@@ -2000,6 +2045,8 @@ class MyAgent(Agent):
         self._last_grid_hash = self._current_grid_hash
         # v6.5: Save previous object hash for state graph tracking
         self._prev_object_hash = self._object_hash
+        # v7.0: _prev_state_hash is already saved at the start of this method
+        # (before _state_hash is recomputed) — no additional save needed here.
 
     # ── ASD Anomaly Detection (Attention Before Loss) ────────────────────
 
@@ -2618,6 +2665,31 @@ class MyAgent(Agent):
         hash_input = "|".join(hash_parts)
         return hashlib.md5(hash_input.encode()).hexdigest()[:16]
 
+    def _compute_state_hash(self, grid: Any) -> str:
+        """v7.0: Full-frame hash using MD5 for EXACT state deduplication.
+
+        Replaces coarse CCA-based hash for state graph operations.
+        CCA hash (_object_hash) is retained for heuristic computation.
+
+        Two different grid states will NEVER produce the same hash (unlike
+        _object_hash which quantizes player position to 4px regions and
+        only tracks top-10 colors — many different grids map to same hash).
+
+        Args:
+            grid: The frame data (3D or 2D).
+
+        Returns:
+            MD5 hex digest of the entire grid frame, or "" if invalid.
+        """
+        layer = self._extract_layer0(grid)
+        if not layer:
+            return ""
+        try:
+            data = bytes(v for row in layer for v in row)
+            return hashlib.md5(data).hexdigest()
+        except (TypeError, ValueError):
+            return ""
+
     def _compute_heuristic_distance(self, objects: Dict[str, Any]) -> float:
         """v6.6 A* heuristic: CCA-based goal-distance + Rule Hypothesis guided.
 
@@ -2868,25 +2940,312 @@ class MyAgent(Agent):
 
         return observation
 
-    # ── v6.3: Informed Search ────────────────────────────────────────────
+    # ── v7.0: 5-Tier Priority Search Helpers ────────────────────────────
+
+    def _get_untried_actions(
+        self, current_hash: str, available_set: Set[int], grid: Any
+    ) -> List[str]:
+        """v7.0: Get actions not yet tried from current state.
+
+        Scans available actions, filters out self-loops and heavily-penalized actions
+        (trigger-aware pruning), returns remaining untried action keys sorted by priority.
+
+        Args:
+            current_hash: Full-frame hash of current state.
+            available_set: Set of available action IDs.
+            grid: Current frame grid for click candidate generation.
+
+        Returns:
+            List of untried action keys, sorted by priority (highest first).
+        """
+        # Check cache first (avoid recomputing if called multiple times per turn)
+        if current_hash in self._untried_actions_cache:
+            cached = self._untried_actions_cache[current_hash]
+            # Filter cached actions by current availability AND tried status
+            known_transitions = self._state_graph.get(current_hash, {})
+            tried_actions = set(known_transitions.keys())
+            filtered = []
+            for ak in cached:
+                if ak in tried_actions:
+                    continue  # Already tried since cache was built
+                if "@" in ak:
+                    if 6 in available_set:
+                        filtered.append(ak)
+                else:
+                    aid = ACTION_NAME_TO_ID.get(ak, 0)
+                    if aid in available_set:
+                        filtered.append(ak)
+            if filtered:
+                return filtered
+
+        # Known transitions from current state
+        known_transitions = self._state_graph.get(current_hash, {})
+        tried_actions = set(known_transitions.keys())
+
+        # Build candidate action keys from available actions
+        candidates: List[str] = []
+
+        # Keyboard actions (ACTION1-5, ACTION7)
+        for aid in sorted(available_set):
+            if aid == 6:
+                continue  # ACTION6 handled separately
+            action_name = ARC3_ACTION_ID_MAP.get(aid)
+            if action_name:
+                action_key = action_name
+                if action_key not in tried_actions:
+                    # Trigger-aware: skip heavily Noether-violating or backslide actions
+                    noether_violations = self._noether_violations.get(action_key, 0)
+                    backslide_count = self._backslide_actions.get(action_key, 0)
+                    if noether_violations < 5 and backslide_count < 8:
+                        candidates.append(action_key)
+
+        # Click actions (ACTION6) — only if click-capable
+        if 6 in available_set:
+            click_candidates = self._generate_click_candidates(grid, tried_actions)
+            candidates.extend(click_candidates)
+
+        # Sort by priority: rule hypothesis > effectiveness > progressive
+        def untried_priority(ak: str) -> float:
+            # Rule hypothesis boost
+            hypothesis_boost = 0.0
+            if self._hypothesis_confirmed:
+                rule_type = self._rule_hypothesis.get('type', '')
+                if rule_type == "push_mechanics" and ak in DIRECTION_ACTIONS:
+                    hypothesis_boost = 2.0
+                elif rule_type == "click_toggle" and "ACTION6" in ak:
+                    hypothesis_boost = 2.0
+                elif rule_type == "remote_propagation" and "ACTION5" == ak:
+                    hypothesis_boost = 1.5
+
+            # Effectiveness boost (from other states — action was effective elsewhere)
+            eff, total = self._action_change_rate.get(ak, (0, 0))
+            effectiveness = eff / max(total, 1) if total > 0 else 0.5  # untested = moderate
+
+            # Progressive boost
+            progressive = self._progressive_actions.get(ak, 0)
+
+            # Backslide penalty (from other states)
+            backslide = self._backslide_actions.get(ak, 0)
+            backslide_pen = min(0.5, backslide * 0.1)
+
+            # Noether penalty
+            noether = self._noether_violations.get(ak, 0)
+            noether_pen = min(0.3, noether * 0.1)
+
+            return hypothesis_boost + effectiveness + progressive * 0.3 - backslide_pen - noether_pen
+
+        candidates.sort(key=untried_priority, reverse=True)
+        result = candidates[:20]  # Limit to 20 candidates per turn
+
+        # Cache the result
+        self._untried_actions_cache[current_hash] = result
+        return result
+
+    def _generate_click_candidates(
+        self, grid: Any, tried_actions: Set[str]
+    ) -> List[str]:
+        """v7.0: Generate click action keys (ACTION6@x,y) from priority sources.
+
+        Priority: ASD anomaly → delta pool → goal proximity → rarity scan.
+
+        Args:
+            grid: Current frame grid.
+            tried_actions: Set of action keys already tried from current state.
+
+        Returns:
+            List of click action keys (ACTION6@x,y) not yet tried.
+        """
+        candidates: List[str] = []
+
+        # Priority 1: ASD anomaly targets (minority pixels)
+        if self._asd_anomaly_targets:
+            for x, y in self._asd_anomaly_targets[:15]:
+                ak = f"ACTION6@{x},{y}"
+                if ak not in tried_actions and f"{x},{y}" not in self._visited_coords:
+                    candidates.append(ak)
+
+        # Priority 2: Delta click pool (recently changed cells)
+        for x, y in self._delta_click_pool[:10]:
+            ak = f"ACTION6@{x},{y}"
+            if ak not in tried_actions and f"{x},{y}" not in self._visited_coords:
+                candidates.append(ak)
+
+        # Priority 3: Goal proximity targets
+        if self._goal_positions:
+            for gx, gy in self._goal_positions[:5]:
+                # Try positions near goal (3px radius)
+                for dx in range(-3, 4):
+                    for dy in range(-3, 4):
+                        x = max(0, min(63, gx + dx))
+                        y = max(0, min(63, gy + dy))
+                        ak = f"ACTION6@{x},{y}"
+                        if ak not in tried_actions and f"{x},{y}" not in self._visited_coords:
+                            candidates.append(ak)
+
+        # Priority 4: Grid scan queue (rarity-based)
+        if not self._grid_scan_initialized:
+            self._init_grid_click_scan(grid)
+        for x, y in self._grid_scan_queue[:20]:
+            ak = f"ACTION6@{x},{y}"
+            if ak not in tried_actions and f"{x},{y}" not in self._visited_coords:
+                candidates.append(ak)
+
+        return candidates[:50]  # Limit click candidates
+
+    def _get_predicted_change_actions(
+        self, current_hash: str, available_set: Set[int], grid: Any
+    ) -> List[str]:
+        """v7.0: Get actions predicted to change the frame (trigger-aware).
+
+        Uses: known effective transitions + rule hypothesis + effectiveness history.
+        Filters out self-loops, backslide, and Noether-violating actions.
+
+        Args:
+            current_hash: Full-frame hash of current state.
+            available_set: Set of available action IDs.
+            grid: Current frame grid (unused but kept for API consistency).
+
+        Returns:
+            List of action keys predicted to cause frame change, sorted by priority.
+        """
+        candidates: List[str] = []
+
+        # From state graph: transitions that led to DIFFERENT states (not self-loops)
+        transitions = self._state_graph.get(current_hash, {})
+        novel_transitions = {
+            ak: rh for ak, rh in transitions.items()
+            if rh != current_hash  # not self-loop
+            and ak not in self._backslide_actions  # not consistently backsliding
+            and self._noether_violations.get(ak, 0) < 3  # not heavily Noether-violating
+        }
+
+        # Sort by frontier priority (visit count + heuristic + progressive + nonlocal)
+        MAX_FRONTIER_DEPTH = 50
+
+        def predicted_priority(item: Tuple[str, str]) -> float:
+            ak, rh = item
+            dest_depth = self._frontier_depth.get(rh, 999)
+            if dest_depth > MAX_FRONTIER_DEPTH:
+                return -999.0
+            heuristic_bonus = 0.1 if dest_depth == 0 else 0.05 / (1.0 + dest_depth)
+            visit_score = 1.0 / (1.0 + self._state_visited.get(rh, 0))
+            progressive_count = self._progressive_actions.get(ak, 0)
+            progressive_boost = min(2.0, progressive_count * 0.5)
+            nonlocal_boost = 0.0
+            if self._stall_counter >= 3:
+                nl_impact = self._nonlocal_impact.get(ak, 0.0)
+                nonlocal_boost = min(1.0, nl_impact * 5.0)
+            noether_penalty = self._noether_violations.get(ak, 0) * 0.3
+            backslide_penalty = self._backslide_actions.get(ak, 0) * 0.1
+            return (visit_score + heuristic_bonus + progressive_boost
+                    + nonlocal_boost - noether_penalty - backslide_penalty)
+
+        sorted_trans = sorted(novel_transitions.items(), key=predicted_priority, reverse=True)
+        for ak, rh in sorted_trans:
+            candidates.append(ak)
+
+        # Also add effectiveness-weighted keyboard actions not in graph
+        for aid in sorted(available_set):
+            if aid == 6:
+                continue
+            action_name = ARC3_ACTION_ID_MAP.get(aid)
+            if action_name and action_name not in transitions:
+                eff, total = self._action_change_rate.get(action_name, (0, 0))
+                if total > 0 and eff / total > 0.3:  # moderately effective elsewhere
+                    # Trigger-aware: skip heavy Noether/backslide
+                    if (self._noether_violations.get(action_name, 0) < 3
+                            and self._backslide_actions.get(action_name, 0) < 5):
+                        candidates.append(action_name)
+
+        return candidates[:15]
+
+    def _navigate_to_frontier(
+        self, current_hash: str, available_set: Set[int]
+    ) -> Optional[GameAction]:
+        """v7.0: BFS navigate to nearest frontier state when current state is exhausted.
+
+        When all known actions at current state are tried (or all lead to self-loops/
+        backslide), BFS through the transition graph to find the nearest frontier state
+        (one with untried actions), then return the first action on the path to it.
+
+        Args:
+            current_hash: Full-frame hash of current state.
+            available_set: Set of available action IDs.
+
+        Returns:
+            GameAction to execute (first step on path to frontier), or None.
+        """
+        if not self._frontier_states or not self._state_graph:
+            return None
+
+        # Remove current hash from frontier (we're here, it's no longer frontier)
+        self._frontier_states.discard(current_hash)
+
+        # BFS from current_hash through _state_graph to find nearest frontier
+        # Path: current_hash → action1 → hash1 → action2 → hash2 → ... → frontier_hash
+        from collections import deque
+        queue: deque = deque([(current_hash, [])])  # (hash, [(action_key, hash) path])
+        visited: Set[str] = {current_hash}
+
+        while queue:
+            hash_key, path = queue.popleft()
+
+            # Check if this state is a frontier (has untried actions)
+            is_frontier = False
+            if hash_key in self._frontier_states:
+                is_frontier = True
+            else:
+                # Check if this state actually has untried actions
+                transitions = self._state_graph.get(hash_key, {})
+                if len(transitions) < len(available_set) + 10:  # rough check
+                    # More detailed: check if any available action is untried
+                    for aid in available_set:
+                        if aid == 6:
+                            continue  # Click actions are too numerous to check here
+                        action_name = ARC3_ACTION_ID_MAP.get(aid)
+                        if action_name and action_name not in transitions:
+                            is_frontier = True
+                            break
+
+            if is_frontier:
+                # Found frontier! Execute first action on path to reach it
+                if path:
+                    first_action_key, _ = path[0]
+                    action_name, click_data = self._parse_action_key(first_action_key, available_set)
+                    if action_name:
+                        self._last_action_key = first_action_key
+                        action = getattr(GameAction, action_name)
+                        if click_data and action.is_complex():
+                            action.set_data(click_data)
+                        action.reasoning = (
+                            f"v7.0-frontier-BFS: {first_action_key} → frontier "
+                            f"{hash_key[:8]} (path_len={len(path)})"
+                        )
+                        self._action_history.append(action_name)
+                        return action
+                # We're already at a frontier state — let untried_actions handle this
+                return None
+
+            transitions = self._state_graph.get(hash_key, {})
+            for ak, rh in transitions.items():
+                if rh not in visited and rh != hash_key:  # skip self-loops and visited
+                    visited.add(rh)
+                    queue.append((rh, path + [(ak, rh)]))
+
+        return None  # No frontier found
+
+    # ── v6.3: Informed Search (v7.0: rewritten as 5-tier priority) ────────
 
     def _informed_search(
         self, frames: list[FrameData], latest_frame: FrameData
     ) -> GameAction:
-        """Informed search using state graph and action effectiveness tracking.
+        """v7.0: 5-tier priority search with full-frame hash + frontier BFS + trigger-aware pruning.
 
-        v6.3 CORE mechanism — replaces the complex multi-phase _smart_exploration.
-        Inspired by Stochastic Goose (#1, score 1.21) and FORGE (score 0.43).
-
-        Key principle: Track which actions cause state changes → prefer effective
-        actions → avoid ineffective ones → BFS to frontier states when stuck.
-
-        Phases:
-          1. Pattern repeat: Known state → known effective action
-          2. Frontier revisit: Re-execute actions that led to NEW states
-          3. Effective action priority: Prefer actions with high change rate
-          4. Novel exploration: Try untested actions/clicks
-          5. Random fallback
+        Tier 1: Untried actions at current state (never repeat what's known)
+        Tier 2: Frontier BFS — navigate to states with untried actions
+        Tier 3: Predicted-change — trigger-aware + effectiveness + rule hypothesis
+        Tier 4: Novel exploration — ASD/delta/rarity targets
+        Tier 5: Stochastic fallback — effectiveness-weighted random
 
         Args:
             frames: All previous frames.
@@ -2898,8 +3257,8 @@ class MyAgent(Agent):
         grid = latest_frame.frame if latest_frame.frame else []
         available = latest_frame.available_actions if latest_frame.available_actions else []
         available_set = set(available)
-        # v6.5: Use object_hash for state graph operations (reduced state space)
-        current_hash = self._object_hash if self._object_hash else self._current_grid_hash
+        # v7.0: Use full-frame hash for state graph (exact dedup)
+        current_hash = self._state_hash if self._state_hash else self._current_grid_hash
 
         # ── Track current state visit count ──
         self._state_visited[current_hash] = self._state_visited.get(current_hash, 0) + 1
@@ -2907,18 +3266,13 @@ class MyAgent(Agent):
         # ── Record level start hash if not set ──
         if not self._level_start_hash and current_hash:
             self._level_start_hash = current_hash
-            self._frontier_depth[current_hash] = 0  # v6.5: start state depth=0
+            self._frontier_depth[current_hash] = 0
 
         # ── Detect game type ──
         self._update_detected_game_type(available_set)
 
-        # ── Phase 1: Pattern repeat (v6.4: + Goal-EML convergence boost) ──
-        # If we've seen this exact state and know what action led to a NEW state,
-        # try it again. This is the most reliable path to progress.
-        # v6.4: If Goal-EML convergence ≥ 0.8, aggressively repeat progressive actions
-        # — we're close to the goal, don't waste steps on exploration.
+        # ── v6.4: Goal-EML lock (retain — critical for near-goal states) ──
         if self._goal_eml_convergence >= 0.8 and self._progressive_actions:
-            # Close to goal → repeat the most progressive action
             best_prog = max(self._progressive_actions.items(), key=lambda x: x[1])
             prog_action_key = best_prog[0]
             action_name, click_data = self._parse_action_key(prog_action_key, available_set)
@@ -2927,88 +3281,56 @@ class MyAgent(Agent):
                 action = getattr(GameAction, action_name)
                 if click_data and action.is_complex():
                     action.set_data(click_data)
-                action.reasoning = f"informed-goal-eml-lock: {prog_action_key} (eml={self._goal_eml_convergence:.2f})"
+                action.reasoning = (
+                    f"v7.0-goal-eml-lock: {prog_action_key} "
+                    f"(eml={self._goal_eml_convergence:.2f})"
+                )
                 self._action_history.append(action_name)
                 return action
 
-        if current_hash in self._pattern_memory:
-            seq = self._pattern_memory[current_hash]
-            if seq:
-                action_name = seq[0]
-                if ACTION_NAME_TO_ID.get(action_name, 0) in available_set:
-                    self._last_action_key = action_name
-                    action = getattr(GameAction, action_name)
-                    action.reasoning = f"informed-pattern: {action_name} for hash {current_hash[:8]}"
-                    self._action_history.append(action_name)
-                    return action
+        # ── TIER 1: Untried actions at current state ──
+        # "Never knowingly repeat a transition" — try actions we haven't tried from this state yet
+        untried = self._get_untried_actions(current_hash, available_set, grid)
+        if untried:
+            action_key = untried[0]  # Pick first untried (highest priority)
+            action_name, click_data = self._parse_action_key(action_key, available_set)
+            if action_name:
+                self._last_action_key = action_key
+                action = getattr(GameAction, action_name)
+                if click_data and action.is_complex():
+                    action.set_data(click_data)
+                action.reasoning = f"v7.0-tier1-untried: {action_key} at {current_hash[:8]}"
+                self._action_history.append(action_name)
+                return action
 
-        # ── Phase 1b: State graph frontier revisit (v6.4: deprioritize backslide/Noether-violations) ──
-        # If from this state we know transitions to OTHER states, re-execute
-        # the ones that led to less-visited states (frontier exploration).
-        # v6.4: Filter out backslide and Noether-violating actions — they
-        # lead to states that are LESS desirable (higher IC, no level progress).
-        if current_hash in self._state_graph:
-            transitions = self._state_graph[current_hash]
-            # Filter: only transitions that lead to DIFFERENT states (not self-loops)
-            novel_transitions = {
-                ak: rh for ak, rh in transitions.items()
-                if rh != current_hash  # skip self-loops (ineffective actions)
-                and ak not in self._backslide_actions  # v6.4: skip backslide actions
-                and self._noether_violations.get(ak, 0) < 3  # v6.4: allow up to 3 Noether violations (maybe luck)
-            }
-            if novel_transitions:
-                # v6.5: A* heuristic frontier — combine visit count + heuristic + ido + nonlocal
-                # Replaces pure BFS "least visited first" with goal-directed search.
-                MAX_FRONTIER_DEPTH = 50  # IDS: cap frontier depth to prevent spiraling
+        # ── TIER 2: Frontier BFS navigation ──
+        # Current state exhausted → navigate to frontier state with untried actions
+        frontier_action = self._navigate_to_frontier(current_hash, available_set)
+        if frontier_action is not None:
+            return frontier_action
 
-                def frontier_priority(item: Tuple[str, str]) -> float:
-                    action_key, result_hash = item
-                    # ── v6.5: IDS depth check ──
-                    dest_depth = self._frontier_depth.get(result_hash, 999)
-                    if dest_depth > MAX_FRONTIER_DEPTH:
-                        return -999.0  # Skip beyond depth cap
-                    heuristic_bonus = 0.1 if dest_depth == 0 else 0.05 / (1.0 + dest_depth)
-                    # Base: less visited = more frontier
-                    visit_score = 1.0 / (1.0 + self._state_visited.get(result_hash, 0))
-                    # v6.4: Boost progressive actions
-                    progressive_count = self._progressive_actions.get(action_key, 0)
-                    progressive_boost = min(2.0, progressive_count * 0.5)
-                    # v6.5: J⊥-class (non-local impact) boost when η-plateau
-                    nonlocal_boost = 0.0
-                    if self._stall_counter >= 3:
-                        nl_impact = self._nonlocal_impact.get(action_key, 0.0)
-                        nonlocal_boost = min(1.0, nl_impact * 5.0)
-                    # v6.4: Penalize Noether violations
-                    noether_penalty = self._noether_violations.get(action_key, 0) * 0.3
-                    return visit_score + heuristic_bonus + progressive_boost + nonlocal_boost - noether_penalty
+        # ── TIER 3: Predicted-change (trigger-aware + effectiveness + rule hypothesis) ──
+        # Actions predicted to change the frame, weighted by effectiveness + rule hypothesis
+        predicted = self._get_predicted_change_actions(current_hash, available_set, grid)
+        if predicted:
+            action_key = predicted[0]
+            action_name, click_data = self._parse_action_key(action_key, available_set)
+            if action_name:
+                self._last_action_key = action_key
+                action = getattr(GameAction, action_name)
+                if click_data and action.is_complex():
+                    action.set_data(click_data)
+                action.reasoning = f"v7.0-tier3-predicted: {action_key}"
+                self._action_history.append(action_name)
+                return action
 
-                sorted_trans = sorted(
-                    novel_transitions.items(),
-                    key=frontier_priority,
-                    reverse=True  # highest priority first
-                )
-                for action_key, result_hash in sorted_trans:
-                    # Parse action_key to get action_name and possibly click coords
-                    action_name, click_data = self._parse_action_key(action_key, available_set)
-                    if action_name:
-                        self._last_action_key = action_key
-                        action = getattr(GameAction, action_name)
-                        if click_data and action.is_complex():
-                            action.set_data(click_data)
-                        ido_info = f"prog={self._progressive_actions.get(action_key, 0)}"
-                        action.reasoning = f"informed-frontier: {action_key} → {result_hash[:8]} (visits={self._state_visited.get(result_hash, 0)}, {ido_info})"
-                        self._action_history.append(action_name)
-                        return action
-
-        # ── Phase 2: Click games — priority click targeting (v6.4: Goal-EML + Creative-Probe) ──
-        # For games with ACTION6, use rarity + delta + expansion priority queue.
-        # v6.4: When Goal-EML convergence is high, target goal-proximity clicks.
-        # When η-plateau detected, target ASD anomaly pixels (Creative-Probe).
+        # ── TIER 3b: Legacy click search (retained as Tier 3 fallback for click games) ──
+        # If Tier 3 predicted-change found nothing but we have click capability,
+        # use the proven _priority_click_search method (delta + rarity + expansion).
         if 6 in available_set:
             # v6.4: Goal-EML guided click — click near goal positions when convergence < 0.5
             if self._goal_positions and self._goal_eml_convergence < 0.5 and self._asd_anomaly_targets:
                 for x, y in self._asd_anomaly_targets:
-                    # Find anomaly targets near goal positions
                     min_dist = min(abs(x - gx) + abs(y - gy) for gx, gy in self._goal_positions)
                     if min_dist <= 5 and f"{x},{y}" not in self._visited_coords:
                         self._visited_coords.add(f"{x},{y}")
@@ -3018,59 +3340,55 @@ class MyAgent(Agent):
                         self._last_action_key = action_key
                         action = GameAction.ACTION6
                         action.set_data({"x": x, "y": y})
-                        action.reasoning = {"why": "v6.4-goal-eml-click", "target": (x, y), "eml": self._goal_eml_convergence}
+                        action.reasoning = {"why": "v7.0-tier3b-goal-eml-click", "target": (x, y), "eml": self._goal_eml_convergence}
                         self._action_history.append("ACTION6")
                         return action
 
             click_action = self._priority_click_search(grid, available_set)
             if click_action is not None:
+                # Update _last_action_key from priority_click_search result
+                # (priority_click_search already sets _last_action_key internally)
                 return click_action
 
-        # ── Phase 3: Effective keyboard action priority (v6.4: ido-weighted) ──
-        # For keyboard games, prefer directions that previously caused changes.
-        # v6.4: Use ido_value_score weighted effectiveness — progressive > neutral > backslide.
-        # Also penalize Noether-violating directions.
+        # ── TIER 3c: Legacy keyboard search (retained for keyboard games) ──
         keyboard_available = any(a in available_set for a in [1, 2, 3, 4])
         if keyboard_available:
             effective_action = self._effective_keyboard_search(available_set)
             if effective_action is not None:
                 return effective_action
 
-        # ── Phase 3b: Try ACTION5 (SPECIAL) if available ──
+        # ── TIER 3d: Try ACTION5 (SPECIAL) if available ──
         if 5 in available_set:
-            # Probe SPECIAL if not tested, or use it if effective
             if not self._special_probed:
                 self._special_probed = True
                 self._last_action_key = "ACTION5"
                 action = GameAction.ACTION5
-                action.reasoning = "informed-special-probe"
+                action.reasoning = "v7.0-tier3d-special-probe"
                 self._action_history.append("ACTION5")
                 return action
             elif self._effective_actions.get("ACTION5", 0) > 0:
                 self._last_action_key = "ACTION5"
                 action = GameAction.ACTION5
-                action.reasoning = "informed-special-effective"
+                action.reasoning = "v7.0-tier3d-special-effective"
                 self._action_history.append("ACTION5")
                 return action
 
-        # ── Phase 3c: Try ACTION7 if available ──
+        # ── TIER 3e: Try ACTION7 if available ──
         if 7 in available_set:
             self._last_action_key = "ACTION7"
             action = GameAction.ACTION7
-            action.reasoning = "informed-action7-probe"
+            action.reasoning = "v7.0-tier3e-action7-probe"
             self._action_history.append("ACTION7")
             return action
 
-        # ── Phase 4: Novel exploration ──
-        # If we're stuck at the same state, try actions we haven tried from here.
-        # For clicks: try random positions on the grid.
-        # For keyboard: try directions we haven't probed.
+        # ── TIER 4: Novel exploration ──
+        # ASD/delta/rarity targets, creative probe
         if self._stall_counter >= 2:
             novel_action = self._novel_probe(grid, available_set)
             if novel_action is not None:
                 return novel_action
 
-        # ── Phase 5: Random fallback ──
+        # ── TIER 5: Stochastic fallback ──
         return self._random_fallback(latest_frame, available_set)
 
     def _parse_action_key(
