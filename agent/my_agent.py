@@ -188,6 +188,10 @@ class MyAgent(Agent):
 
     def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
+        # CRITICAL: Override base class MAX_ACTIONS if it was set to a low value
+        # (e.g., 300). The base class may set self.MAX_ACTIONS = 300, which
+        # causes early termination and 0 score. We must re-set it here.
+        self.MAX_ACTIONS = int(os.environ.get("ARC3_MAX_ACTIONS", "1000000"))
         seed = int(time.time() * 1_000_000) + hash(self.game_id) % 1_000_000
         random.seed(seed)
 
@@ -836,6 +840,8 @@ class MyAgent(Agent):
         self._prev_state_hash = ""
         self._frontier_states = set()
         self._untried_actions_cache = {}
+        # v7.1: Reset per-game time limit when starting a new game
+        self._start_time = time.time()
 
     def _should_visit(self, x: int, y: int) -> bool:
         """v5.0.4: Check if a coordinate should be visited (allow revisit up to _max_revisit).
@@ -867,7 +873,12 @@ class MyAgent(Agent):
         Returns:
             2D list of int (rows × cols), or None if invalid.
         """
-        if not grid or not isinstance(grid, list):
+        if not grid:
+            return None
+        # Handle numpy arrays — convert to Python lists first
+        if hasattr(grid, 'tolist'):
+            grid = grid.tolist()
+        if not isinstance(grid, list):
             return None
         try:
             if len(grid) > 0 and isinstance(grid[0], list):
