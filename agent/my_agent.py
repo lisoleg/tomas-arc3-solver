@@ -1,6 +1,6 @@
-"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v7.1 (Phase 2: Strategy Preservation + Structural Clicks + Budget-Aware + Frontier Re-open + Stall Reset).
+"""TOMAS ARC-AGI-3 Solver Agent — ARC Prize 2026 Kaggle Submission v7.2 (IDO Complete Spec: Goal-EML Coset Invariants + κ-Snap + Weak ChangeNet).
 
-Strategy (v7.1 — Phase 2 enhancements over v7.0 5-Tier Priority System):
+Strategy (v7.2 — IDO complete spec over v7.1 Phase 2):
   1. ARC3 Replay Oracle: Pre-computed human-optimal action sequences from arc3.games
   2. CCA (Connected Component Analysis): Flood-fill BFS to identify contiguous color regions
      as real "objects" — replaces crude 8×8 region signature from v6.5.
@@ -325,6 +325,15 @@ class MyAgent(Agent):
         self._goal_color_expansion: int = 0  # count of goal-color pixels in current state
         self._eta_plateau_counter: int = 0  # consecutive steps with η-plateau (ido≈0)
 
+        # ── NEW v7.2: Goal-EML Coset Invariants (IDO complete spec) ──
+        self._goal_eml_type: str = "unknown"  # inferred goal type: push/toggle/propagation/coverage/destruction/unknown
+        self._goal_eml_invariants: List[str] = []  # coset invariant names (e.g., boxes_on_goal, optics_coverage)
+        self._goal_eml_ic_gap_monotone: bool = True  # whether IC gap is monotonically decreasing toward goal
+        self._goal_eml_delta_K: float = 0.05  # κ-Snap acceptance threshold
+        self._kappa_snap_eta: float = 1.0  # current κ-Snap coset distance η (continuous, not boolean)
+        self._kappa_snap_confidence: float = 0.0  # confidence = 1 - η/δ_K
+        self._predicted_change_scores: Dict[str, float] = {}  # action_key → predicted_change score from ChangeNet
+
         # ── NEW v6.5: Object-Level State Abstraction + A* Heuristic ──
         # Inspired by Yuanbao BFS efficiency analysis and Ferlaino J⊥≫Jz analogy.
         # Instead of hashing entire 64×64 grid (~10^30 states), extract key objects
@@ -367,7 +376,7 @@ class MyAgent(Agent):
 
     @property
     def name(self) -> str:
-        return f"tomas.v7.1.{self.MAX_ACTIONS}"
+        return f"tomas.v7.2.{self.MAX_ACTIONS}"
 
     @property
     def _stall_threshold(self) -> int:
@@ -729,6 +738,14 @@ class MyAgent(Agent):
         self._prev_state_hash = ""
         self._frontier_states = set()
         self._untried_actions_cache = {}
+        # ── v7.2: Goal-EML + κ-Snap + ChangeNet reset ──
+        self._goal_eml_type = "unknown"
+        self._goal_eml_invariants = []
+        self._goal_eml_ic_gap_monotone = True
+        self._goal_eml_delta_K = 0.05
+        self._kappa_snap_eta = 1.0
+        self._kappa_snap_confidence = 0.0
+        self._predicted_change_scores = {}
 
         # ── PRESERVED (game mechanics — NOT reset) ──
         # self._action_change_rate  — which actions tend to change the grid
@@ -840,6 +857,14 @@ class MyAgent(Agent):
         self._prev_state_hash = ""
         self._frontier_states = set()
         self._untried_actions_cache = {}
+        # ── v7.2: Goal-EML + κ-Snap + ChangeNet reset ──
+        self._goal_eml_type = "unknown"
+        self._goal_eml_invariants = []
+        self._goal_eml_ic_gap_monotone = True
+        self._goal_eml_delta_K = 0.05
+        self._kappa_snap_eta = 1.0
+        self._kappa_snap_confidence = 0.0
+        self._predicted_change_scores = {}
         # v7.1: Reset per-game time limit when starting a new game
         self._start_time = time.time()
 
@@ -2078,6 +2103,15 @@ class MyAgent(Agent):
         if self._asd_analyzed:
             self._compute_goal_eml(current_grid)
 
+            # ── v7.2: Infer Goal-EML type from frame delta (weak inference) ──
+            # Only try inference if we have a previous frame to compare
+            if len(self._grid_history) >= 2 and self._goal_eml_type == "unknown":
+                prev_grid = self._grid_history[-2]
+                self._infer_goal_eml(prev_grid, current_grid)
+
+            # ── v7.2: κ-Snap coset distance computation ──
+            self._kappa_snap(current_grid)
+
         # Update levels completed tracking
         if latest_frame.levels_completed > self._prev_levels_completed:
             self._stall_counter = 0
@@ -2480,12 +2514,15 @@ class MyAgent(Agent):
         return ic
 
     def _compute_ido_value_score(self, prev_grid: Any, curr_grid: Any, levels_progressed: bool) -> float:
-        """Compute IDO Value Score — directional progress metric.
+        """Compute IDO Value Score — directional progress metric (v7.2: with κ-Snap coset distance).
 
-        ido_value_score = v_after - v_before
-        where v = (ic_goal - ic_current) / ic_goal
-        Positive ido = grid moved toward simpler/solved state (progress)
-        Negative ido = grid became more complex without level advance (backslide)
+        v7.2: ido = -(η_after - η_before)
+        η decreasing → positive ido (progress)
+        η increasing → negative ido (backslide)
+
+        Original IC gap calculation retained as fallback when goal_eml_type is 'unknown'.
+        κ-Snap η computed inline (not via _kappa_snap which modifies state)
+        to avoid overwriting current state with prev_grid data.
 
         If levels_progressed (level was completed), override to MAX_POSITIVE
         because completing a level is always true progress regardless of IC.
@@ -2500,8 +2537,49 @@ class MyAgent(Agent):
         """
         if levels_progressed:
             # Level completion = maximum progress, regardless of IC
+            self._kappa_snap_eta = 0.0  # Level complete → η = 0 (goal reached)
+            self._kappa_snap_confidence = 1.0
             return 1.0
 
+        # ── v7.2: κ-Snap coset distance computation (inline, no state mutation) ──
+        # Use current convergence as η_after (already computed in main loop)
+        curr_convergence = self._goal_eml_convergence  # already computed for current grid
+
+        # Compute prev_convergence inline (without modifying global state)
+        prev_layer = self._extract_layer0(prev_grid)
+        prev_minority = 0
+        anomaly_set = set(self._asd_anomaly_colors)
+        if prev_layer:
+            ph = len(prev_layer)
+            pw = len(prev_layer[0]) if ph > 0 else 0
+            for r in range(ph):
+                for c in range(pw):
+                    try:
+                        pv = prev_layer[r][c]
+                        if pv != 0 and pv != -1 and pv in anomaly_set:
+                            prev_minority += 1
+                    except (IndexError, TypeError):
+                        continue
+        initial_minority = max(len(self._asd_anomaly_targets), 1)
+        prev_minority_convergence = 1.0 - (prev_minority / initial_minority) if prev_minority > 0 else 1.0
+
+        # Use max of minority and coset convergence for prev
+        prev_convergence = prev_minority_convergence  # simplified: just minority for prev state
+
+        # Compute η for before and after
+        prev_eta = 0.0
+        curr_eta = 0.0
+        if self._goal_eml_ic_gap_monotone:
+            prev_eta = (1.0 - prev_convergence) ** 2
+            curr_eta = (1.0 - curr_convergence) ** 2
+        else:
+            prev_eta = abs(prev_convergence - 1.0)
+            curr_eta = abs(curr_convergence - 1.0)
+
+        # ido = -(η_after - η_before) = η decreases → positive (progress)
+        kappa_snap_ido = -(curr_eta - prev_eta)
+
+        # ── Original IC gap computation (retained as fallback) ──
         ic_before = self._compute_ic_value(prev_grid)
         ic_after = self._compute_ic_value(curr_grid)
         ic_goal = self._ic_goal_value
@@ -2515,11 +2593,27 @@ class MyAgent(Agent):
         v_before = (ic_goal - ic_before) / ic_goal if ic_goal > 0 else 0.0
         v_after = (ic_goal - ic_after) / ic_goal if ic_goal > 0 else 0.0
 
-        # ido = v_after - v_before
-        ido = v_after - v_before
+        # ido = v_after - v_before (original IC gap method)
+        ic_gap_ido = v_after - v_before
+
+        # ── v7.2: Blend κ-Snap ido with IC gap ido ──
+        # When goal type is inferred (not 'unknown'), use κ-Snap as primary
+        # When unknown, fall back to IC gap (backward compatible)
+        if self._goal_eml_type != "unknown":
+            ido = kappa_snap_ido * 0.7 + ic_gap_ido * 0.3
+        else:
+            ido = ic_gap_ido  # Original behavior for unknown goal types
 
         # Clamp to reasonable range
         ido = max(-1.0, min(1.0, ido))
+
+        # ── Update κ-Snap state ──
+        self._kappa_snap_eta = curr_eta
+        delta_K = self._goal_eml_delta_K
+        if delta_K > 0:
+            self._kappa_snap_confidence = max(0.0, min(1.0, 1.0 - curr_eta / delta_K))
+        else:
+            self._kappa_snap_confidence = 0.0
 
         self._ido_value_score = ido
         self._ido_value_history.append(ido)
@@ -2563,13 +2657,15 @@ class MyAgent(Agent):
         return noether_ok
 
     def _compute_goal_eml(self, grid: Any) -> float:
-        """Compute Goal-EML convergence metric.
+        """Compute Goal-EML convergence metric (v7.2: with coset invariant convergence).
 
         Goal-EML anchoring: detect whether grid is moving toward a "solved" topology.
         Convergence = 1 - (minority_pixels / initial_minority_pixels)
         Higher convergence = closer to goal (minority pixels disappearing → goal achieved)
 
-        Also tracks goal-color expansion: more goal-colored pixels = closer to victory.
+        v7.2 enhancement: also compute coset invariant convergence based on inferred
+        goal type. Final convergence = max(minority_convergence, coset_convergence)
+        * (ic_gap_monotone ? 1.0 : 0.7) for non-monotone goals.
 
         Args:
             grid: Current frame grid.
@@ -2611,17 +2707,499 @@ class MyAgent(Agent):
         # Convergence = progress toward eliminating minority pixels
         initial_minority = max(len(self._asd_anomaly_targets), 1)
         if current_minority == 0:
-            convergence = 1.0  # All anomaly pixels gone = goal achieved
+            minority_convergence = 1.0  # All anomaly pixels gone = goal achieved
         else:
-            convergence = 1.0 - (current_minority / initial_minority)
+            minority_convergence = 1.0 - (current_minority / initial_minority)
 
         # Boost convergence if goal colors are expanding
         if goal_pixels > 0 and goal_color_set:
             goal_boost = min(0.2, goal_pixels / 100)  # Up to 0.2 boost
-            convergence = min(1.0, convergence + goal_boost)
+            minority_convergence = min(1.0, minority_convergence + goal_boost)
 
-        self._goal_eml_convergence = convergence
-        return convergence
+        # ── v7.2: Coset invariant convergence ──
+        coset_convergence: float = 0.0
+        if self._goal_eml_type != "unknown" and self._goal_eml_invariants:
+            # Compute coset convergence based on inferred goal type
+            if self._goal_eml_type == "push":
+                # boxes_on_goal = anomaly objects near goal positions / total anomaly
+                total_anomaly = max(current_minority, 1)
+                boxes_near_goal = 0
+                for obj in self._cca_objects:
+                    if obj.get("color", -1) in anomaly_set:
+                        cx, cy = obj.get("centroid", (0, 0))
+                        if self._goal_positions:
+                            min_dist = min(
+                                abs(cx - gx) + abs(cy - gy)
+                                for gx, gy in self._goal_positions
+                            )
+                            if min_dist <= 3:
+                                boxes_near_goal += obj.get("size", 1)
+                coset_convergence = boxes_near_goal / total_anomaly
+
+            elif self._goal_eml_type == "toggle":
+                # toggled_count from CCA + rule hypothesis
+                toggle_count = 0.0
+                if self._rule_hypothesis and self._rule_hypothesis.get("type") == "toggle":
+                    toggle_count = self._rule_hypothesis.get("toggled_count", 0) / max(
+                        self._rule_hypothesis.get("total_switches", 1), 1)
+                # coverage_ratio from goal_color pixels
+                coverage_ratio = goal_pixels / max(h * w, 1)
+                coset_convergence = max(toggle_count, coverage_ratio * 10)
+
+            elif self._goal_eml_type == "propagation":
+                # remaining_targets from CCA anomaly objects
+                remaining_ratio = current_minority / initial_minority
+                coset_convergence = 1.0 - remaining_ratio
+
+            elif self._goal_eml_type == "coverage":
+                # coverage_ratio = goal_color pixels / anomaly pixels
+                coverage_ratio = goal_pixels / max(current_minority, 1)
+                coset_convergence = min(1.0, coverage_ratio)
+                # connected_goal_area bonus
+                max_goal_region = 0
+                total_goal_area = 0
+                for obj in self._cca_objects:
+                    if obj.get("color", -1) in goal_color_set:
+                        obj_size = obj.get("size", 0)
+                        total_goal_area += obj_size
+                        max_goal_region = max(max_goal_region, obj_size)
+                if total_goal_area > 0:
+                    connectivity_bonus = max_goal_region / total_goal_area * 0.2
+                    coset_convergence = min(1.0, coset_convergence + connectivity_bonus)
+
+            elif self._goal_eml_type == "destruction":
+                # remaining_targets from CCA anomaly objects
+                remaining_ratio = current_minority / initial_minority
+                coset_convergence = 1.0 - remaining_ratio
+
+        # Clamp coset convergence
+        coset_convergence = max(0.0, min(1.0, coset_convergence))
+
+        # ── v7.2: Final convergence = max(minority, coset) * monotone factor ──
+        final_convergence = max(minority_convergence, coset_convergence)
+        if not self._goal_eml_ic_gap_monotone:
+            # Non-monotone goals (propagation): reduce convergence confidence
+            final_convergence *= 0.7
+
+        self._goal_eml_convergence = final_convergence
+        return final_convergence
+
+    # ── v7.2: Goal-EML Coset Invariant Inference (IDO complete spec) ──────────
+
+    def _infer_goal_eml(self, prev_grid: Any, curr_grid: Any) -> None:
+        """v7.2: Infer Goal-EML type and coset invariants from frame delta + CCA objects.
+
+        Weak inference: if pattern is ambiguous, keep 'unknown' and fall back to
+        existing minority_pixel convergence logic (backward compatible).
+
+        Goal types and their coset invariants:
+        - push:    [boxes_on_goal, player_reachability, ic_gap_monotone=True]
+        - toggle:  [toggled_count, coverage_ratio, ic_gap_monotone=True]
+        - propagation: [propagation_front, remaining_targets, ic_gap_monotone=False]
+        - coverage:   [coverage_ratio, connected_goal_area, ic_gap_monotone=True]
+        - destruction: [remaining_targets, ic_gap_monotone=True]
+
+        Args:
+            prev_grid: Previous frame grid (before action).
+            curr_grid: Current frame grid (after action).
+        """
+        # Only infer once per level; if already inferred and not 'unknown', skip
+        if self._goal_eml_type != "unknown":
+            return
+
+        prev_layer = self._extract_layer0(prev_grid)
+        curr_layer = self._extract_layer0(curr_grid)
+        if not prev_layer or not curr_layer:
+            return
+
+        h = len(curr_layer)
+        w = len(curr_layer[0]) if h > 0 else 0
+        if h == 0 or w == 0:
+            return
+
+        # ── Step 1: Compute frame delta (pixel changes between prev and curr) ──
+        delta_local: int = 0   # changes near player position
+        delta_remote: int = 0  # changes far from player position
+        delta_color_flip: int = 0  # same position, different color (toggle pattern)
+        total_changed: int = 0
+
+        player_pos = None
+        if self._player_position_history:
+            player_pos = self._player_position_history[-1]
+
+        for r in range(h):
+            for c in range(w):
+                try:
+                    pv = prev_layer[r][c]
+                    cv = curr_layer[r][c]
+                    if pv != cv:
+                        total_changed += 1
+                        if player_pos:
+                            dist = abs(r - player_pos[1]) + abs(c - player_pos[0])
+                            if dist <= 3:
+                                delta_local += 1
+                            else:
+                                delta_remote += 1
+                        else:
+                            delta_local += 1  # no player info → default local
+                        if pv != 0 and cv != 0 and pv != cv:
+                            delta_color_flip += 1
+                except (IndexError, TypeError):
+                    continue
+
+        # ── Step 2: CCA object classification on current frame ──
+        cca_objs = self._cca_objects  # already computed in main loop
+        anomaly_set = set(self._asd_anomaly_colors)
+        goal_color_set = set(self._goal_colors)
+
+        # Classify CCA objects by type
+        anomaly_objects: List[Dict[str, Any]] = []
+        goal_near_objects: List[Dict[str, Any]] = []
+        for obj in cca_objs:
+            obj_color = obj.get("color", 0)
+            if obj_color in anomaly_set:
+                anomaly_objects.append(obj)
+            # Check if object centroid is near a goal position
+            cx, cy = obj.get("centroid", (0, 0))
+            if self._goal_positions:
+                min_dist = min(abs(cx - gx) + abs(cy - gy) for gx, gy in self._goal_positions)
+                if min_dist <= 5:
+                    goal_near_objects.append(obj)
+
+        # ── Step 3: Infer goal type from delta pattern + CCA ──
+        # Pattern signatures:
+        # push:    local delta dominant, player moved, anomaly objects shifted
+        # toggle:  color_flip dominant, small local changes (switch flipping)
+        # propagation: remote delta dominant, cascading changes (chain reaction)
+        # coverage:  goal_color expanding, moderate remote changes (painting)
+        # destruction: anomaly objects shrinking, moderate changes (eliminating targets)
+
+        total_anomaly_obj_count = len(anomaly_objects)
+        total_goal_near_count = len(goal_near_objects)
+
+        # If no meaningful change detected, cannot infer → keep 'unknown'
+        if total_changed < 2:
+            return
+
+        # Score each goal type hypothesis
+        type_scores: Dict[str, float] = {}
+
+        # push hypothesis: keyboard game, local changes near player
+        push_score = 0.0
+        if delta_local > delta_remote and delta_color_flip < delta_local * 0.3:
+            push_score += 0.4  # local-dominant delta pattern
+        if self._player_position_history and len(self._player_position_history) >= 2:
+            push_score += 0.3  # player actually moved
+        if total_anomaly_obj_count > 0 and total_goal_near_count > 0:
+            push_score += 0.3  # anomaly objects near goal positions (boxes)
+        type_scores["push"] = push_score
+
+        # toggle hypothesis: color flips, small local changes
+        toggle_score = 0.0
+        if delta_color_flip > total_changed * 0.5:
+            toggle_score += 0.5  # many color flips
+        if total_changed <= 10:
+            toggle_score += 0.3  # small total changes (switch is small)
+        if self._detected_game_type == "click":
+            toggle_score += 0.2  # click games often have toggle mechanics
+        type_scores["toggle"] = toggle_score
+
+        # propagation hypothesis: remote-dominant, cascading changes
+        propagation_score = 0.0
+        if delta_remote > delta_local * 2:
+            propagation_score += 0.5  # remote-dominant (chain spreading)
+        if delta_color_flip > total_changed * 0.3:
+            propagation_score += 0.2  # some color flips (chain reaction)
+        if total_changed > 20:
+            propagation_score += 0.3  # large total changes (cascading)
+        type_scores["propagation"] = propagation_score
+
+        # coverage hypothesis: goal_color expanding, moderate changes
+        coverage_score = 0.0
+        curr_goal_pixels = self._goal_color_expansion
+        if curr_goal_pixels > 0 and goal_color_set:
+            coverage_ratio = curr_goal_pixels / max(h * w, 1)
+            if coverage_ratio > 0.05:
+                coverage_score += 0.4  # goal color already expanding
+        if delta_remote > 0 and delta_local < delta_remote:
+            coverage_score += 0.3  # remote painting
+        if total_goal_near_count > 0:
+            coverage_score += 0.3  # objects near goal area
+        type_scores["coverage"] = coverage_score
+
+        # destruction hypothesis: anomaly objects shrinking, elimination pattern
+        destruction_score = 0.0
+        if total_anomaly_obj_count > 0:
+            # Check if anomaly pixel count decreased from initial
+            initial_anomaly = max(len(self._asd_anomaly_targets), 1)
+            current_anomaly = self._minority_pixel_count
+            if current_anomaly < initial_anomaly * 0.8:
+                destruction_score += 0.5  # anomaly targets being eliminated
+        if delta_local > 0 and delta_color_flip < delta_local * 0.5:
+            destruction_score += 0.3  # local changes, not just color flips
+        type_scores["destruction"] = destruction_score
+
+        # ── Step 4: Pick best hypothesis (weak inference: require minimum score) ──
+        MIN_INFERENCE_SCORE = 0.6  # must be confident enough to override default
+        best_type = "unknown"
+        best_score = 0.0
+        for t, s in type_scores.items():
+            if s > best_score:
+                best_score = s
+                best_type = t
+
+        if best_score < MIN_INFERENCE_SCORE:
+            # Weak inference: not confident enough, keep 'unknown'
+            return
+
+        # ── Step 5: Set Goal-EML type and coset invariants ──
+        self._goal_eml_type = best_type
+
+        INVARIANT_MAP = {
+            "push": ["boxes_on_goal", "player_reachability"],
+            "toggle": ["toggled_count", "coverage_ratio"],
+            "propagation": ["propagation_front", "remaining_targets"],
+            "coverage": ["coverage_ratio", "connected_goal_area"],
+            "destruction": ["remaining_targets"],
+        }
+        MONOTONE_MAP = {
+            "push": True,
+            "toggle": True,
+            "propagation": False,
+            "coverage": True,
+            "destruction": True,
+        }
+        DELTA_K_MAP = {
+            "push": 0.05,
+            "toggle": 0.05,
+            "propagation": 0.10,  # larger threshold for non-monotone goals
+            "coverage": 0.05,
+            "destruction": 0.05,
+        }
+
+        self._goal_eml_invariants = INVARIANT_MAP.get(best_type, [])
+        self._goal_eml_ic_gap_monotone = MONOTONE_MAP.get(best_type, True)
+        self._goal_eml_delta_K = DELTA_K_MAP.get(best_type, 0.05)
+
+    def _kappa_snap(self, grid: Any) -> None:
+        """v7.2: Compute κ-Snap coset distance η and confidence.
+
+        η = ∥Π(Φ_κ(S)) − Π(goal_eml)∥²  — continuous coset distance (not boolean).
+        For monotonically decreasing goals: η = (1 - coset_convergence)²
+        For non-monotone goals (propagation): η = |coset_metric - target_metric|
+
+        confidence = 1 - η/δ_K  (δ_K = self._goal_eml_delta_K)
+        accept ⇔ η < δ_K
+
+        Updates self._kappa_snap_eta and self._kappa_snap_confidence.
+        """
+        # Compute coset convergence based on inferred goal type
+        coset_convergence: float = 0.0
+
+        if self._goal_eml_type == "unknown":
+            # No coset inference available → use minority_pixel convergence as fallback
+            coset_convergence = self._goal_eml_convergence
+        elif self._goal_eml_type == "push":
+            # push invariant: boxes_on_goal = anomaly objects near goal / total anomaly objects
+            anomaly_set = set(self._asd_anomaly_colors)
+            goal_positions = self._goal_positions
+            total_anomaly = max(self._minority_pixel_count, 1)
+            boxes_near_goal = 0
+            cca_objs = self._cca_objects
+            for obj in cca_objs:
+                if obj.get("color", -1) in anomaly_set:
+                    cx, cy = obj.get("centroid", (0, 0))
+                    if goal_positions:
+                        min_dist = min(abs(cx - gx) + abs(cy - gy) for gx, gy in goal_positions)
+                        if min_dist <= 3:
+                            boxes_near_goal += obj.get("size", 1)
+            coset_convergence = boxes_near_goal / total_anomaly if total_anomaly > 0 else 0.0
+        elif self._goal_eml_type == "toggle":
+            # toggle invariant: coverage_ratio from goal_color + toggled_count estimate
+            goal_pixels = self._goal_color_expansion
+            h_w_total = 64 * 64  # approximate grid size
+            coverage_ratio = goal_pixels / h_w_total if h_w_total > 0 else 0.0
+            # toggled_count: estimate from rule hypothesis or observation
+            toggled_estimate = 0.0
+            if self._rule_hypothesis and self._rule_hypothesis.get("type") == "toggle":
+                toggled_estimate = self._rule_hypothesis.get("toggled_count", 0) / max(
+                    self._rule_hypothesis.get("total_switches", 1), 1)
+            coset_convergence = max(coverage_ratio, toggled_estimate)
+        elif self._goal_eml_type == "propagation":
+            # propagation invariant: propagation_front ratio + remaining_targets
+            anomaly_count = self._minority_pixel_count
+            initial_anomaly = max(len(self._asd_anomaly_targets), 1)
+            remaining_ratio = anomaly_count / initial_anomaly
+            # For propagation, convergence is how much has been consumed (1 - remaining)
+            coset_convergence = 1.0 - remaining_ratio
+        elif self._goal_eml_type == "coverage":
+            # coverage invariant: coverage_ratio = goal_color pixels / anomaly pixels
+            goal_pixels = self._goal_color_expansion
+            anomaly_pixels = max(self._minority_pixel_count, 1)
+            coset_convergence = goal_pixels / anomaly_pixels
+            # connected_goal_area: use CCA to find largest connected goal-color region
+            goal_color_set = set(self._goal_colors)
+            max_goal_region = 0
+            for obj in self._cca_objects:
+                if obj.get("color", -1) in goal_color_set:
+                    max_goal_region = max(max_goal_region, obj.get("size", 0))
+            total_goal_area = sum(
+                obj.get("size", 0) for obj in self._cca_objects
+                if obj.get("color", -1) in goal_color_set
+            )
+            if total_goal_area > 0:
+                connectivity_bonus = max_goal_region / total_goal_area
+                coset_convergence = min(1.0, coset_convergence + connectivity_bonus * 0.2)
+        elif self._goal_eml_type == "destruction":
+            # destruction invariant: remaining_targets = anomaly objects still alive
+            anomaly_count = self._minority_pixel_count
+            initial_anomaly = max(len(self._asd_anomaly_targets), 1)
+            coset_convergence = 1.0 - (anomaly_count / initial_anomaly)
+        else:
+            coset_convergence = self._goal_eml_convergence
+
+        # Clamp coset convergence
+        coset_convergence = max(0.0, min(1.0, coset_convergence))
+
+        # ── Compute η based on monotonicity ──
+        if self._goal_eml_ic_gap_monotone:
+            # Monotone goals: η = (1 - coset_convergence)²
+            eta = (1.0 - coset_convergence) ** 2
+        else:
+            # Non-monotone goals (propagation): η = |coset_metric - target_metric|
+            # Target metric = 1.0 (full propagation = goal achieved)
+            eta = abs(coset_convergence - 1.0)
+
+        # ── Compute confidence ──
+        delta_K = self._goal_eml_delta_K
+        if delta_K > 0:
+            confidence = max(0.0, min(1.0, 1.0 - eta / delta_K))
+        else:
+            confidence = 0.0
+
+        # ── Update state ──
+        self._kappa_snap_eta = eta
+        self._kappa_snap_confidence = confidence
+
+    def _predict_change(self, grid: Any, action_key: str) -> float:
+        """v7.2: Weak visual ChangeNet — lightweight pixel differential prediction.
+
+        Predicts how much pixel change a given action would cause.
+        This is AUXILIARY ranking (weight 0.3), does NOT drive search.
+
+        Input: (pre_grid, action_key) → predicted_change_score (0.0-1.0)
+
+        Implementation:
+        - keyboard actions: predict movement area based on player_position + direction
+        - click actions: predict local change based on CCA objects near click position
+        - fallback: historical effectiveness_rate * 0.5
+
+        Args:
+            grid: Current frame grid.
+            action_key: The action key to predict change for.
+
+        Returns:
+            predicted_change_score (0.0-1.0).
+        """
+        layer = self._extract_layer0(grid)
+        if not layer:
+            # Fallback: use effectiveness history
+            eff, total = self._action_change_rate.get(action_key, (0, 0))
+            if total > 0:
+                return min(1.0, (eff / total) * 0.5)
+            return 0.0
+
+        # ── Parse action_key ──
+        is_click = action_key.startswith("6:")
+        is_keyboard = not is_click and action_key in ("ACTION1", "ACTION2", "ACTION3", "ACTION4", "ACTION5")
+
+        if is_click:
+            # Click action: parse coordinates and predict local change
+            try:
+                parts = action_key.split(":")
+                cx = int(parts[1])
+                cy = int(parts[2])
+            except (IndexError, ValueError):
+                # Fallback for malformed click key
+                eff, total = self._action_change_rate.get(action_key, (0, 0))
+                return min(1.0, (eff / total) * 0.5) if total > 0 else 0.0
+
+            # Count CCA objects near click position → predict local change
+            nearby_obj_size = 0
+            for obj in self._cca_objects:
+                ox, oy = obj.get("centroid", (0, 0))
+                dist = abs(ox - cx) + abs(oy - cy)
+                if dist <= 5:
+                    nearby_obj_size += obj.get("size", 0)
+
+            # Normalize: larger nearby objects → more predicted change
+            max_grid_area = 64 * 64
+            predicted = min(1.0, nearby_obj_size / max(max_grid_area * 0.1, 1))
+
+            # Also check anomaly targets near click
+            anomaly_nearby = 0
+            for ax, ay in self._asd_anomaly_targets:
+                if abs(ax - cx) + abs(ay - cy) <= 3:
+                    anomaly_nearby += 1
+            if anomaly_nearby > 0:
+                predicted = min(1.0, predicted + anomaly_nearby * 0.05)
+
+            self._predicted_change_scores[action_key] = predicted
+            return predicted
+
+        elif is_keyboard:
+            # Keyboard action: predict movement based on player_position + direction
+            DIRECTION_MAP = {
+                "ACTION1": (0, -1),   # UP
+                "ACTION2": (0, 1),    # DOWN
+                "ACTION3": (-1, 0),   # LEFT
+                "ACTION4": (1, 0),    # RIGHT
+                "ACTION5": (0, 0),    # SPECIAL (no direction, low prediction)
+            }
+            dx, dy = DIRECTION_MAP.get(action_key, (0, 0))
+
+            if dx == 0 and dy == 0:
+                # ACTION5 (special): low predictable change
+                eff, total = self._action_change_rate.get(action_key, (0, 0))
+                predicted = min(1.0, (eff / total) * 0.5) if total > 0 else 0.1
+                self._predicted_change_scores[action_key] = predicted
+                return predicted
+
+            # If player position known, predict cells in movement direction
+            player_pos = None
+            if self._player_position_history:
+                player_pos = self._player_position_history[-1]
+
+            if player_pos:
+                px, py = player_pos
+                # Count non-zero cells in the predicted movement path (3 cells ahead)
+                path_changes = 0
+                for step in range(1, 4):
+                    nr = py + dy * step
+                    nc = px + dx * step
+                    if 0 <= nr < len(layer) and 0 <= nc < len(layer[0]):
+                        try:
+                            if layer[nr][nc] != 0:
+                                path_changes += 1
+                        except (IndexError, TypeError):
+                            continue
+
+                # Normalize: more obstacles in path → more predicted change (pushing objects)
+                predicted = min(1.0, path_changes * 0.15 + 0.05)  # base 0.05 for any movement
+            else:
+                # No player position → fallback to effectiveness
+                eff, total = self._action_change_rate.get(action_key, (0, 0))
+                predicted = min(1.0, (eff / total) * 0.5) if total > 0 else 0.05
+
+            self._predicted_change_scores[action_key] = predicted
+            return predicted
+
+        else:
+            # Unknown action type → fallback to effectiveness history
+            eff, total = self._action_change_rate.get(action_key, (0, 0))
+            predicted = min(1.0, (eff / total) * 0.5) if total > 0 else 0.0
+            self._predicted_change_scores[action_key] = predicted
+            return predicted
 
     # ── v6.6: CCA (Connected Component Analysis) + Rule Hypothesis Engine ───────
 
@@ -3326,23 +3904,41 @@ class MyAgent(Agent):
     def _get_predicted_change_actions(
         self, current_hash: str, available_set: Set[int], grid: Any
     ) -> List[str]:
-        """v7.0: Get actions predicted to change the frame (trigger-aware).
+        """v7.2: Get actions predicted to change the frame (trigger-aware + ChangeNet).
 
-        Uses: known effective transitions + rule hypothesis + effectiveness history.
+        Uses: known effective transitions + rule hypothesis + effectiveness history
+        + v7.2 ChangeNet predicted_change_scores (weight 0.3, auxiliary ranking).
         Filters out self-loops, backslide, and Noether-violating actions.
 
         Args:
             current_hash: Full-frame hash of current state.
             available_set: Set of available action IDs.
-            grid: Current frame grid (unused but kept for API consistency).
+            grid: Current frame grid (used for ChangeNet prediction).
 
         Returns:
             List of action keys predicted to cause frame change, sorted by priority.
         """
         candidates: List[str] = []
 
-        # From state graph: transitions that led to DIFFERENT states (not self-loops)
+        # ── v7.2: Pre-compute ChangeNet predictions for all candidate actions ──
+        # This is auxiliary (weight 0.3), does NOT dominate sorting.
         transitions = self._state_graph.get(current_hash, {})
+        all_candidate_keys: List[str] = []
+        for ak in transitions:
+            all_candidate_keys.append(ak)
+        for aid in sorted(available_set):
+            if aid == 6:
+                continue
+            action_name = ARC3_ACTION_ID_MAP.get(aid)
+            if action_name and action_name not in transitions:
+                all_candidate_keys.append(action_name)
+
+        # Compute ChangeNet predictions for each candidate
+        for ak in all_candidate_keys:
+            if ak not in self._predicted_change_scores:
+                self._predict_change(grid, ak)
+
+        # From state graph: transitions that led to DIFFERENT states (not self-loops)
         novel_transitions = {
             ak: rh for ak, rh in transitions.items()
             if rh != current_hash  # not self-loop
@@ -3350,7 +3946,7 @@ class MyAgent(Agent):
             and self._noether_violations.get(ak, 0) < 3  # not heavily Noether-violating
         }
 
-        # Sort by frontier priority (visit count + heuristic + progressive + nonlocal)
+        # Sort by frontier priority (visit count + heuristic + progressive + nonlocal + changenet)
         MAX_FRONTIER_DEPTH = 50
 
         def predicted_priority(item: Tuple[str, str]) -> float:
@@ -3366,10 +3962,13 @@ class MyAgent(Agent):
             if self._stall_counter >= 3:
                 nl_impact = self._nonlocal_impact.get(ak, 0.0)
                 nonlocal_boost = min(1.0, nl_impact * 5.0)
+            # v7.2: ChangeNet boost (weight 0.3, auxiliary — does NOT dominate)
+            changenet_boost = self._predicted_change_scores.get(ak, 0.0) * 0.3
             noether_penalty = self._noether_violations.get(ak, 0) * 0.3
             backslide_penalty = self._backslide_actions.get(ak, 0) * 0.1
             return (visit_score + heuristic_bonus + progressive_boost
-                    + nonlocal_boost - noether_penalty - backslide_penalty)
+                    + nonlocal_boost + changenet_boost
+                    - noether_penalty - backslide_penalty)
 
         sorted_trans = sorted(novel_transitions.items(), key=predicted_priority, reverse=True)
         for ak, rh in sorted_trans:
@@ -3530,8 +4129,9 @@ class MyAgent(Agent):
         # ── Detect game type ──
         self._update_detected_game_type(available_set)
 
-        # ── v6.4+v7.1: Goal-EML lock with budget-aware threshold ──
+        # ── v6.4+v7.1+v7.2: Goal-EML lock with budget-aware threshold + κ-Snap ──
         # v7.1: Lower threshold in lock phase (0.5 vs 0.8) — more aggressive lock when budget low
+        # v7.2: κ-Snap accept condition — η < δ_K means we're within coset acceptance threshold
         eml_threshold = 0.5 if budget_phase == "lock" else 0.8
         if self._goal_eml_convergence >= eml_threshold and self._progressive_actions:
             best_prog = max(self._progressive_actions.items(), key=lambda x: x[1])
@@ -3542,9 +4142,17 @@ class MyAgent(Agent):
                 action = getattr(GameAction, action_name)
                 if click_data and action.is_complex():
                     action.set_data(click_data)
+                # v7.2: Include κ-Snap η and confidence in reasoning
+                kappa_snap_info = (
+                    f", η={self._kappa_snap_eta:.3f}, "
+                    f"δ_K={self._goal_eml_delta_K:.3f}, "
+                    f"conf={self._kappa_snap_confidence:.2f}"
+                )
+                kappa_accept = self._kappa_snap_eta < self._goal_eml_delta_K
                 action.reasoning = (
-                    f"v7.1-goal-eml-lock: {prog_action_key} "
-                    f"(eml={self._goal_eml_convergence:.2f}, threshold={eml_threshold})"
+                    f"v7.2-goal-eml-lock: {prog_action_key} "
+                    f"(eml={self._goal_eml_convergence:.2f}, threshold={eml_threshold}"
+                    f"{kappa_snap_info}, κ-accept={kappa_accept})"
                 )
                 self._action_history.append(action_name)
                 return action
